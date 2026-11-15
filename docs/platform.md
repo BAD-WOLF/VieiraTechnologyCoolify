@@ -94,6 +94,23 @@ services:
 As variáveis `PLATFORM_*` vão no `/data/coolify/source/.env`. O workflow `platform-release.yml`
 publica a imagem e pode fazer o upgrade com rollback automático (`infra/scripts/upgrade-control-plane.sh`).
 
+### Control plane em alta disponibilidade
+
+`infra/terraform/control-plane/` cria o painel central conforme a página 6 da wiki:
+
+- **Instância:** EC2 do Coolify com IP fixo (EIP), disco criptografado, recuperação automática da AWS em falha de hardware e snapshots diários.
+- **PostgreSQL:** RDS Multi-AZ, com backup diário, recuperação para qualquer ponto no tempo (WAL) por 30 dias e proteção contra exclusão.
+- **Redis:** ElastiCache com réplica e failover automático.
+
+Depois do `terraform apply`:
+
+1. Instale o Coolify na instância com o script oficial.
+2. Acrescente ao `/data/coolify/source/.env` as linhas do output `terraform output -raw env`.
+3. Copie `docker-compose.custom.yml.example` para `/data/coolify/source/docker-compose.custom.yml`. Ele usa a imagem do Hostrema e desliga o PostgreSQL e o Redis embutidos.
+4. Rode `upgrade-control-plane.sh` (ou o workflow de release).
+
+Para migrar uma instalação existente, faça antes um dump do banco embutido e restaure no RDS. Um control plane ativo/ativo não é suportado pelo Coolify (scheduler e filas assumem um único master).
+
 ## Cobrança com Banco Inter
 
 Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela API Cobrança v3, com OAuth2 e certificado mTLS. O cliente vê o QR code, o Pix copia e cola, a linha digitável e o PDF do boleto na própria página de planos e em *Plano e uso*.

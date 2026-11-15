@@ -1,0 +1,11 @@
+# /data/coolify/source/docker-compose.custom.yml on the Coolify master: the image of the fork and
+# the bundled PostgreSQL/Redis turned off (RDS and ElastiCache from this module are used).
+# Requires Docker Compose >= 2.24.4 (!reset).
+services:
+  coolify:
+    image: "ghcr.io/bad-wolf/hostrema:platform-v1.0.0"
+    depends_on: !reset {}
+  postgres:
+    profiles: ["disabled"]
+  redis:
+    profiles: ["disabled"]

@@ -16,6 +16,7 @@ use App\Models\LocalFileVolume;
 use App\Models\LocalPersistentVolume;
 use App\Models\PersonalAccessToken;
 use App\Models\PlatformRegion;
+use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
@@ -41,6 +42,7 @@ use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
@@ -67,6 +69,8 @@ class PlatformServiceProvider extends ServiceProvider
         $this->registerSchedule();
         $this->registerGates();
         $this->registerBranding();
+        // Queue workers are long-lived: settings saved in the console must be read again per job.
+        Queue::before(fn () => PlatformSetting::flushMemo());
         $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
         $this->registerInputGuards();
