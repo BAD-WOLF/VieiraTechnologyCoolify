@@ -93,16 +93,18 @@ load_env() {
     set +a
 }
 
+# wait_for <descrição> <serviço> <comando...>: repete o comando até dar certo (até 10 minutos).
 wait_for() {
-    local what=$1
-    shift
+    local what=$1 service=$2
+    shift 2
     local tries=200
     printf '    aguardando %s' "$what"
     until "$@" >/dev/null 2>&1; do
         tries=$((tries - 1))
         if [ "$tries" -le 0 ]; then
             printf '\n'
-            fail "$what não ficou pronto. Veja os logs: ./hostrema-local.sh logs"
+            compose logs --tail=80 "$service" >&2 || true
+            fail "$what não ficou pronto (logs acima). Mais detalhes: ./hostrema-local.sh logs $service"
         fi
         printf '.'
         sleep 3
@@ -113,8 +115,11 @@ wait_for() {
 wait_ready() {
     [ -n "$(compose ps --status running -q hostrema 2>/dev/null)" ] || fail "o Hostrema não está rodando; use ./hostrema-local.sh up"
     # Horizon só sobe depois das migrations, do seeder e do app:init da imagem.
-    wait_for "o Hostrema (migrations e filas)" compose exec -T hostrema php artisan horizon:status
-    wait_for "o nó local (Docker e SSH)" compose exec -T hostrema-node sh -c 'docker info && pgrep -x sshd'
+    wait_for "o Hostrema (migrations e filas)" hostrema compose exec -T hostrema php artisan horizon:status
+    wait_for "o Docker do nó local" hostrema-node compose exec -T hostrema-node docker info
+    # O painel precisa enxergar o SSH do nó pela rede do compose (lê o banner "SSH-...").
+    # shellcheck disable=SC2016
+    wait_for "o SSH do nó local" hostrema-node compose exec -T hostrema php -r '$s = @fsockopen("hostrema-node", 22, $n, $m, 3); exit($s && str_starts_with((string) fgets($s, 64), "SSH-") ? 0 : 1);'
 }
 
 cmd_setup() {

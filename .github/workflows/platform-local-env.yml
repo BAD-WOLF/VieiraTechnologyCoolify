@@ -70,7 +70,10 @@ jobs:
 
       - name: Logs
         if: failure()
-        run: docker compose logs --tail=300
+        run: |
+          docker compose ps -a
+          docker compose logs --tail=300
+          docker compose exec -T hostrema-node ps || true
 
       - name: Clean up
         if: always()

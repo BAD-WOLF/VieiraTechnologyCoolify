@@ -23,6 +23,6 @@ RUN apk upgrade --no-cache \
 COPY --chmod=755 entrypoint.sh /usr/local/bin/hostrema-node
 
 EXPOSE 22 80 443
-HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=60 \
-    CMD docker info >/dev/null 2>&1 && pgrep -x sshd >/dev/null || exit 1
+HEALTHCHECK --interval=5s --timeout=8s --start-period=10s --retries=60 \
+    CMD docker info >/dev/null 2>&1 && bash -c 'exec 3<>/dev/tcp/127.0.0.1/22 && IFS= read -r -t 3 banner <&3 && [[ $banner == SSH-* ]]' || exit 1
 ENTRYPOINT ["/usr/local/bin/hostrema-node"]
