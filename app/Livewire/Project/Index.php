@@ -24,7 +24,7 @@ class Index extends Component
 
             return $project;
         });
-        $this->servers = Server::ownedByCurrentTeam()->count();
+        $this->servers = isPlatformTenant() ? \App\Services\Platform\DestinationPolicy::serversFor(currentTeam())->count() : Server::ownedByCurrentTeam()->count();
     }
 
     public function render()

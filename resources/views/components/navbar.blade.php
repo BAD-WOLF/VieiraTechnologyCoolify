@@ -130,6 +130,7 @@
                             Projects
                         </a>
                     </li>
+                    @if (!isPlatformTenant() || config('platform.allow_tenant_servers'))
                     <li>
                         <a title="Servers"
                             class="{{ request()->is('server/*') || request()->is('servers') ? 'menu-item menu-item-active' : 'menu-item' }}"
@@ -148,6 +149,7 @@
                             Servers
                         </a>
                     </li>
+                    @endif
 
                     <li>
                         <a title="Sources"
@@ -160,6 +162,7 @@
                             Sources
                         </a>
                     </li>
+                    @if (!isPlatformTenant() || config('platform.allow_tenant_servers'))
                     <li>
                         <a title="Destinations"
                             class="{{ request()->is('destination*') ? 'menu-item-active menu-item' : 'menu-item' }}"
@@ -173,6 +176,7 @@
                             Destinations
                         </a>
                     </li>
+                    @endif
                     <li>
                         <a title="S3 Storages"
                             class="{{ request()->is('storages*') ? 'menu-item-active menu-item' : 'menu-item' }}"
@@ -301,7 +305,7 @@
                                         stroke-linejoin="round" stroke-width="2"
                                         d="M3 8a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3zm0 2h18M7 15h.01M11 15h2" />
                                 </svg>
-                                Subscription
+                                {{ isPlatform() ? __('Plan & usage') : 'Subscription' }}
                             </a>
                         </li>
                     @endif
@@ -324,6 +328,14 @@
                         </li>
                     @endif
 
+                    @if (isPlatform() && isInstanceAdmin() && (int) currentTeam()?->id === 0)
+                        <li>
+                            <a title="Platform" class="{{ request()->is('admin/platform') ? 'menu-item-active menu-item' : 'menu-item' }}" href="{{ route('admin.platform') }}">
+                                <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" /></svg>
+                                {{ __('Platform') }}
+                            </a>
+                        </li>
+                    @endif
                     @if (isCloud() || isDev())
                         @if (isInstanceAdmin() || session('impersonating'))
                             <li>

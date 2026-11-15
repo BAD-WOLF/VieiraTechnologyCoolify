@@ -16,6 +16,7 @@ class StartService
     public function handle(Service $service, bool $pullLatestImages = false, bool $stopBeforeStart = false)
     {
         PlatformGate::assertCanDeploy($service);
+        PlatformGate::ensureNetwork($service);
         $service->parse();
         if ($stopBeforeStart) {
             StopService::run(service: $service, dockerCleanup: false);

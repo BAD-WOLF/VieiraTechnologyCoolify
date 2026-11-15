@@ -57,6 +57,7 @@
 
             <main class="lg:pl-56">
                 <div class="p-4 sm:px-6 lg:px-8 lg:py-6">
+                    <x-platform-banner />
                     {{ $slot }}
                 </div>
             </main>

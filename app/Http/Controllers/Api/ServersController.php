@@ -78,6 +78,25 @@ class ServersController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
+        if (isPlatformTenant((int) $teamId)) {
+            // Shared platform nodes: only what a tenant needs to target its deployments (no IPs, users or settings).
+            $nodes = \App\Services\Platform\DestinationPolicy::serversFor((int) $teamId)
+                ->with(['platformRegion', 'settings'])
+                ->get()
+                ->map(fn ($server) => [
+                    'uuid' => $server->uuid,
+                    'name' => $server->name,
+                    'region' => $server->platformRegion?->slug,
+                    'is_reachable' => (bool) $server->settings?->is_reachable,
+                    'destinations' => \App\Services\Platform\DestinationPolicy::destinationsOn($server, (int) $teamId)->map(fn ($destination) => [
+                        'uuid' => $destination->uuid,
+                        'name' => $destination->name,
+                        'network' => $destination->network,
+                    ])->values(),
+                ]);
+
+            return response()->json($nodes);
+        }
         $servers = ModelsServer::whereTeamId($teamId)->select('id', 'name', 'uuid', 'ip', 'user', 'port', 'description')->get()->load(['settings'])->map(function ($server) {
             $server['is_reachable'] = $server->settings->is_reachable;
             $server['is_usable'] = $server->settings->is_usable;

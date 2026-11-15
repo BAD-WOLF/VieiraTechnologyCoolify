@@ -22,6 +22,7 @@ class StartDatabase
     public function handle(StandaloneRedis|StandalonePostgresql|StandaloneMongodb|StandaloneMysql|StandaloneMariadb|StandaloneKeydb|StandaloneDragonfly|StandaloneClickhouse $database)
     {
         PlatformGate::assertCanDeploy($database);
+        PlatformGate::ensureNetwork($database);
         $server = $database->destination->server;
         if (! $server->isFunctional()) {
             return 'Server is not functional';

@@ -64,6 +64,9 @@
         @endif
     </section>
 
+    @if (isPlatformTenant() && !config('platform.allow_tenant_servers'))
+        <livewire:platform.usage-summary />
+    @else
     <section>
         <h3 class="pb-2">Servers</h3>
         @if ($servers->count() > 0)
@@ -125,4 +128,5 @@
             @endif
         @endif
     </section>
+    @endif
 </div>

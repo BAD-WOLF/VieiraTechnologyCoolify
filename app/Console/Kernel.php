@@ -6,6 +6,10 @@ use App\Jobs\CheckAndStartSentinelJob;
 use App\Jobs\CheckForUpdatesJob;
 use App\Jobs\CheckHelperImageJob;
 use App\Jobs\CleanupInstanceStuffsJob;
+use App\Jobs\PlatformCollectUsageJob;
+use App\Jobs\PlatformDailyMaintenanceJob;
+use App\Jobs\PlatformEnforcementJob;
+use App\Jobs\PlatformRollupUsageJob;
 use App\Jobs\PullChangelog;
 use App\Jobs\PullTemplatesFromCDN;
 use App\Jobs\RegenerateSslCertJob;
@@ -86,6 +90,23 @@ class Kernel extends ConsoleKernel
             $this->scheduleInstance->command('cleanup:database --yes')->daily();
             $this->scheduleInstance->command('uploads:clear')->everyTwoMinutes();
         }
+
+        $this->schedulePlatform();
+    }
+
+    /**
+     * Multi-tenant platform: metering, rollups, enforcement and billing reconciliation.
+     */
+    private function schedulePlatform(): void
+    {
+        if (! isPlatform()) {
+            return;
+        }
+        $interval = max(1, min(30, (int) config('platform.metering.interval_minutes', 5)));
+        $this->scheduleInstance->job(new PlatformCollectUsageJob)->cron("*/{$interval} * * * *")->onOneServer();
+        $this->scheduleInstance->job(new PlatformRollupUsageJob)->hourlyAt(7)->onOneServer();
+        $this->scheduleInstance->job(new PlatformEnforcementJob)->everyTenMinutes()->onOneServer();
+        $this->scheduleInstance->job(new PlatformDailyMaintenanceJob)->dailyAt('03:17')->onOneServer();
     }
 
     private function pullImages(): void

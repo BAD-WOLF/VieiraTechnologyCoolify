@@ -72,6 +72,9 @@ class Index extends Component
 
     public function mount()
     {
+        if (isPlatformTenant() && ! config('platform.allow_tenant_servers')) {
+            return redirect()->route('platform.onboarding');
+        }
         if (auth()->user()?->isMember() && auth()->user()->currentTeam()->show_boarding === true) {
             return redirect()->route('dashboard');
         }

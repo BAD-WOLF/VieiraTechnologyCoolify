@@ -1,6 +1,6 @@
 <div>
     <x-slot:title>
-        Subscribe | Coolify
+        {{ isPlatform() ? __('Plans') : 'Subscribe' }} | {{ isPlatform() ? config('platform.name') : 'Coolify' }}
     </x-slot>
     @if (auth()->user()->isAdminFromSession())
         @if (request()->query->get('cancelled'))
@@ -46,7 +46,11 @@
                             </div>
                         @endif
                     </div>
-                    <livewire:subscription.pricing-plans />
+                    @if (isPlatform())
+                        <livewire:platform.pricing />
+                    @else
+                        <livewire:subscription.pricing-plans />
+                    @endif
                 @endif
             @endif
         @endif

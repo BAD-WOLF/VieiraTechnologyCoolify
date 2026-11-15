@@ -220,7 +220,7 @@
         @endif
     </div>
     @if ($current_step === 'servers')
-        <h2>Select a server</h2>
+        <h2>{{ isPlatformTenant() ? __('Select a node') : 'Select a server' }}</h2>
         <div class="pb-5"></div>
         <div class="flex flex-col justify-center gap-4 text-left xl:flex-row xl:flex-wrap">
             @if ($onlyBuildServerAvailable)
@@ -230,7 +230,7 @@
                     </a> </div>
             @else
                 @forelse($servers as $server)
-                    <div class="w-full box group" wire:click="setServer({{ $server }})">
+                    <div class="w-full box group" wire:click="setServer({{ $server->id }})">
                         <div class="flex flex-col mx-6">
                             <div class="box-title">
                                 {{ $server->name }}
@@ -241,11 +241,16 @@
                     </div>
                 @empty
                     <div>
-
-                        <div>No validated & reachable servers found. <a class="underline dark:text-white"
-                                href="/servers">
-                                Go to servers page
-                            </a></div>
+                        @if (isPlatformTenant() && !config('platform.allow_tenant_servers'))
+                            <div>{{ __('Your account has no node available yet.') }} <a class="underline dark:text-white"
+                                    href="{{ route('platform.onboarding') }}">{{ __('Finish the onboarding') }}</a>
+                                {{ __('or contact support.') }}</div>
+                        @else
+                            <div>No validated & reachable servers found. <a class="underline dark:text-white"
+                                    href="/servers">
+                                    Go to servers page
+                                </a></div>
+                        @endif
                     </div>
                 @endforelse
             @endif

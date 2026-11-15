@@ -14,8 +14,8 @@
         fn($s) => [
             'id' => $s->id,
             'name' => $s->name,
-            'ip' => $s->ip,
-            'destinations' => $s->destinations()->map(
+            'ip' => isPlatformTenant() ? ($s->platformRegion?->slug ?? '') : $s->ip,
+            'destinations' => (isPlatformTenant() ? \App\Services\Platform\DestinationPolicy::destinationsOn($s, currentTeam()) : $s->destinations())->map(
                 fn($d) => [
                     'id' => $d->id,
                     'name' => $d->name,

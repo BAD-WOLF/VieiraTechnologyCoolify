@@ -121,6 +121,23 @@ class PlatformGate
     }
 
     /**
+     * Make sure the tenant network exists on the node before a workload is started on it
+     * (networks without containers can be removed by docker cleanups).
+     */
+    public static function ensureNetwork(Model $resource, ?\App\Models\Server $server = null, ?\App\Models\StandaloneDocker $destination = null): void
+    {
+        if (! self::applies($resource)) {
+            return;
+        }
+        $destination ??= data_get($resource, 'destination');
+        if (! $destination instanceof \App\Models\StandaloneDocker || is_null($destination->team_id)) {
+            return;
+        }
+        $server ??= $destination->server;
+        \App\Actions\Platform\ProvisionTenant::ensureNetwork($server, $destination->network, (int) $destination->team_id);
+    }
+
+    /**
      * Validate + harden the compose definition of a tenant workload and reserve its resources.
      *
      * @param  array<string, mixed>  $compose

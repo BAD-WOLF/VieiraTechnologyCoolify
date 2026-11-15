@@ -4,6 +4,7 @@ namespace App\Livewire\Project\New;
 
 use App\Models\Project;
 use App\Models\Server;
+use App\Services\Platform\DestinationPolicy;
 use Illuminate\Support\Collection;
 use Livewire\Component;
 
@@ -280,8 +281,17 @@ class Select extends Component
     {
         $this->server_id = $server->id;
         $this->server = $server;
-        $this->standaloneDockers = $server->standaloneDockers;
-        $this->swarmDockers = $server->swarmDockers;
+        if (isPlatformTenant()) {
+            if (! DestinationPolicy::serversFor(currentTeam())->whereKey($server->id)->exists()) {
+                abort(403);
+            }
+            // Shared platform node: only the tenant's own isolated network is offered.
+            $this->standaloneDockers = DestinationPolicy::destinationsOn($server, currentTeam());
+            $this->swarmDockers = collect();
+        } else {
+            $this->standaloneDockers = $server->standaloneDockers;
+            $this->swarmDockers = $server->swarmDockers;
+        }
         $count = count($this->standaloneDockers) + count($this->swarmDockers);
         if ($count === 1) {
             $docker = $this->standaloneDockers->first() ?? $this->swarmDockers->first();
@@ -332,7 +342,17 @@ class Select extends Component
 
     public function loadServers()
     {
-        $this->servers = Server::isUsable()->get()->sortBy('name');
+        if (isPlatformTenant()) {
+            $this->servers = DestinationPolicy::serversFor(currentTeam())
+                ->with('settings', 'standaloneDockers')
+                ->whereRelation('settings', 'is_reachable', true)
+                ->whereRelation('settings', 'is_usable', true)
+                ->whereRelation('settings', 'force_disabled', false)
+                ->get()
+                ->sortBy('name');
+        } else {
+            $this->servers = Server::isUsable()->get()->sortBy('name');
+        }
         $this->allServers = $this->servers;
 
         if ($this->allServers && $this->allServers->isNotEmpty()) {

@@ -63,6 +63,11 @@ return [
     'trial_days' => (int) env('PLATFORM_TRIAL_DAYS', 0),
 
     /*
+     * Stripe Tax must be configured in the Stripe dashboard before enabling automatic tax.
+     */
+    'stripe_automatic_tax' => (bool) env('PLATFORM_STRIPE_AUTOMATIC_TAX', false),
+
+    /*
     |--------------------------------------------------------------------------
     | Plans
     |--------------------------------------------------------------------------

@@ -82,6 +82,7 @@ use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 Route::get('/admin', AdminIndex::class)->name('admin.index');
+Route::get('/admin/platform', \App\Livewire\Platform\Admin::class)->middleware(['auth'])->name('admin.platform');
 
 Route::post('/forgot-password', [Controller::class, 'forgot_password'])->name('password.forgot')->middleware('throttle:forgot-password');
 Route::get('/realtime', [Controller::class, 'realtime_test'])->middleware('auth');
@@ -104,6 +105,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::get('/subscription', SubscriptionShow::class)->name('subscription.show');
     Route::get('/subscription/new', SubscriptionIndex::class)->name('subscription.index');
+    Route::get('/platform/onboarding', \App\Livewire\Platform\Onboarding::class)->name('platform.onboarding');
 
     Route::get('/settings', SettingsIndex::class)->name('settings.index');
     Route::get('/settings/advanced', SettingsAdvanced::class)->name('settings.advanced');

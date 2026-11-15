@@ -57,8 +57,7 @@ class CloneMe extends Component
         $this->project = Project::where('uuid', $project_uuid)->firstOrFail();
         $this->environment = $this->project->environments->where('uuid', $this->environment_uuid)->first();
         $this->project_id = $this->project->id;
-        $this->servers = currentTeam()
-            ->servers()
+        $this->servers = (isPlatformTenant() ? \App\Services\Platform\DestinationPolicy::serversFor(currentTeam()) : currentTeam()->servers())
             ->get()
             ->reject(fn ($server) => $server->isBuildServer());
         $this->newName = str($this->project->name.'-clone-'.(string) new Cuid2)->slug();
@@ -127,7 +126,7 @@ class CloneMe extends Component
             $databases = $this->environment->databases();
             $services = $this->environment->services;
             foreach ($applications as $application) {
-                $selectedDestination = $this->servers->flatMap(fn ($server) => $server->destinations())->where('id', $this->selectedDestination)->first();
+                $selectedDestination = $this->servers->flatMap(fn ($server) => isPlatformTenant() ? \App\Services\Platform\DestinationPolicy::destinationsOn($server, currentTeam()) : $server->destinations())->where('id', $this->selectedDestination)->first();
                 clone_application($application, $selectedDestination, [
                     'environment_id' => $environment->id,
                 ], $this->cloneVolumeData);

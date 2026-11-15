@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Subscription;
 use App\Models\Team;
+use App\Services\Platform\StripeBilling;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Str;
@@ -350,10 +351,18 @@ class StripeProcessJob implements ShouldQueue
                     }
                     break;
                 default:
+                    if (isPlatform() && in_array($type, StripeBilling::EVENTS, true)) {
+                        break;
+                    }
                     throw new \RuntimeException("Unhandled event type: {$type}");
             }
         } catch (\Exception $e) {
             send_internal_notification('StripeProcessJob error: '.$e->getMessage());
         }
+
+        // Platform plans, tenant state, usage invoices (runs after Coolify's own subscription bookkeeping).
+        $object = data_get($this->event, 'data.object');
+        $payload = is_object($object) && method_exists($object, 'toArray') ? $object->toArray() : (array) $object;
+        StripeBilling::handle((string) data_get($this->event, 'type'), $payload);
     }
 }

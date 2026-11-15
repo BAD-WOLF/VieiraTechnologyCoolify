@@ -14,8 +14,8 @@ use App\Jobs\DeleteResourceJob;
 use App\Models\Project;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
-use App\Models\Server;
 use App\Models\StandalonePostgresql;
+use App\Services\Platform\DestinationPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use OpenApi\Attributes as OA;
@@ -1349,18 +1349,21 @@ class DatabasesController extends Controller
         if (! $environment) {
             return response()->json(['message' => 'You need to provide a valid environment_name or environment_uuid.'], 422);
         }
-        $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
+        $server = DestinationPolicy::serversFor($teamId)->whereUuid($serverUuid)->first();
         if (! $server) {
             return response()->json(['message' => 'Server not found.'], 404);
         }
-        $destinations = $server->destinations();
+        $destinations = DestinationPolicy::destinationsOn($server, $teamId);
         if ($destinations->count() == 0) {
             return response()->json(['message' => 'Server has no destinations.'], 400);
         }
         if ($destinations->count() > 1 && ! $request->has('destination_uuid')) {
             return response()->json(['message' => 'Server has multiple destinations and you do not set destination_uuid.'], 400);
         }
-        $destination = $destinations->first();
+        $destination = $request->filled('destination_uuid') ? $destinations->firstWhere('uuid', $request->destination_uuid) : $destinations->first();
+        if (! $destination) {
+            return response()->json(['message' => 'Destination not found.'], 404);
+        }
         if ($request->has('public_port') && $request->is_public) {
             if (isPublicPortAlreadyUsed($server, $request->public_port)) {
                 return response()->json(['message' => 'Public port already used by another database.'], 400);

@@ -66,8 +66,15 @@ class DeployController extends Controller
         if (is_null($teamId)) {
             return invalidTokenResponse();
         }
-        $servers = Server::whereTeamId($teamId)->get();
-        $deployments_per_server = ApplicationDeploymentQueue::whereIn('status', ['in_progress', 'queued'])->whereIn('server_id', $servers->pluck('id'))->get()->sortBy('id');
+        if (isPlatformTenant((int) $teamId)) {
+            // Shared nodes run every tenant's deployments: list only the team's applications.
+            $deployments_per_server = ApplicationDeploymentQueue::whereIn('status', ['in_progress', 'queued'])
+                ->whereIn('application_id', Application::ownedByCurrentTeamAPI((int) $teamId)->pluck('id'))
+                ->get()->sortBy('id');
+        } else {
+            $servers = Server::whereTeamId($teamId)->get();
+            $deployments_per_server = ApplicationDeploymentQueue::whereIn('status', ['in_progress', 'queued'])->whereIn('server_id', $servers->pluck('id'))->get()->sortBy('id');
+        }
         $deployments_per_server = $deployments_per_server->map(function ($deployment) {
             return $this->removeSensitiveData($deployment);
         });
@@ -125,6 +132,10 @@ class DeployController extends Controller
         }
         $deployment = ApplicationDeploymentQueue::where('deployment_uuid', $uuid)->first();
         if (! $deployment) {
+            return response()->json(['message' => 'Deployment not found.'], 404);
+        }
+        // Deployment logs can contain build output: only the owning team may read them.
+        if ((int) $teamId !== 0 && ! Application::ownedByCurrentTeamAPI((int) $teamId)->where('id', $deployment->application_id)->exists()) {
             return response()->json(['message' => 'Deployment not found.'], 404);
         }
 

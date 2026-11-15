@@ -8,6 +8,7 @@ use App\Events\ApplicationStatusChanged;
 use App\Models\InstanceSettings;
 use App\Models\Server;
 use App\Models\StandaloneDocker;
+use App\Services\Platform\DestinationPolicy;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -43,9 +44,15 @@ class Destination extends Component
         $all_networks = $all_networks->push($this->resource->destination);
         $all_networks = $all_networks->merge($this->resource->additional_networks);
 
-        $this->networks = Server::isUsable()->get()->map(function ($server) {
-            return $server->standaloneDockers;
-        })->flatten();
+        if (isPlatformTenant()) {
+            $this->networks = DestinationPolicy::destinationsFor(currentTeam())
+                ->filter(fn ($destination) => $destination instanceof StandaloneDocker && $destination->server?->settings?->is_usable)
+                ->values();
+        } else {
+            $this->networks = Server::isUsable()->get()->map(function ($server) {
+                return $server->standaloneDockers;
+            })->flatten();
+        }
         $this->networks = $this->networks->reject(function ($network) use ($all_networks) {
             return $all_networks->pluck('id')->contains($network->id);
         });
@@ -62,7 +69,7 @@ class Destination extends Component
     public function stop($serverId)
     {
         try {
-            $server = Server::ownedByCurrentTeam()->findOrFail($serverId);
+            $server = DestinationPolicy::serversFor(currentTeam())->findOrFail($serverId);
             StopApplicationOneServer::run($this->resource, $server);
             $this->refreshServers();
         } catch (\Exception $e) {
@@ -79,8 +86,8 @@ class Destination extends Component
                 return;
             }
             $deployment_uuid = new Cuid2;
-            $server = Server::ownedByCurrentTeam()->findOrFail($server_id);
-            $destination = $server->standaloneDockers->where('id', $network_id)->firstOrFail();
+            $server = DestinationPolicy::serversFor(currentTeam())->findOrFail($server_id);
+            $destination = $this->usableNetwork($network_id, $server_id);
             $result = queue_application_deployment(
                 deployment_uuid: $deployment_uuid,
                 application: $this->resource,
@@ -108,6 +115,7 @@ class Destination extends Component
 
     public function promote(int $network_id, int $server_id)
     {
+        $this->usableNetwork($network_id, $server_id);
         $main_destination = $this->resource->destination;
         $this->resource->update([
             'destination_id' => $network_id,
@@ -126,8 +134,22 @@ class Destination extends Component
         $this->dispatch('refresh');
     }
 
+    /**
+     * The network must exist on that server and belong to the current team (no foreign IDs).
+     */
+    private function usableNetwork(int $network_id, int $server_id): StandaloneDocker
+    {
+        $destination = StandaloneDocker::query()->with('server')->whereKey($network_id)->where('server_id', $server_id)->firstOrFail();
+        if (isCloud() && ! DestinationPolicy::isUsableBy($destination, currentTeam())) {
+            abort(403, 'This network does not belong to your team.');
+        }
+
+        return $destination;
+    }
+
     public function addServer(int $network_id, int $server_id)
     {
+        $this->usableNetwork($network_id, $server_id);
         $this->resource->additional_networks()->attach($network_id, ['server_id' => $server_id]);
         $this->dispatch('refresh');
     }
@@ -148,7 +170,7 @@ class Destination extends Component
 
                 return;
             }
-            $server = Server::ownedByCurrentTeam()->findOrFail($server_id);
+            $server = DestinationPolicy::serversFor(currentTeam())->findOrFail($server_id);
             StopApplicationOneServer::run($this->resource, $server);
             $this->resource->additional_networks()->detach($network_id, ['server_id' => $server_id]);
             $this->loadData();

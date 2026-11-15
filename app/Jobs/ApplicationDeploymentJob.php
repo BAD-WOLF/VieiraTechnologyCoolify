@@ -287,9 +287,13 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             return;
         }
         try {
+            if (isCloud() && ! \App\Services\Platform\DestinationPolicy::isUsableBy($this->destination, $this->application->team())) {
+                throw new \App\Exceptions\PlatformPolicyViolation(['The destination of this deployment does not belong to the application team.']);
+            }
             $this->platformTenant = PlatformGate::applies($this->application);
             if ($this->platformTenant) {
                 PlatformGate::assertCanDeploy($this->application);
+                PlatformGate::ensureNetwork($this->application, $this->server, $this->destination instanceof StandaloneDocker ? $this->destination : null);
                 // Tenant builds must not see the host network nor the other containers of the node.
                 $this->buildNetwork = '';
             }

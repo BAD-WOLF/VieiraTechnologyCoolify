@@ -17,6 +17,7 @@ use App\Models\Server;
 use App\Models\Service;
 use App\Rules\ValidGitBranch;
 use App\Rules\ValidGitRepositoryUrl;
+use App\Services\Platform\DestinationPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use OpenApi\Attributes as OA;
@@ -1001,18 +1002,21 @@ class ApplicationsController extends Controller
         if (! $environment) {
             return response()->json(['message' => 'Environment not found.'], 404);
         }
-        $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
+        $server = DestinationPolicy::serversFor($teamId)->whereUuid($serverUuid)->first();
         if (! $server) {
             return response()->json(['message' => 'Server not found.'], 404);
         }
-        $destinations = $server->destinations();
+        $destinations = DestinationPolicy::destinationsOn($server, $teamId);
         if ($destinations->count() == 0) {
             return response()->json(['message' => 'Server has no destinations.'], 400);
         }
         if ($destinations->count() > 1 && ! $request->has('destination_uuid')) {
             return response()->json(['message' => 'Server has multiple destinations and you do not set destination_uuid.'], 400);
         }
-        $destination = $destinations->first();
+        $destination = $request->filled('destination_uuid') ? $destinations->firstWhere('uuid', $request->destination_uuid) : $destinations->first();
+        if (! $destination) {
+            return response()->json(['message' => 'Destination not found.'], 404);
+        }
         if ($type === 'public') {
             $validationRules = [
                 'git_repository' => ['string', 'required', new ValidGitRepositoryUrl],

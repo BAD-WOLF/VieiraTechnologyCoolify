@@ -23,7 +23,7 @@
                             </thead>
                             <tbody>
                                 @foreach ($servers->sortBy('id') as $server)
-                                    @foreach ($server->destinations() as $destination)
+                                    @foreach (isPlatformTenant() ? \App\Services\Platform\DestinationPolicy::destinationsOn($server, currentTeam()) : $server->destinations() as $destination)
                                         <tr class="cursor-pointer hover:bg-coolgray-50 dark:hover:bg-coolgray-200"
                                             wire:click="selectServer('{{ $server->id }}', '{{ $destination->id }}')">
                                             <td class="px-5 py-4 text-sm whitespace-nowrap dark:text-white"

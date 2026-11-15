@@ -9,8 +9,8 @@ use App\Http\Controllers\Controller;
 use App\Jobs\DeleteResourceJob;
 use App\Models\EnvironmentVariable;
 use App\Models\Project;
-use App\Models\Server;
 use App\Models\Service;
+use App\Services\Platform\DestinationPolicy;
 use Illuminate\Http\Request;
 use OpenApi\Attributes as OA;
 use Symfony\Component\Yaml\Yaml;
@@ -300,18 +300,21 @@ class ServicesController extends Controller
         if (! $environment) {
             return response()->json(['message' => 'Environment not found.'], 404);
         }
-        $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
+        $server = DestinationPolicy::serversFor($teamId)->whereUuid($serverUuid)->first();
         if (! $server) {
             return response()->json(['message' => 'Server not found.'], 404);
         }
-        $destinations = $server->destinations();
+        $destinations = DestinationPolicy::destinationsOn($server, $teamId);
         if ($destinations->count() == 0) {
             return response()->json(['message' => 'Server has no destinations.'], 400);
         }
         if ($destinations->count() > 1 && ! $request->has('destination_uuid')) {
             return response()->json(['message' => 'Server has multiple destinations and you do not set destination_uuid.'], 400);
         }
-        $destination = $destinations->first();
+        $destination = $request->filled('destination_uuid') ? $destinations->firstWhere('uuid', $request->destination_uuid) : $destinations->first();
+        if (! $destination) {
+            return response()->json(['message' => 'Destination not found.'], 404);
+        }
         $services = get_service_templates();
         $serviceKeys = $services->keys();
         if ($serviceKeys->contains($request->type)) {
@@ -426,18 +429,21 @@ class ServicesController extends Controller
             if (! $environment) {
                 return response()->json(['message' => 'Environment not found.'], 404);
             }
-            $server = Server::whereTeamId($teamId)->whereUuid($serverUuid)->first();
+            $server = DestinationPolicy::serversFor($teamId)->whereUuid($serverUuid)->first();
             if (! $server) {
                 return response()->json(['message' => 'Server not found.'], 404);
             }
-            $destinations = $server->destinations();
+            $destinations = DestinationPolicy::destinationsOn($server, $teamId);
             if ($destinations->count() == 0) {
                 return response()->json(['message' => 'Server has no destinations.'], 400);
             }
             if ($destinations->count() > 1 && ! $request->has('destination_uuid')) {
                 return response()->json(['message' => 'Server has multiple destinations and you do not set destination_uuid.'], 400);
             }
-            $destination = $destinations->first();
+            $destination = $request->filled('destination_uuid') ? $destinations->firstWhere('uuid', $request->destination_uuid) : $destinations->first();
+            if (! $destination) {
+                return response()->json(['message' => 'Destination not found.'], 404);
+            }
             if (! isBase64Encoded($request->docker_compose_raw)) {
                 return response()->json([
                     'message' => 'Validation failed.',

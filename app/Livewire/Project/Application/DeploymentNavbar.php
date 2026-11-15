@@ -85,10 +85,11 @@ class DeploymentNavbar extends Component
         ]);
 
         try {
+            $servers = \App\Services\Platform\DestinationPolicy::serversFor(currentTeam());
             if ($this->application->settings->is_build_server_enabled) {
-                $server = Server::ownedByCurrentTeam()->find($build_server_id);
+                $server = $servers->find($build_server_id);
             } else {
-                $server = Server::ownedByCurrentTeam()->find($server_id);
+                $server = $servers->find($server_id);
             }
 
             // Add cancellation log entry

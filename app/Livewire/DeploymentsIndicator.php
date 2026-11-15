@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\Server;
 use Livewire\Attributes\Computed;
@@ -14,10 +15,15 @@ class DeploymentsIndicator extends Component
     #[Computed]
     public function deployments()
     {
-        $servers = Server::ownedByCurrentTeam()->get();
+        $query = ApplicationDeploymentQueue::whereIn('status', ['in_progress', 'queued']);
+        if (isPlatformTenant()) {
+            // Shared nodes run deployments of every tenant: only show the team's own applications.
+            $query->whereIn('application_id', Application::ownedByCurrentTeam()->pluck('id'));
+        } else {
+            $query->whereIn('server_id', Server::ownedByCurrentTeam()->get()->pluck('id'));
+        }
 
-        return ApplicationDeploymentQueue::whereIn('status', ['in_progress', 'queued'])
-            ->whereIn('server_id', $servers->pluck('id'))
+        return $query
             ->orderBy('id')
             ->get([
                 'id',
