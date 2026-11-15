@@ -1,7 +1,11 @@
 <div class="flex flex-col gap-6">
     @if (! $enabled)
         <x-callout type="warning" title="{{ __('Banco Inter is not the billing provider') }}">
-            {{ __('Set PLATFORM_BILLING_PROVIDER=inter to charge with Banco Inter.') }}
+            {{ __('Choose Banco Inter as the payment provider in Settings > Billing.') }}
+        </x-callout>
+    @elseif ($manual)
+        <x-callout type="info" title="{{ __('Manual payments') }}">
+            {{ __('Invoices are issued without the bank. Confirm each payment with "Mark as paid" below. To charge by boleto and Pix automatically, choose Banco Inter in Settings > Billing and fill in the credentials.') }}
         </x-callout>
     @endif
     @if ($result)

@@ -35,6 +35,7 @@ use App\Models\TeamInvitation;
 use App\Services\Platform\DestinationPolicy;
 use App\Services\Platform\DomainPolicy;
 use App\Services\Platform\PlatformBranding;
+use App\Services\Platform\PlatformConfig;
 use App\Services\Platform\PlatformEvents;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
@@ -42,6 +43,8 @@ use App\Services\Platform\TenantLimits;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
@@ -74,6 +77,7 @@ class PlatformServiceProvider extends ServiceProvider
 
     public function register(): void
     {
+        PlatformConfig::flush();
         // APP_PREVIOUS_KEYS: values encrypted with an older APP_KEY keep working during a rotation.
         if (blank(config('app.previous_keys')) && filled(config('platform.encryption.previous_keys'))) {
             config(['app.previous_keys' => config('platform.encryption.previous_keys')]);
@@ -82,6 +86,8 @@ class PlatformServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Values saved by the owner in the operator console (Settings) override config/platform.php.
+        PlatformConfig::apply();
         self::alignSubscriptionProvider();
         $this->app['router']->pushMiddlewareToGroup('web', PlatformRequireTwoFactor::class);
         $this->app['router']->pushMiddlewareToGroup('api', PlatformOperatorApiAllowlist::class);
@@ -91,8 +97,23 @@ class PlatformServiceProvider extends ServiceProvider
         $this->registerSchedule();
         $this->registerGates();
         $this->registerBranding();
+        // config:cache boots a fresh copy of the application (also when called by app:init through
+        // "optimize"): the saved values must stay out of the cached file.
+        Event::listen(CommandStarting::class, function (CommandStarting $event): void {
+            if (in_array($event->command, ['config:cache', 'optimize'], true)) {
+                PlatformConfig::$buildingConfigCache = true;
+            }
+        });
+        Event::listen(CommandFinished::class, function (CommandFinished $event): void {
+            if (in_array($event->command, ['config:cache', 'optimize'], true)) {
+                PlatformConfig::$buildingConfigCache = false;
+            }
+        });
         // Queue workers are long-lived: settings saved in the console must be read again per job.
-        Queue::before(fn () => PlatformSetting::flushMemo());
+        Queue::before(function (): void {
+            PlatformSetting::flushMemo();
+            PlatformConfig::apply(15);
+        });
         $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
         $this->registerInputGuards();

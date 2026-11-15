@@ -7,7 +7,8 @@ use Illuminate\Support\Facades\Cache;
 use Symfony\Component\Yaml\Yaml;
 
 /**
- * OpenAPI document of the platform endpoints (resources/platform/openapi.yaml).
+ * OpenAPI document of the platform endpoints (routes/platform/openapi.yaml, next to the routes it
+ * describes; resources/ is not copied whole into the production image).
  */
 class PlatformOpenApiController extends Controller
 {
@@ -20,6 +21,6 @@ class PlatformOpenApiController extends Controller
 
     public static function path(): string
     {
-        return resource_path('platform/openapi.yaml');
+        return base_path('routes/platform/openapi.yaml');
     }
 }

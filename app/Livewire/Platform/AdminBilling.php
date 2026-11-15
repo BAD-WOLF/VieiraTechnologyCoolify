@@ -7,6 +7,7 @@ use App\Models\PlatformSetting;
 use App\Services\Platform\Inter\InterSettings;
 use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
+use App\Services\Platform\PlatformConfig;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Component;
 use Livewire\WithFileUploads;
@@ -102,8 +103,13 @@ class AdminBilling extends Component
                 continue;
             }
             foreach ((array) $intervals as $interval => $value) {
+                if (! in_array($interval, [PlanCatalog::INTERVAL_MONTHLY, PlanCatalog::INTERVAL_YEARLY], true)) {
+                    continue;
+                }
                 $cents = InterBilling::toCents($value);
-                PlatformSetting::put("price.{$plan}.{$interval}", $cents ? number_format($cents / 100, 2, '.', '') : null);
+                $path = "platform.plans.{$plan}.price_{$interval}";
+                $cents ? PlatformConfig::set($path, number_format($cents / 100, 2, '.', '')) : PlatformConfig::reset($path);
+                PlatformSetting::put("price.{$plan}.{$interval}", null);
             }
         }
         $this->reset('clientSecret', 'certificate', 'privateKey', 'certificateFile', 'privateKeyFile');
@@ -209,6 +215,7 @@ class AdminBilling extends Component
         return view('livewire.platform.admin-billing', [
             'invoices' => $invoices,
             'enabled' => InterBilling::enabled(),
+            'manual' => InterBilling::isManual(),
             'configured' => InterSettings::isConfigured(),
             'hasSecret' => filled(InterSettings::value('client_secret')),
             'hasCertificate' => filled(InterSettings::pem('certificate')),

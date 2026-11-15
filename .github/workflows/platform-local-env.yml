@@ -1,0 +1,77 @@
+# Brings the local test environment (infra/local) up on a clean machine, the way the owner runs it
+# before deploying: build, start, platform:install --local, then checks the dashboard, the local
+# node, its proxy and the demo customer.
+name: Platform local environment
+
+on:
+  push:
+    branches: [platform]
+    paths:
+      - infra/local/**
+      - docker/production/**
+      - app/Console/Commands/PlatformInstall.php
+      - app/Services/Platform/PlatformConfig.php
+      - database/migrations/**
+      - .github/workflows/platform-local-env.yml
+  pull_request:
+    branches: [platform]
+    paths:
+      - infra/local/**
+      - docker/production/**
+      - app/Console/Commands/PlatformInstall.php
+      - app/Services/Platform/PlatformConfig.php
+      - database/migrations/**
+      - .github/workflows/platform-local-env.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-local-env-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  up:
+    name: hostrema-local.sh up
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: infra/local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start and prepare the environment
+        run: ./hostrema-local.sh up
+
+      - name: Dashboard answers
+        run: |
+          curl -fsS --max-time 10 http://localhost:8000/api/health
+          curl -fsS --max-time 10 -o /dev/null http://localhost:8000/login
+          curl -fsS --max-time 10 -o /dev/null http://localhost:8000/pricing
+
+      - name: Local node, proxy and demo customer
+        run: |
+          docker compose exec -T hostrema-node docker ps --format '{{.Names}}' | grep -qx coolify-proxy
+          docker compose exec -T hostrema-node docker network ls --format '{{.Name}}' | grep -q '^tenant-'
+          # Traefik of the node answers on port 80 of the machine (404 for an unknown application).
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: nada.localhost' http://localhost/)" = 404
+          docker compose exec -T hostrema php artisan tinker --execute='
+            $server = App\Models\Server::query()->where("ip", "hostrema-node")->firstOrFail();
+            if (! $server->isFunctional()) { throw new RuntimeException("local node is not functional"); }
+            $demo = App\Models\User::query()->where("email", "demo@hostrema.local")->firstOrFail();
+            $tenant = App\Models\PlatformTenant::forTeam($demo->teams()->first());
+            if ($tenant->status !== "active" || is_null($tenant->provisioned_at)) { throw new RuntimeException("demo customer is not active"); }
+            echo "ok\n";'
+
+      - name: Running the preparation again changes nothing
+        run: ./hostrema-local.sh setup
+
+      - name: Logs
+        if: failure()
+        run: docker compose logs --tail=300
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v --remove-orphans || true

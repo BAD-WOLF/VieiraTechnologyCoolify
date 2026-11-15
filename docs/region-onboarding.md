@@ -80,8 +80,9 @@ ansible-vault encrypt inventory/group_vars/all/vault.yml
 $EDITOR inventory/group_vars/all/main.yml       # coolify_url, platform_apps_wildcard, alertas
 ```
 
-`platform_edge_token` e `platform_metrics_token` têm de ser os mesmos valores de `PLATFORM_EDGE_TOKEN` e
-`PLATFORM_METRICS_TOKEN` no `.env` do control plane.
+`platform_edge_token` e `platform_metrics_token` têm de ser os valores mostrados em
+/admin/platform → Configurações → Tokens internos (gerados na primeira subida, ou os do `.env`, se você definiu
+`PLATFORM_EDGE_TOKEN` e `PLATFORM_METRICS_TOKEN`). Se gerar um token novo no painel, atualize o vault e rode o playbook.
 
 ## 3. Nó de controle e nós de execução (Ansible)
 

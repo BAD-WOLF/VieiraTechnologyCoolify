@@ -10,6 +10,7 @@ use App\Models\Server;
 use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantLifecycle;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 /**
@@ -17,6 +18,7 @@ use Livewire\Component;
  */
 class Admin extends Component
 {
+    #[Url]
     public string $tab = 'tenants';
 
     public string $regionSlug = '';
@@ -82,6 +84,38 @@ class Admin extends Component
         audit_log('platform.region.created', $region, ['slug' => $region->slug], 0);
         $this->reset(['regionSlug', 'regionName']);
         $this->dispatch('success', __('Region created.'));
+    }
+
+    public ?int $editingRegionId = null;
+
+    public string $editingRegionName = '';
+
+    public string $editingRegionLogsUrl = '';
+
+    public function editRegion(int $regionId): void
+    {
+        $this->guard();
+        $region = PlatformRegion::findOrFail($regionId);
+        $this->editingRegionId = $region->id;
+        $this->editingRegionName = (string) $region->name;
+        $this->editingRegionLogsUrl = (string) $region->logs_url;
+    }
+
+    public function saveRegion(): void
+    {
+        $this->guard();
+        $this->validate([
+            'editingRegionName' => ['required', 'string', 'max:255'],
+            'editingRegionLogsUrl' => ['nullable', 'url:http,https', 'max:255'],
+        ]);
+        $region = PlatformRegion::findOrFail($this->editingRegionId);
+        $region->update([
+            'name' => $this->editingRegionName,
+            'logs_url' => filled($this->editingRegionLogsUrl) ? rtrim($this->editingRegionLogsUrl, '/') : null,
+        ]);
+        audit_log('platform.region.updated', $region, ['name' => $region->name], 0);
+        $this->reset(['editingRegionId', 'editingRegionName', 'editingRegionLogsUrl']);
+        $this->dispatch('success', __('Region saved.'));
     }
 
     public function toggleRegion(int $regionId, string $field): void

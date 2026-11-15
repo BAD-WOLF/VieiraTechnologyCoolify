@@ -69,6 +69,7 @@ jobs:
         run: >-
           vendor/bin/pint --test
           app/Actions/Platform app/Livewire/Platform app/Services/Platform
+          app/Console/Commands/PlatformInstall.php app/Http/Controllers/PlatformOpenApiController.php
           app/Exceptions/PlatformPolicyViolation.php
           app/Http/Controllers/Api/PlatformController.php app/Http/Controllers/Api/RollbackController.php
           app/Http/Controllers/PlatformEdgeController.php app/Http/Controllers/PlatformMetricsController.php
@@ -149,7 +150,15 @@ jobs:
           ansible-lint --offline playbooks roles
 
       - name: Shell scripts
-        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits
+        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits infra/local/hostrema-local.sh infra/local/node/entrypoint.sh
+
+      - name: Local test environment (infra/local)
+        working-directory: infra/local
+        run: |
+          printf 'DB_PASSWORD=x\nREDIS_PASSWORD=x\nPUSHER_APP_ID=x\nPUSHER_APP_KEY=x\nPUSHER_APP_SECRET=x\n' > .env
+          docker compose config --quiet
+          docker build --tag hostrema-local-node:ci node
+          docker run --rm --entrypoint sh hostrema-local-node:ci -c 'docker compose version && docker buildx version && bash --version >/dev/null && /usr/sbin/sshd -t && grep -q "^root:\*:" /etc/shadow'
 
       - name: Prometheus and Alertmanager configuration
         working-directory: infra/monitoring

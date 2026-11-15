@@ -19,9 +19,18 @@ Fluxo do tenant: assinatura paga com Pix ou boleto (Banco Inter), provisionament
 
 ## Começo rápido
 
-1. No `.env` do control plane: `PLATFORM_ENABLED=true`, `APP_NAME=Hostrema`, `APP_LOCALE=pt-br` e os tokens `PLATFORM_METRICS_TOKEN`/`PLATFORM_EDGE_TOKEN` (abaixo).
-2. Entre com o usuário root e abra **/admin/platform → Cobrança**. Cole o Client ID, o Client Secret, o certificado (.crt) e a chave (.key) da integração criada no Inter Empresas e clique em **Salvar e conectar**. O painel testa a conexão e registra o webhook sozinho.
-3. Confira os preços dos planos na mesma tela (padrão: Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta).
+1. No `.env` do control plane, o Hostrema só precisa de `PLATFORM_ENABLED=true`. O resto do `.env` é o padrão do Coolify (`APP_KEY`, banco, Redis e realtime).
+2. Dentro do container, rode `php artisan platform:install --email=voce@empresa.com --url=https://painel.seudominio.com` (por exemplo, `docker exec -it coolify php artisan platform:install ...`). O comando:
+   - cria o owner do time root, com o e-mail já verificado (sem `--password`, a senha gerada aparece no fim);
+   - reabre o cadastro de clientes, que o Coolify fecha depois do primeiro usuário, e liga a API;
+   - cria a primeira região (`sa-east-1`, mude com `--region`);
+   - aplica os padrões de produção: clientes no gVisor, que o Ansible instala nos nós (use `--without-gvisor` se os nós não tiverem).
+
+   Pode rodar de novo quando quiser: ele só cria o que falta e não desfaz nada que você mudou no painel.
+3. Entre com o owner, ative o 2FA (exigido do operador) e abra **/admin/platform → Configurações**. A lista **Pronto para vender?** mostra o que ainda falta (e-mail transacional, pagamentos, região e nós), com o link de cada tela.
+4. Em **/admin/platform → Cobrança**, cole o Client ID, o Client Secret, o certificado (.crt) e a chave (.key) da integração criada no Inter Empresas e clique em **Salvar e conectar**. O painel testa a conexão e registra o webhook sozinho.
+
+Os planos já vêm com preços e limites (Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta). Para mudar, use **Configurações → Planos**.
 
 A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando o Inter confirma o pagamento.
 
@@ -38,50 +47,88 @@ Versões anteriores tinham um erro: com a plataforma instalada, o Coolify não c
 
 Para testar sem dinheiro real, crie a integração no sandbox do Inter, escolha **Sandbox (testes)** no console e use **Simular pagamento Pix** na lista de faturas.
 
-## Configuração (.env do control plane)
+## Testar em localhost (Docker)
 
-Mínimo para ligar a plataforma:
+`infra/local/` sobe o Hostrema inteiro na sua máquina para você testar antes de subir para o host. O ambiente usa a mesma imagem de produção, construída a partir deste checkout, e traz PostgreSQL, Redis, o realtime, o Mailpit (recebe todos os e-mails) e um nó local. O nó é um container com Docker próprio (Docker-in-Docker), acessado por SSH como os nós de uma região. As aplicações dos clientes, o Traefik e os builds rodam dentro dele, sem mexer nos containers da sua máquina.
 
-```dotenv
-PLATFORM_ENABLED=true            # liga o modo plataforma (implica SELF_HOSTED=false)
-PLATFORM_NAME=Hostrema
-PLATFORM_SUPPORT_EMAIL=suporte@example.com
-PLATFORM_SALES_URL=https://example.com/contato   # botão "Falar com vendas" do Enterprise
-PLATFORM_CURRENCY=brl
-PLATFORM_DEFAULT_REGION=sa-east-1
-PLATFORM_BASE_DOMAIN=apps.example.com            # domínios padrão dos tenants (*.apps.example.com)
-PLATFORM_RESERVED_HOSTS=www,api,app,admin,dashboard,grafana,prometheus,status,mail,smtp,registry
+Você precisa de Docker Desktop (Windows ou macOS) ou Docker Engine com o plugin compose (Linux), de alguns GB livres para as imagens e das portas 8000, 6001, 6002, 8025, 80 e 443 livres (todas mudam no `infra/local/.env`). No Windows, rode o script pelo WSL ou pelo Git Bash.
 
-# Cobrança (padrão: Banco Inter). As credenciais podem ficar só no console (/admin/platform → Cobrança).
-PLATFORM_BILLING_PROVIDER=inter
-INTER_ENVIRONMENT=production            # ou sandbox
-INTER_CLIENT_ID=...
-INTER_CLIENT_SECRET=...
-INTER_CERTIFICATE=/caminho/certificado.crt   # caminho, conteúdo PEM ou PEM em base64
-INTER_PRIVATE_KEY=/caminho/chave.key
-INTER_CONTA_CORRENTE=                   # só se a integração tiver mais de uma conta
-PLATFORM_BILLING_DUE_DAYS=5             # prazo para pagar cada fatura
-PLATFORM_BILLING_CANCEL_AFTER_DAYS=30   # dias após o vencimento até o banco baixar o boleto
-PLATFORM_BILLING_FINE_PERCENT=2         # multa por atraso
-PLATFORM_BILLING_INTEREST_PERCENT_MONTH=1
-PLATFORM_BASIC_PRICE_MONTHLY=49.90      # preços também editáveis no console
-PLATFORM_PRO_PRICE_MONTHLY=149.90
-
-# Tokens dos endpoints internos (gere com: openssl rand -hex 32)
-PLATFORM_METRICS_TOKEN=...      # Prometheus -> /api/v1/platform/metrics
-PLATFORM_EDGE_TOKEN=...         # edge routers -> /api/v1/platform/edge/{região}
+```bash
+cd infra/local
+./hostrema-local.sh up
 ```
 
-Outras opções (todas com padrão em `config/platform.php`):
+Na primeira vez, o script gera o `infra/local/.env` (senhas e chaves aleatórias, fora do git), constrói as imagens, espera as migrations e roda `php artisan platform:install --local`. Esse comando:
 
-- **Cotas por plano.** `PLATFORM_{BASIC,PRO,ENTERPRISE}_{CPUS,MEMORY_MB,STORAGE_GB,RESOURCES,CONTAINERS,DEPLOYMENTS_PER_DAY,CUSTOM_DOMAINS,EGRESS_GB}`. O valor `0` significa ilimitado para deploys e domínios.
-- **Excedentes.** `PLATFORM_OVERAGE_EGRESS_GB_CENTS` e `PLATFORM_OVERAGE_STORAGE_GB_MONTH_CENTS`.
-- **Containers.** `PLATFORM_CONTAINER_DEFAULT_CPUS`, `..._DEFAULT_MEMORY_MB`, `..._CAP_ADD`, `..._OOM_SCORE_ADJ`, `..._LOG_MAX_SIZE/FILE`. Recomendado: `PLATFORM_CONTAINER_RUNTIME=runsc`, que roda os clientes dos nós compartilhados no gVisor (um kernel próprio por container; o Ansible já instala o gVisor nos nós). As VMs dedicadas do Enterprise usam `PLATFORM_DEDICATED_CONTAINER_RUNTIME` (vazio = runtime nativo, porque a VM já isola o cliente). `PLATFORM_ENFORCE_STORAGE_OPT=true` aplica limite de disco por container, o que exige overlay2 sobre xfs com pquota.
-- **Bloqueios.** `PLATFORM_QUOTA_WARNING_PERCENT` (80), `PLATFORM_SUSPEND_AFTER_DAYS` (7) e `PLATFORM_HARD_SUSPEND_AFTER_DAYS` (30).
-- **Medição.** `PLATFORM_METERING_INTERVAL_MINUTES` (5) e `PLATFORM_METERING_RAW_RETENTION_DAYS` (90).
-- **Bancos públicos.** `PLATFORM_PUBLIC_PORT_MIN/MAX` (20000–29999) definem a faixa de portas públicas.
-- **Opções do tenant.** `PLATFORM_ALLOW_TENANT_SERVERS=false` impede tenants de cadastrar servidores próprios. `PLATFORM_TENANT_TERMINAL=false` deixa o terminal web desligado para tenants.
-- **Idioma.** Com `APP_LOCALE=pt-br`, as páginas da plataforma (planos, cobrança, avisos, onboarding e console) ficam em português, usando `lang/platform/pt-br.json`. O resto do painel do Coolify continua em inglês, exceto as telas de login, que o Coolify já traduz.
+- cria o owner e um cliente demo com o plano Profissional ativo;
+- cria a região `local`, registra o nó por SSH (com uma chave própria, que o script autoriza no nó) e sobe o Traefik nele;
+- deixa os pagamentos no modo **manual**, com o botão "Simular pagamento" ligado;
+- desliga gVisor, slices e o 2FA obrigatório, porque o nó local não tem como rodar os dois primeiros;
+- manda os e-mails para o Mailpit.
+
+No fim aparecem os endereços e as senhas. Para ver de novo, rode `./hostrema-local.sh info`.
+
+| O quê | Onde |
+| --- | --- |
+| Painel | http://localhost:8000 (owner `owner@hostrema.local`; configurações em `/admin/platform`) |
+| Cliente demo | `demo@hostrema.local` |
+| E-mails | http://localhost:8025 |
+| Aplicações | `http://<nome>.localhost`. Chrome, Edge e Firefox resolvem `*.localhost` sozinhos; no Safari, acrescente o nome ao `/etc/hosts` |
+
+Um roteiro de teste:
+
+1. Cadastre um cliente novo pelo painel. O e-mail de verificação chega no Mailpit.
+2. Escolha um plano, preencha os dados de cobrança (com um CPF válido) e clique em **Simular pagamento**.
+3. Faça o deploy de uma aplicação. O domínio gerado é `http://<algo>.localhost`.
+4. Como owner, mude preços e limites em **Configurações** e veja o efeito em `/pricing` e nas cotas do cliente.
+
+Para testar o Banco Inter de verdade, escolha **Banco Inter** em Configurações → Cobrança e use credenciais do sandbox. O webhook do Inter não alcança o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
+
+| Comando | Para quê |
+| --- | --- |
+| `./hostrema-local.sh rebuild` | reconstrói a imagem depois de mudar o código |
+| `./hostrema-local.sh logs [serviço]` | mostra os logs |
+| `./hostrema-local.sh artisan <comando>` | roda um comando do Laravel |
+| `./hostrema-local.sh shell` | abre um shell no container do Hostrema |
+| `./hostrema-local.sh status` | mostra o estado dos containers |
+| `./hostrema-local.sh down` | para tudo sem apagar os dados |
+| `./hostrema-local.sh reset` | apaga todos os dados locais |
+
+O ambiente local não tem HTTPS, gVisor, slices por cliente, Loki/Grafana, edge router nem portas públicas de bancos. As aplicações respondem só pelas portas 80 e 443 do nó.
+
+## Configurações (painel do owner)
+
+Quase tudo se configura em **/admin/platform → Configurações**, sem editar o `.env` e sem reiniciar nada. Só o owner do time root grava; os admins do time root veem a tela em modo leitura. Os valores ficam criptografados no banco e chegam a todas as instâncias do painel e aos workers em poucos segundos. Cada campo mostra se está no padrão ou personalizado e tem um botão **Voltar ao padrão**. Toda alteração entra no audit log, sem os valores secretos.
+
+| Grupo | O que tem |
+| --- | --- |
+| Geral | Nome e descrição da plataforma, idioma das páginas (padrão pt-BR), e-mail de suporte, links de vendas, documentação, termos e privacidade, logo, moeda, domínio base das aplicações e hosts reservados. Também traz a lista **Pronto para vender?**. |
+| Planos | Uma tabela com nome, preço mensal e anual e venda só pelo comercial de cada plano, mais as cotas (CPU, memória, disco, recursos, containers, deploys por dia, domínios, tráfego, processos, IOPS e banda) e os recursos (bancos, volumes, backups, log drains, previews, bancos públicos, Compose, servidor dedicado, SSO e traces). |
+| Cobrança | Meio de pagamento (Banco Inter, manual ou Stripe), instruções do modo manual, prazo, baixa do boleto, multa, juros, cobrança mínima, preço do excedente, trial e chaves do Stripe. |
+| Contas | Aviso de cota, dias até suspender e até parar os containers, servidores próprios e terminal para clientes. |
+| Containers e isolamento | Runtime (gVisor) dos nós compartilhados e das VMs dedicadas, CPU e memória padrão, capabilities, OOM score, slices por cliente, logs por container, limite de disco e faixa de portas dos bancos públicos. |
+| Logs, traces e medição | Loki padrão, tempo limite e linhas do histórico, endpoint OTLP, intervalo e retenção da medição. |
+| Webhooks e eventos | Limites, tempo limite, retenção, desativação por falhas, HTTP simples, alvos privados do operador e stream do Redis. |
+| Segurança | Quem precisa de 2FA e as redes permitidas para os tokens do operador. |
+| Tokens internos e edge | Tokens do Prometheus e dos edge routers (gerados sozinhos na primeira subida; **Gerar novo** troca) e portas e PROXY protocol dos nós. |
+
+Outras telas guardam o resto:
+
+- **Credenciais do Banco Inter:** aba **Cobrança** do console.
+- **Nome e Loki de cada região:** aba **Regiões e nós**.
+- **E-mail transacional (SMTP ou Resend), cadastro aberto e API:** telas do próprio Coolify (*Settings*), com atalhos na lista **Pronto para vender?**.
+
+### O que continua no `.env`
+
+Fica no `.env` só o que o painel precisa para subir ou o que vem da infraestrutura:
+
+- `PLATFORM_ENABLED`;
+- `APP_KEY` e `APP_PREVIOUS_KEYS`;
+- banco, Redis e realtime;
+- `PLATFORM_CONTROL_PLANE_CLUSTER`, gerado pelo Terraform;
+- `PLATFORM_TENANT_NETWORK_PREFIX`, que não deve mudar depois de existirem clientes.
+
+As variáveis `PLATFORM_*` antigas continuam valendo como padrão, e o que for salvo no painel tem prioridade. A lista completa, com os padrões, está em `config/platform.php`. Os tokens internos podem vir do `.env` (`PLATFORM_METRICS_TOKEN` e `PLATFORM_EDGE_TOKEN`) ou ser gerados pelo painel. Em qualquer caso, os valores em uso aparecem em **Configurações → Tokens internos**, e é deles que o Ansible precisa (`docs/region-onboarding.md`).
 
 ### Imagem do fork no control plane
 
@@ -95,7 +142,7 @@ services:
     image: "ghcr.io/bad-wolf/hostrema:platform-v1.0.0"
 ```
 
-As variáveis `PLATFORM_*` vão no `/data/coolify/source/.env`. O workflow `platform-release.yml`
+O `PLATFORM_ENABLED=true` vai no `/data/coolify/source/.env`; o resto se configura no painel. O workflow `platform-release.yml`
 publica a imagem e pode fazer o upgrade com rollback automático (`infra/scripts/upgrade-control-plane.sh`).
 
 ### Control plane em alta disponibilidade
@@ -128,7 +175,7 @@ Para o `platform-release.yml` atualizar o cluster, coloque em `CONTROL_PLANE_HOS
 Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela API Cobrança v3, com OAuth2 e certificado mTLS. O cliente vê o QR code, o Pix copia e cola, a linha digitável e o PDF do boleto na própria página de planos e em *Plano e uso*.
 
 - **Assinatura.** A primeira fatura cobre o primeiro período (mensal ou anual). O plano começa quando ela é paga.
-- **Renovação.** No fim de cada período sai uma fatura com o próximo período e o uso excedente do período que fechou, com vencimento em `PLATFORM_BILLING_DUE_DAYS` dias. O cliente continua usando durante o prazo.
+- **Renovação.** No fim de cada período sai uma fatura com o próximo período e o uso excedente do período que fechou, com o prazo de pagamento definido em Configurações → Cobrança (padrão: 5 dias). O cliente continua usando durante o prazo.
 - **Atraso.** Fatura vencida deixa o tenant em atraso: aviso por e-mail, deploys suspensos após 7 dias, containers parados após 30 dias (com backup antes). Ao pagar, tudo volta sozinho. O cliente pode gerar uma nova cobrança se o boleto expirar.
 - **Mudanças de plano.** Upgrade é cobrado proporcionalmente ao resto do período e vale quando é pago. Downgrade e troca de mensal/anual valem na próxima renovação. O cancelamento encerra a assinatura no fim do período.
 - **Confirmação.** O Inter avisa o webhook `https://<painel>/api/v1/billing/webhooks/inter/<token secreto>`, registrado automaticamente pelo console. O aviso só diz qual cobrança mudou: o status é sempre consultado de novo na API do Inter. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
@@ -137,15 +184,19 @@ Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela 
 
 Não há SDK oficial do Inter para PHP. A integração usa um cliente próprio (`app/Services/Platform/Inter/`) com o cliente HTTP do Laravel, sem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial.
 
+### Pagamento manual (sem banco)
+
+Com o meio de pagamento **Manual** (Configurações → Cobrança), cada fatura sai na hora com as instruções que você escrever (chave Pix, conta, para onde mandar o comprovante). O plano é liberado quando você clica em **Marcar como paga** na aba Cobrança. Atrasos, suspensões e avisos funcionam como no Inter. Para testes, a opção "Clientes podem simular o pagamento" mostra o botão **Simular pagamento** nas faturas em aberto. Nunca ligue essa opção em produção.
+
 ### Stripe (alternativa)
 
-Com `PLATFORM_BILLING_PROVIDER=stripe` vale a integração anterior: assinaturas no Stripe (`STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `PLATFORM_STRIPE_PRICE_*`), webhook em `/api/v1/billing/webhooks/stripe` com os eventos `customer.subscription.*`, `invoice.*` e `charge.refunded`, e o customer portal do Stripe.
+Com o meio de pagamento **Stripe** vale a integração anterior: assinaturas no Stripe, webhook em `/api/v1/billing/webhooks/stripe` com os eventos `customer.subscription.*`, `invoice.*` e `charge.refunded`, e o customer portal do Stripe. A chave secreta, o segredo do webhook e os IDs de preço ficam em Configurações (Cobrança e Planos).
 
 ## Medição, preço e faturas (wiki 8)
 
 O fluxo é `usage_events` (bruto, a cada 5 min) → `aggregated_usage_hourly` (rollup) → `PricingEngine` → `platform_invoices`.
 
-- `PlatformCollectUsageJob` roda `docker ps`, `docker stats` e `du` dos volumes em cada nó, a cada `PLATFORM_METERING_INTERVAL_MINUTES`. Cada container é atribuído ao tenant pelo label `coolify.tenantId` (ou pelo uuid do recurso), gerando `cpu_seconds`, `memory_byte_seconds`, `egress_bytes` e `storage_bytes`.
+- `PlatformCollectUsageJob` roda `docker ps`, `docker stats` e `du` dos volumes em cada nó, no intervalo de Configurações → Logs, traces e medição (padrão: 5 minutos). Cada container é atribuído ao tenant pelo label `coolify.tenantId` (ou pelo uuid do recurso), gerando `cpu_seconds`, `memory_byte_seconds`, `egress_bytes` e `storage_bytes`.
 - `PlatformRollupUsageJob` agrega por hora (minuto 7). Contadores são somados; armazenamento usa a média.
 - O `PricingEngine` cobra egress acima da franquia do plano (por GB) e armazenamento acima da cota (GB-mês). CPU e memória aparecem nas linhas da fatura, sem custo, porque já estão no plano.
 - `PlatformDailyMaintenanceJob` (03:17) gera faturas de uso faltantes, reprovisiona redes e apaga eventos brutos antigos.
@@ -190,7 +241,7 @@ Além do limite de cada container, o cliente inteiro tem um teto em cada nó. To
 | IOPS | 1.000 | 4.000 | sem limite |
 | Banda (bridge do cliente) | 50 Mbit/s | 200 Mbit/s | sem limite |
 
-Os valores podem mudar por `PLATFORM_<PLANO>_DISK_READ_MBPS`, `..._DISK_WRITE_MBPS`, `..._DISK_IOPS`, `..._BANDWIDTH_MBPS` ou por ajuste de cota no console (`{"bandwidth_mbps": 500}`). Ao mudar o plano ou os ajustes, os limites são reaplicados em todos os nós. A banda limita o tráfego entre os containers e a internet; o tráfego entre o proxy e a aplicação (respostas HTTP) não passa por esse limite.
+Os valores mudam em Configurações → Planos ou, para um cliente só, por ajuste de cota no console (`{"bandwidth_mbps": 500}`). Ao mudar o plano ou os ajustes, os limites são reaplicados em todos os nós. A banda limita o tráfego entre os containers e a internet; o tráfego entre o proxy e a aplicação (respostas HTTP) não passa por esse limite.
 
 ## Traces das aplicações (OpenTelemetry)
 
@@ -202,11 +253,11 @@ OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer hrt_...
 ```
 
-O gateway OTLP da região (Traefik no nó de controle, perfil `tenant-traces` do `infra/monitoring`) pergunta ao painel a quem pertence o token (`/api/v1/platform/otlp/auth`) e grava os traces no Tempo separados por cliente (`X-Scope-OrgID=tenant-<id>`). O cliente consulta os próprios traces no Grafana dele, com uma fonte Tempo apontando para `https://otlp.<região>.../tempo` e o mesmo token. Configure `PLATFORM_OTLP_ENDPOINT` (padrão `https://otlp.{region}.hostrema.com.br`) e o `otlp_domain` do Terraform/Ansible.
+O gateway OTLP da região (Traefik no nó de controle, perfil `tenant-traces` do `infra/monitoring`) pergunta ao painel a quem pertence o token (`/api/v1/platform/otlp/auth`) e grava os traces no Tempo separados por cliente (`X-Scope-OrgID=tenant-<id>`). O cliente consulta os próprios traces no Grafana dele, com uma fonte Tempo apontando para `https://otlp.<região>.../tempo` e o mesmo token. Configure o endpoint OTLP em Configurações → Logs, traces e medição (padrão `https://otlp.{region}.hostrema.com.br`) e o `otlp_domain` do Terraform/Ansible.
 
 ## Histórico de logs
 
-O Grafana Alloy de cada nó manda os logs de todos os containers ao Loki da região, com o label `tenant_id`. Em **Integrações → Histórico de logs** (`/platform/logs`), o cliente escolhe uma aplicação, um serviço ou um banco, o período (até 30 dias, 90 no Enterprise) e um texto opcional. O painel monta a consulta sozinho, sempre presa ao time e ao recurso, então ninguém lê log de outro cliente. O mesmo está na API (`GET /api/v1/platform/logs`). O endereço do Loki de cada região é registrado pelo Ansible junto com os nós (`logs_url`). Para regiões antigas, rode o `bootstrap-nodes.yml` de novo ou defina `PLATFORM_LOKI_URL` (`{region}` vira o slug da região).
+O Grafana Alloy de cada nó manda os logs de todos os containers ao Loki da região, com o label `tenant_id`. Em **Integrações → Histórico de logs** (`/platform/logs`), o cliente escolhe uma aplicação, um serviço ou um banco, o período (até 30 dias, 90 no Enterprise) e um texto opcional. O painel monta a consulta sozinho, sempre presa ao time e ao recurso, então ninguém lê log de outro cliente. O mesmo está na API (`GET /api/v1/platform/logs`). O endereço do Loki de cada região é registrado pelo Ansible junto com os nós (`logs_url`). Para regiões antigas, rode o `bootstrap-nodes.yml` de novo ou informe o Loki em **Regiões e nós → Editar** (ou o padrão em Configurações → Logs, traces e medição, onde `{region}` vira o slug da região).
 
 ## Eventos, webhooks e extensões (wiki 9)
 
@@ -220,8 +271,8 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Segurança do operador e rotação de credenciais
 
-- **2FA obrigatório para o operador.** Quem é do time root só navega depois de ativar a autenticação em dois fatores no perfil. `PLATFORM_REQUIRE_2FA=all` exige de todos os usuários; `none` desliga.
-- **Tokens do operador presos à origem.** Com `PLATFORM_OPERATOR_API_CIDRS=203.0.113.0/24,10.0.0.0/8`, tokens de API do time root só funcionam a partir dessas redes (CI, VPN, máquina do Ansible). Tokens dos clientes não mudam.
+- **2FA obrigatório para o operador.** Quem é do time root só navega depois de ativar a autenticação em dois fatores no perfil. Em Configurações → Segurança dá para exigir de todos os usuários ou desligar.
+- **Tokens do operador presos à origem.** Com redes em Configurações → Segurança (ex.: `203.0.113.0/24, 10.0.0.0/8`), tokens de API do time root só funcionam a partir delas (CI, VPN, máquina do Ansible). Tokens dos clientes não mudam.
 - **Rotação da APP_KEY** (criptografa variáveis de ambiente, chaves SSH, credenciais S3/Git, dados de cobrança e segredos de webhook). Instância única: gere a nova chave (`php artisan key:generate --show`), coloque a atual em `APP_PREVIOUS_KEYS`, a nova em `APP_KEY`, reinicie e rode `php artisan platform:rotate-app-key`; depois tire `APP_PREVIOUS_KEYS` e reinicie. Em cluster, faça pelo Terraform em três aplicações, rodando o release depois de cada uma: (1) `app_previous_keys = ["<nova>"]`; (2) `app_key = "<nova>"` e `app_previous_keys = ["<antiga>"]`, e então `platform:rotate-app-key` em uma instância; (3) `app_previous_keys = []`. A cada rollout as instâncias releem o `.env` do Parameter Store.
 - **Rotação da chave SSH dos nós.** `ansible-playbook playbooks/rotate-coolify-key.yml` cria uma chave nova, autoriza nos nós ao lado da atual, grava no Coolify (mesmo uuid) e valida todos os nós; depois, `-e rotation_phase=finish` revoga a antiga. As instâncias do painel trocam o arquivo da chave sozinhas quando ela muda no banco.
 
@@ -244,16 +295,17 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Console do operador
 
-`/admin/platform`, apenas para o time root, tem quatro abas:
+`/admin/platform`, apenas para o time root, tem cinco abas:
 
 - **Tenants:** plano, status, uso, overrides de cota (JSON), suspender (manual ou total), reativar e provisionar;
-- **Nós:** região, nó dedicado e reprovisionamento; também permite criar e desativar regiões;
-- **Cobrança:** credenciais do Inter, preços dos planos, webhook e faturas de todos os tenants;
+- **Cobrança:** credenciais do Inter, preços dos planos, webhook e faturas de todos os tenants (consultar, marcar como paga, cancelar, emitir de novo);
+- **Regiões e nós:** região, nó dedicado e reprovisionamento; também cria, edita (nome e Loki) e desativa regiões;
+- **Configurações:** tudo o que antes ficava no `.env` (seção *Configurações* acima). Só o owner grava;
 - **Audit log:** ações de usuários, do sistema e da cobrança.
 
 ## Marca (white-label) e página pública
 
-Com a plataforma ligada, o painel mostra `PLATFORM_NAME` (Hostrema) no lugar de "Coolify", inclusive nos títulos e nos assuntos de e-mail. A troca acontece quando os templates são compilados, sem editar as telas originais. Depois de mudar o nome, rode `php artisan view:clear`. Opcionalmente defina `PLATFORM_FAVICON_URL`, `PLATFORM_DESCRIPTION`, `PLATFORM_TERMS_URL` e `PLATFORM_PRIVACY_URL`.
+Com a plataforma ligada, o painel mostra o nome da plataforma (Hostrema) no lugar de "Coolify", inclusive nos títulos e nos assuntos de e-mail. A troca acontece quando os templates são compilados, sem editar as telas originais. Nome, descrição, logo e os links de termos e privacidade ficam em Configurações → Geral. Quando eles mudam, cada instância recompila as telas sozinha no acesso seguinte.
 
 A página pública `/pricing` lista planos, cotas e preços, com os links de cadastro, termos de uso e privacidade.
 
@@ -275,8 +327,8 @@ Todos os endpoints usam `Authorization: Bearer <token>`.
 | `POST /api/v1/platform/tenants/{teamId}/provision` | root | (Re)provisiona as redes do tenant |
 | `POST /api/v1/billing/webhooks/inter/{token}` | Banco Inter | Aviso de mudança de cobrança (o status é consultado na API do Inter) |
 | `POST /api/v1/rollback` | token com `deploy` | Volta uma aplicação para a imagem de um deploy anterior (`uuid` e, opcionalmente, `commit` ou `deployment_uuid`) |
-| `GET /api/v1/platform/metrics` | `PLATFORM_METRICS_TOKEN` | Métricas Prometheus do control plane |
-| `GET /api/v1/platform/edge/{região}` | `PLATFORM_EDGE_TOKEN` | Configuração dinâmica dos edge routers (Traefik) |
+| `GET /api/v1/platform/metrics` | token do Prometheus (Configurações → Tokens internos) | Métricas Prometheus do control plane |
+| `GET /api/v1/platform/edge/{região}` | token dos edge routers (Configurações → Tokens internos) | Configuração dinâmica dos edge routers (Traefik) |
 
 O endpoint `/api/v1/servers` também responde aos tenants: lista os nós que eles podem usar, sem IPs.
 `POST /applications|databases|services` aceitam `destination_uuid`.
@@ -301,8 +353,8 @@ Canary com divisão de tráfego não existe no Coolify; veja a página 9 da wiki
 
 ## Rotas e arquivos próprios (sem conflito no pull)
 
-As rotas da plataforma ficam em `routes/platform/{api,web}.php` e são carregadas pelo
+As rotas da plataforma ficam em `routes/platform/{api,web}.php` (com o OpenAPI delas em `routes/platform/openapi.yaml`) e são carregadas pelo
 `PlatformServiceProvider`, antes das rotas originais. A configuração fica em `config/platform.php`,
 as traduções em `lang/platform/*.json`, e o resto em `app/**/Platform*`, `infra/`, `docs/` e
-`.github/workflows/platform-*.yml`. O workflow `platform-upstream-sync.yml` traz as novidades do Coolify oficial toda semana num pull request (ou abre uma issue listando os conflitos). Os arquivos originais do Coolify que ainda foram alterados
+`.github/workflows/platform-*.yml`. As configurações do owner usam `config/platform.php` só como padrão (`app/Services/Platform/PlatformConfig.php`). O workflow `platform-upstream-sync.yml` traz as novidades do Coolify oficial toda semana num pull request (ou abre uma issue listando os conflitos). Os arquivos originais do Coolify que ainda foram alterados
 estão listados em `docs/security-model.md` (seção *Arquivos do Coolify alterados*).

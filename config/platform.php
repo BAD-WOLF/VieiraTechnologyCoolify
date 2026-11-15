@@ -20,6 +20,9 @@ return [
 
     'name' => env('PLATFORM_NAME', 'Hostrema'),
 
+    // Language of the platform pages (operator console > Settings can change it).
+    'locale' => env('APP_LOCALE', 'pt-br'),
+
     'support_email' => env('PLATFORM_SUPPORT_EMAIL'),
 
     'sales_url' => env('PLATFORM_SALES_URL'),
@@ -323,6 +326,10 @@ return [
         'interest_percent_month' => (float) env('PLATFORM_BILLING_INTEREST_PERCENT_MONTH', 1),
         // Boletos below R$ 2.50 are not accepted by the bank.
         'min_charge_cents' => 250,
+        // Provider "manual": text shown on every open invoice (Pix key, bank account...).
+        'manual_instructions' => env('PLATFORM_BILLING_MANUAL_INSTRUCTIONS', 'Pague por Pix ou transferência e envie o comprovante para o suporte. O plano é liberado assim que confirmarmos o pagamento.'),
+        // Tests only: customers get a "simulate payment" button on open invoices.
+        'allow_simulated_payments' => (bool) env('PLATFORM_BILLING_ALLOW_SIMULATED_PAYMENTS', false),
     ],
 
     'inter' => [

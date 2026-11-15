@@ -20,6 +20,12 @@
             {{ data_get($invoice->metadata, 'issue_error') }}
             <div class="pt-2">{{ __('Check the billing details and issue the charge again.') }}</div>
         </x-callout>
+    @elseif (\App\Services\Platform\InterBilling::isManualInvoice($invoice))
+        <div class="flex flex-col gap-2 text-sm">
+            <span class="font-bold dark:text-white">{{ __('How to pay') }}</span>
+            <div class="whitespace-pre-line dark:text-neutral-300">{{ $details['instructions'] ?? '' }}</div>
+            <span class="text-xs dark:text-neutral-400">{{ __('Your plan is activated as soon as we confirm the payment.') }}</span>
+        </div>
     @elseif (blank($details['pix_copia_e_cola'] ?? null) && blank($details['linha_digitavel'] ?? null))
         <div class="text-sm dark:text-neutral-300">{{ __('Generating the charge at the bank... this takes a few seconds.') }}</div>
     @else
@@ -65,6 +71,9 @@
         @endif
         @if ($cancellable ?? false)
             <x-forms.button type="button" wire:click="cancelCheckout('{{ $invoice->uuid }}')">{{ __('Choose another plan') }}</x-forms.button>
+        @endif
+        @if (\App\Services\Platform\InterBilling::allowsSimulatedPayments())
+            <x-forms.button type="button" wire:click="simulatePayment('{{ $invoice->uuid }}')">{{ __('Simulate payment (tests)') }}</x-forms.button>
         @endif
     </div>
 </div>

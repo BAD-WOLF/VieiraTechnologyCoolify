@@ -7,7 +7,7 @@
         <div class="subtitle">{{ __('Regions, nodes, tenants and audit trail of the multi-tenant platform.') }}</div>
     </div>
     <div class="flex gap-2">
-        @foreach (['tenants' => __('Tenants'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'audit' => __('Audit log')] as $key => $label)
+        @foreach (['tenants' => __('Tenants'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
             <x-forms.button wire:click="$set('tab', '{{ $key }}')" :isHighlighted="$tab === $key">{{ $label }}</x-forms.button>
         @endforeach
     </div>
@@ -70,6 +70,8 @@
         </div>
     @elseif ($tab === 'billing')
         <livewire:platform.admin-billing />
+    @elseif ($tab === 'settings')
+        <livewire:platform.admin-settings />
     @elseif ($tab === 'nodes')
         <h3>{{ __('Regions') }}</h3>
         <form wire:submit="createRegion" class="flex flex-wrap items-end gap-2">
@@ -89,6 +91,14 @@
                         <x-forms.button wire:click="toggleRegion({{ $region->id }}, 'is_default')">{{ __('Make default') }}</x-forms.button>
                     @endif
                     <x-forms.button wire:click="toggleRegion({{ $region->id }}, 'is_active')">{{ $region->is_active ? __('Disable') : __('Enable') }}</x-forms.button>
+                    <x-forms.button wire:click="editRegion({{ $region->id }})">{{ __('Edit') }}</x-forms.button>
+                    @if ($editingRegionId === $region->id)
+                        <form wire:submit="saveRegion" class="flex flex-wrap items-end w-full gap-2">
+                            <x-forms.input id="editingRegionName" label="{{ __('Name') }}" required />
+                            <x-forms.input id="editingRegionLogsUrl" label="{{ __('Loki of the region (log history)') }}" placeholder="http://10.20.0.10:3100" />
+                            <x-forms.button type="submit">{{ __('Save') }}</x-forms.button>
+                        </form>
+                    @endif
                 </div>
             @endforeach
         </div>

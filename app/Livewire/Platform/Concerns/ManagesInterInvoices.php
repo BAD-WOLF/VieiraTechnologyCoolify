@@ -5,6 +5,7 @@ namespace App\Livewire\Platform\Concerns;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformTenant;
 use App\Services\Platform\BillingProfile;
+use App\Services\Platform\Inter\InterSettings;
 use App\Services\Platform\InterBilling;
 use App\Services\Platform\InvoiceUsageExport;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
@@ -90,6 +91,32 @@ trait ManagesInterInvoices
         $invoice = $this->teamInvoice($uuid);
 
         return response()->streamDownload(fn () => InvoiceUsageExport::write($invoice), 'uso-'.($invoice->number ?? $invoice->uuid).'.csv', ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * Tests only (Settings > Billing): pays a manual invoice, or an Inter sandbox charge.
+     */
+    public function simulatePayment(string $uuid): void
+    {
+        if (! $this->canManageBilling() || ! InterBilling::allowsSimulatedPayments()) {
+            return;
+        }
+        try {
+            $invoice = $this->teamInvoice($uuid);
+            if (InterBilling::isManualInvoice($invoice)) {
+                InterBilling::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), 'user');
+            } elseif (filled($invoice->provider_reference) && InterSettings::isSandbox()) {
+                InterBilling::client()->simulatePayment((string) $invoice->provider_reference, 'PIX');
+                InterBilling::sync($invoice);
+            } else {
+                $this->dispatch('error', __('Payments can only be simulated with the manual provider or the Inter sandbox.'));
+
+                return;
+            }
+            $this->dispatch('success', __('Payment simulated.'));
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
     }
 
     public function reissueInvoice(string $uuid): void

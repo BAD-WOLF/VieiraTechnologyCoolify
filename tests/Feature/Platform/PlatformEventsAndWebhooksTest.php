@@ -286,6 +286,6 @@ it('documents every platform API route in the OpenAPI document', function () {
     foreach ($routes as $uri) {
         expect($documented)->toContain($uri);
     }
-    expect(Yaml::parseFile(resource_path('platform/openapi.yaml'))['components']['schemas']['PlatformEvent']['properties']['type']['enum'])
+    expect(Yaml::parseFile(\App\Http\Controllers\PlatformOpenApiController::path())['components']['schemas']['PlatformEvent']['properties']['type']['enum'])
         ->toEqualCanonicalizing(array_keys(PlatformEvents::TYPES));
 });

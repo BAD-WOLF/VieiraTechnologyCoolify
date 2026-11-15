@@ -37,14 +37,30 @@ class InterBilling
 
     private const MAX_ISSUE_ATTEMPTS = 5;
 
+    /**
+     * Provider "manual": same invoices and cycle, without the bank. The customer pays by Pix or
+     * transfer following the instructions of the operator, who marks the invoice as paid.
+     */
+    public const MANUAL = 'manual';
+
     public static function enabled(): bool
     {
-        return config('platform.billing.provider', self::PROVIDER) === self::PROVIDER;
+        return in_array(config('platform.billing.provider', self::PROVIDER), [self::PROVIDER, self::MANUAL], true);
+    }
+
+    public static function isManual(): bool
+    {
+        return config('platform.billing.provider') === self::MANUAL;
     }
 
     public static function ready(): bool
     {
-        return self::enabled() && InterSettings::isConfigured();
+        return self::enabled() && (self::isManual() || InterSettings::isConfigured());
+    }
+
+    public static function allowsSimulatedPayments(): bool
+    {
+        return self::enabled() && (bool) config('platform.billing.allow_simulated_payments', false);
     }
 
     public static function client(): InterClient
@@ -58,9 +74,10 @@ class InterBilling
             return null;
         }
         $interval = $interval === PlanCatalog::INTERVAL_YEARLY ? PlanCatalog::INTERVAL_YEARLY : PlanCatalog::INTERVAL_MONTHLY;
-        $override = PlatformSetting::get("price.{$plan}.{$interval}");
+        // Settings > Plans (or the Billing tab) override the config; older consoles stored "price.*".
+        $legacy = PlatformConfig::isOverridden("platform.plans.{$plan}.price_{$interval}") ? null : PlatformSetting::get("price.{$plan}.{$interval}");
 
-        return self::toCents(filled($override) ? $override : data_get(PlanCatalog::get($plan), "price_{$interval}"));
+        return self::toCents(filled($legacy) ? $legacy : data_get(PlanCatalog::get($plan), "price_{$interval}"));
     }
 
     /**
@@ -121,7 +138,7 @@ class InterBilling
             ]);
             self::issue($invoice);
 
-            return ['action' => 'checkout', 'message' => __('Invoice issued. Pay with Pix or boleto to activate the plan.'), 'invoice' => $invoice->fresh()];
+            return ['action' => 'checkout', 'message' => self::isManual() ? __('Invoice issued. Follow the payment instructions to activate the plan.') : __('Invoice issued. Pay with Pix or boleto to activate the plan.'), 'invoice' => $invoice->fresh()];
         }
 
         $currentInterval = $tenant->billing_interval ?: PlanCatalog::INTERVAL_MONTHLY;
@@ -244,6 +261,9 @@ class InterBilling
 
             return $invoice->fresh();
         }
+        if (self::isManual()) {
+            return self::issueManually($invoice);
+        }
         $tenant = PlatformTenant::forTeam($invoice->team_id);
         $billing = (array) config('platform.billing', []);
         $payload = [
@@ -288,6 +308,33 @@ class InterBilling
         PlatformInterSyncInvoiceJob::dispatch($invoice->id)->delay(now()->addSeconds(5));
 
         return $invoice;
+    }
+
+    /**
+     * Invoice of the manual provider: open at once, with the payment instructions of the operator.
+     */
+    private static function issueManually(PlatformInvoice $invoice): PlatformInvoice
+    {
+        $metadata = array_merge((array) $invoice->metadata, ['manual' => true]);
+        unset($metadata['issue_error'], $metadata['issue_attempts']);
+        $invoice->forceFill([
+            'provider' => self::PROVIDER,
+            'provider_reference' => null,
+            'provider_status' => 'MANUAL',
+            'status' => PlatformInvoice::STATUS_OPEN,
+            'payment_details' => ['instructions' => (string) config('platform.billing.manual_instructions')],
+            'metadata' => $metadata,
+            'synced_at' => now(),
+        ])->save();
+        audit_log('platform.invoice.issued', $invoice, ['manual' => true], $invoice->team_id, 'system');
+        self::notifyIssued($invoice);
+
+        return $invoice;
+    }
+
+    public static function isManualInvoice(PlatformInvoice $invoice): bool
+    {
+        return (bool) data_get($invoice->metadata, 'manual', false) && blank($invoice->provider_reference);
     }
 
     /**
@@ -598,6 +645,9 @@ class InterBilling
             ->limit(300)
             ->get()
             ->each(function (PlatformInvoice $invoice) use (&$count) {
+                if (self::isManualInvoice($invoice)) {
+                    return;
+                }
                 if (blank($invoice->provider_reference)) {
                     if ((int) data_get($invoice->metadata, 'issue_attempts', 0) < self::MAX_ISSUE_ATTEMPTS) {
                         try {
@@ -746,6 +796,9 @@ class InterBilling
         }
         if ($line = data_get($invoice->payment_details, 'linha_digitavel')) {
             $lines[] = __('Boleto:').' '.$line;
+        }
+        if ($instructions = data_get($invoice->payment_details, 'instructions')) {
+            $lines[] = (string) $instructions;
         }
         TenantLifecycle::notify($tenant, __('Invoice available'), $lines);
     }
