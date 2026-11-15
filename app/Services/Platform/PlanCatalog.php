@@ -92,7 +92,11 @@ class PlanCatalog
             return false;
         }
 
-        return ! data_get($definition, 'contact_sales', false) && filled(self::priceIdFor($plan, $interval));
+        if (data_get($definition, 'contact_sales', false)) {
+            return false;
+        }
+
+        return InterBilling::enabled() ? ! is_null(InterBilling::priceCents($plan, $interval)) : filled(self::priceIdFor($plan, $interval));
     }
 
     /**
@@ -100,6 +104,11 @@ class PlanCatalog
      */
     public static function displayPrice(string $plan, string $interval = self::INTERVAL_MONTHLY): ?string
     {
+        if (InterBilling::enabled()) {
+            $cents = InterBilling::priceCents($plan, $interval);
+
+            return is_null($cents) ? null : formatPlatformMoney($cents, 'brl');
+        }
         $priceId = self::priceIdFor($plan, $interval);
         if (blank($priceId) || blank(config('subscription.stripe_api_key'))) {
             return null;

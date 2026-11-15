@@ -20,6 +20,12 @@ class PlatformInvoice extends Model
 
     public const STATUS_UNCOLLECTIBLE = 'uncollectible';
 
+    public const TYPE_SUBSCRIPTION = 'subscription';
+
+    public const TYPE_UPGRADE = 'upgrade';
+
+    public const TYPE_USAGE = 'usage';
+
     protected $guarded = [];
 
     protected function casts(): array
@@ -32,6 +38,10 @@ class PlatformInvoice extends Model
             'period_end' => 'datetime',
             'paid_at' => 'datetime',
             'amount_cents' => 'integer',
+            'amount_paid_cents' => 'integer',
+            'payment_details' => 'array',
+            'due_date' => 'date',
+            'synced_at' => 'datetime',
         ];
     }
 

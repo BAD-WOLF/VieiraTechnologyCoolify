@@ -46,6 +46,8 @@ class PlatformTenant extends Model
             'current_period_start' => 'datetime',
             'current_period_end' => 'datetime',
             'provisioned_at' => 'datetime',
+            'billing_profile' => 'encrypted:array',
+            'cancel_at_period_end' => 'boolean',
         ];
     }
 

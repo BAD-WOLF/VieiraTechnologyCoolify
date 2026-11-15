@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Exceptions\PlatformPolicyViolation;
+use App\Jobs\PlatformBillingCycleJob;
 use App\Jobs\PlatformCollectUsageJob;
 use App\Jobs\PlatformDailyMaintenanceJob;
 use App\Jobs\PlatformEnforcementJob;
@@ -28,6 +29,7 @@ use App\Models\Team;
 use App\Models\TeamInvitation;
 use App\Services\Platform\DestinationPolicy;
 use App\Services\Platform\DomainPolicy;
+use App\Services\Platform\PlatformBranding;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
 use Illuminate\Auth\Events\Failed;
@@ -35,6 +37,8 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
@@ -62,6 +66,7 @@ class PlatformServiceProvider extends ServiceProvider
         $this->registerRelations();
         $this->registerSchedule();
         $this->registerGates();
+        $this->registerBranding();
         $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
         $this->registerInputGuards();
@@ -109,6 +114,7 @@ class PlatformServiceProvider extends ServiceProvider
             $schedule->job(new PlatformRollupUsageJob)->hourlyAt(7)->onOneServer();
             $schedule->job(new PlatformEnforcementJob)->everyTenMinutes()->onOneServer();
             $schedule->job(new PlatformDailyMaintenanceJob)->dailyAt('03:17')->onOneServer();
+            $schedule->job(new PlatformBillingCycleJob)->everyFifteenMinutes()->onOneServer();
         });
     }
 
@@ -124,6 +130,20 @@ class PlatformServiceProvider extends ServiceProvider
             }
 
             return null;
+        });
+    }
+
+    /**
+     * Platform name instead of "Coolify" in the dashboard and in e-mail subjects.
+     */
+    private function registerBranding(): void
+    {
+        Blade::precompiler(fn (string $template) => PlatformBranding::enabled() ? PlatformBranding::apply($template) : $template);
+        Event::listen(MessageSending::class, function (MessageSending $event) {
+            $subject = $event->message->getSubject();
+            if (PlatformBranding::enabled() && filled($subject)) {
+                $event->message->subject(PlatformBranding::text($subject));
+            }
         });
     }
 

@@ -1,5 +1,20 @@
-<div class="w-full pb-10">
-    <div class="flex justify-center pb-8">
+<div class="flex flex-col w-full gap-6 pb-10">
+    @if ($inter && $pendingInvoice)
+        @include('livewire.platform.partials.invoice-payment', ['invoice' => $pendingInvoice, 'qr' => $qr, 'cancellable' => $pendingInvoice->type === 'subscription'])
+    @endif
+    @if ($inter && $editingProfile)
+        @include('livewire.platform.partials.billing-profile-form', [
+            'action' => 'saveProfileAndSubscribe',
+            'submitLabel' => __('Save and continue'),
+            'cancellable' => true,
+        ])
+    @endif
+    @if ($pendingPlan)
+        <x-callout type="info" title="{{ __('Scheduled change') }}">
+            {{ __('Your plan changes to :plan on the next renewal.', ['plan' => \App\Services\Platform\PlanCatalog::get($pendingPlan)['name'] ?? $pendingPlan]) }}
+        </x-callout>
+    @endif
+    <div class="flex justify-center">
         <fieldset class="grid grid-cols-2 p-1 text-xs font-semibold leading-5 text-center rounded-sm dark:text-white gap-x-1 dark:bg-white/5 bg-black/5">
             <legend class="sr-only">{{ __('Payment frequency') }}</legend>
             <button type="button" wire:click="setInterval('monthly')" @class([
@@ -66,8 +81,8 @@
                 @if ($currentPlan === $plan['id'])
                     <x-forms.button disabled class="w-full">{{ __('Current plan') }}</x-forms.button>
                 @elseif ($plan['self_serve'])
-                    <x-forms.button class="w-full" isHighlighted wire:click="subscribe('{{ $plan['id'] }}')">
-                        {{ __('Subscribe') }}
+                    <x-forms.button class="w-full" isHighlighted wire:click="subscribe('{{ $plan['id'] }}')" wire:loading.attr="disabled">
+                        {{ $currentPlan ? __('Change to this plan') : __('Subscribe') }}
                     </x-forms.button>
                 @elseif ($salesUrl)
                     <a class="w-full button" href="{{ $salesUrl }}" target="_blank">{{ __('Talk to sales') }}</a>
@@ -77,7 +92,10 @@
             </div>
         @endforeach
     </div>
-    <p class="pt-6 text-xs dark:text-neutral-400">
+    <p class="text-xs dark:text-neutral-400">
         {{ __('CPU and memory are hard limits of the plan. Egress and storage above the plan are billed on the next invoice.') }}
+        @if ($inter)
+            {{ __('Payment with Pix or boleto (Banco Inter). Upgrades are charged proportionally; downgrades apply on the next renewal.') }}
+        @endif
     </p>
 </div>

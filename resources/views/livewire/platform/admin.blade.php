@@ -7,7 +7,7 @@
         <div class="subtitle">{{ __('Regions, nodes, tenants and audit trail of the multi-tenant platform.') }}</div>
     </div>
     <div class="flex gap-2">
-        @foreach (['tenants' => __('Tenants'), 'nodes' => __('Regions & nodes'), 'audit' => __('Audit log')] as $key => $label)
+        @foreach (['tenants' => __('Tenants'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'audit' => __('Audit log')] as $key => $label)
             <x-forms.button wire:click="$set('tab', '{{ $key }}')" :isHighlighted="$tab === $key">{{ $label }}</x-forms.button>
         @endforeach
     </div>
@@ -68,6 +68,8 @@
                 </tbody>
             </table>
         </div>
+    @elseif ($tab === 'billing')
+        <livewire:platform.admin-billing />
     @elseif ($tab === 'nodes')
         <h3>{{ __('Regions') }}</h3>
         <form wire:submit="createRegion" class="flex flex-wrap items-end gap-2">

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\RollbackController;
 use App\Http\Controllers\PlatformEdgeController;
+use App\Http\Controllers\PlatformInterWebhookController;
 use App\Http\Controllers\PlatformMetricsController;
 use App\Http\Controllers\Webhook\Stripe as StripeWebhook;
 use App\Http\Middleware\ApiAllowed;
@@ -20,6 +21,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('/v1/billing/webhooks/stripe', [StripeWebhook::class, 'events']);
+Route::post('/v1/billing/webhooks/inter/{token}', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
 Route::get('/v1/platform/metrics', PlatformMetricsController::class);
 Route::get('/v1/platform/edge/{region}', PlatformEdgeController::class)->where('region', '[a-z0-9-]+');
 

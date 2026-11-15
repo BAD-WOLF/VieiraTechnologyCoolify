@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\PlatformPricingPageController;
 use App\Livewire\Platform\Admin;
 use App\Livewire\Platform\Onboarding;
 use Illuminate\Support\Facades\Route;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/admin/platform', Admin::class)->middleware(['auth'])->name('admin.platform');
+Route::get('/pricing', PlatformPricingPageController::class)->name('platform.pricing');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/platform/onboarding', Onboarding::class)->name('platform.onboarding');

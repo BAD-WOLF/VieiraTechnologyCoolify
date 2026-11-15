@@ -18,7 +18,7 @@
 return [
     'enabled' => (bool) env('PLATFORM_ENABLED', false),
 
-    'name' => env('PLATFORM_NAME', 'Vieira Technology Cloud'),
+    'name' => env('PLATFORM_NAME', 'Hostrema'),
 
     'support_email' => env('PLATFORM_SUPPORT_EMAIL'),
 
@@ -81,6 +81,9 @@ return [
         'basic' => [
             'name' => 'Básico',
             'description' => 'Isolated containers with CPU/RAM quotas, managed SSL, basic logs and limited deployments.',
+            // Prices in BRL (e.g. 49.90). Can be changed in the operator console (Billing tab).
+            'price_monthly' => env('PLATFORM_BASIC_PRICE_MONTHLY', '49.90'),
+            'price_yearly' => env('PLATFORM_BASIC_PRICE_YEARLY', '499.00'),
             'stripe_price_monthly' => env('PLATFORM_STRIPE_PRICE_BASIC_MONTHLY'),
             'stripe_price_yearly' => env('PLATFORM_STRIPE_PRICE_BASIC_YEARLY'),
             'contact_sales' => false,
@@ -111,6 +114,9 @@ return [
         'pro' => [
             'name' => 'Profissional',
             'description' => 'More CPU/RAM, persistent volumes, log export and scheduled backups.',
+            // Prices in BRL (e.g. 49.90). Can be changed in the operator console (Billing tab).
+            'price_monthly' => env('PLATFORM_PRO_PRICE_MONTHLY', '149.90'),
+            'price_yearly' => env('PLATFORM_PRO_PRICE_YEARLY', '1499.00'),
             'stripe_price_monthly' => env('PLATFORM_STRIPE_PRICE_PRO_MONTHLY'),
             'stripe_price_yearly' => env('PLATFORM_STRIPE_PRICE_PRO_YEARLY'),
             'contact_sales' => false,
@@ -141,6 +147,9 @@ return [
         'enterprise' => [
             'name' => 'Enterprise',
             'description' => 'Dedicated nodes (VM/LXD isolation), dedicated network, SSO (SAML/OIDC), custom SLA and SIEM integration.',
+            // Prices in BRL (e.g. 49.90). Can be changed in the operator console (Billing tab).
+            'price_monthly' => env('PLATFORM_ENTERPRISE_PRICE_MONTHLY', null),
+            'price_yearly' => env('PLATFORM_ENTERPRISE_PRICE_YEARLY', null),
             'stripe_price_monthly' => env('PLATFORM_STRIPE_PRICE_ENTERPRISE_MONTHLY'),
             'stripe_price_yearly' => env('PLATFORM_STRIPE_PRICE_ENTERPRISE_YEARLY'),
             'contact_sales' => (bool) env('PLATFORM_ENTERPRISE_CONTACT_SALES', true),
@@ -207,6 +216,50 @@ return [
     | suspend new deploys, unpaid > 30d -> stop containers)
     |--------------------------------------------------------------------------
     */
+    /*
+     * Billing. "inter": Banco Inter (boleto + Pix, "Bolepix") through the Inter API; credentials
+     * are entered in the operator console (/admin/platform, Billing tab) or through the INTER_*
+     * variables below. "stripe": Stripe subscriptions (previous integration).
+     */
+    'billing' => [
+        'provider' => env('PLATFORM_BILLING_PROVIDER', 'inter'),
+        // Days to pay a new or renewal invoice; the tenant keeps working meanwhile.
+        'due_days' => (int) env('PLATFORM_BILLING_DUE_DAYS', 5),
+        // Days after the due date until Inter cancels an unpaid boleto (0-60).
+        'cancel_after_days' => (int) env('PLATFORM_BILLING_CANCEL_AFTER_DAYS', 30),
+        'fine_percent' => (float) env('PLATFORM_BILLING_FINE_PERCENT', 2),
+        'interest_percent_month' => (float) env('PLATFORM_BILLING_INTEREST_PERCENT_MONTH', 1),
+        // Boletos below R$ 2.50 are not accepted by the bank.
+        'min_charge_cents' => 250,
+    ],
+
+    'inter' => [
+        'environment' => env('INTER_ENVIRONMENT', 'production'),
+        'client_id' => env('INTER_CLIENT_ID'),
+        'client_secret' => env('INTER_CLIENT_SECRET'),
+        // Certificate (.crt) and private key (.key) of the Inter application: file path, PEM or base64.
+        'certificate' => env('INTER_CERTIFICATE'),
+        'private_key' => env('INTER_PRIVATE_KEY'),
+        // Only needed when the Inter application is linked to more than one checking account.
+        'conta_corrente' => env('INTER_CONTA_CORRENTE'),
+        // Secret part of the webhook URL (generated and stored automatically when empty).
+        'webhook_token' => env('INTER_WEBHOOK_TOKEN'),
+        'timeout' => (int) env('INTER_TIMEOUT', 30),
+    ],
+
+    /*
+     * White-label (wiki 9, "Branding e White-Label"): the dashboard shows the platform name instead
+     * of "Coolify". Optional logo/favicon URLs replace the Coolify ones.
+     */
+    'branding' => [
+        'enabled' => (bool) env('PLATFORM_BRANDING', true),
+        'description' => env('PLATFORM_DESCRIPTION', 'Hospedagem de aplicações, bancos de dados e serviços com deploy automático.'),
+        'favicon_url' => env('PLATFORM_FAVICON_URL'),
+        'docs_url' => env('PLATFORM_DOCS_URL'),
+        'terms_url' => env('PLATFORM_TERMS_URL'),
+        'privacy_url' => env('PLATFORM_PRIVACY_URL'),
+    ],
+
     'enforcement' => [
         'quota_warning_percent' => (int) env('PLATFORM_QUOTA_WARNING_PERCENT', 80),
         'suspend_after_days' => (int) env('PLATFORM_SUSPEND_AFTER_DAYS', 7),
