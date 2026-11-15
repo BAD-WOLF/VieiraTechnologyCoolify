@@ -56,9 +56,10 @@ jobs:
         with:
           context: .
           file: docker/production/Dockerfile
-          # The default base of the official Dockerfile is a private image of Coolify.
+          # The default base of the official Dockerfile is a private image of Coolify; the public
+          # serversideup v5 images changed their s6 setup, so the last v4 release is used.
           build-args: |
-            SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine
+            SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine-v4.5.1
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max
