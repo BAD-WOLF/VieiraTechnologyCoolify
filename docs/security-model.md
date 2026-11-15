@@ -87,7 +87,10 @@ CI falha se um arquivo original for alterado sem aparecer aqui.
 
 O `docker/production/Dockerfile` é o mesmo do `v4.0.x` oficial: a imagem `minio/mc` saiu do Docker Hub e o
 `postgresql15-client` saiu do Alpine 3.23, então o Dockerfile da base não constrói mais. Ao sincronizar com o
-`v4.0.x`, ele deixa de aparecer na lista.
+`v4.0.x`, ele deixa de aparecer na lista. A base padrão desse Dockerfile é uma imagem privada do Coolify
+(`ghcr.io/coollabsio/serversideup-php`); o release (`platform-release.yml`) e o ambiente local (`infra/local`)
+passam `SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine`. Para construir à mão, use
+`docker build --build-arg SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine -f docker/production/Dockerfile .`.
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)

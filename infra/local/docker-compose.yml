@@ -9,6 +9,9 @@ services:
     build:
       context: ../..
       dockerfile: docker/production/Dockerfile
+      args:
+        # The default base of the official Dockerfile is a private image of Coolify.
+        SERVERSIDEUP_PHP_IMAGE: serversideup/php:8.4-fpm-nginx-alpine
     image: hostrema-local:latest
     restart: unless-stopped
     env_file: .env

@@ -7,10 +7,12 @@ ARG DOCKER_VERSION=27
 FROM docker:${DOCKER_VERSION}-dind
 
 # Tools Coolify uses on its servers (bash for every remote command), the SSH server and, when the
-# image lacks them, the compose and buildx plugins. Root logs in only with the key of the control
+# image lacks them, the compose and buildx plugins (after upgrading the packages of the image, whose
+# SSH client would conflict with a newer server package). Root logs in only with the key of the control
 # plane: its password becomes "*" (no password, not locked), because sshd refuses any key of a
 # locked account.
-RUN apk add --no-cache bash coreutils findutils iproute2 curl jq git openssh-server tar gzip \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache bash coreutils findutils iproute2 curl jq git openssh-server tar gzip \
     && (docker compose version >/dev/null 2>&1 || apk add --no-cache docker-cli-compose) \
     && (docker buildx version >/dev/null 2>&1 || apk add --no-cache docker-cli-buildx) \
     && sed -i -e 's/^root:!*:/root:*:/' /etc/shadow \

@@ -56,6 +56,9 @@ jobs:
         with:
           context: .
           file: docker/production/Dockerfile
+          # The default base of the official Dockerfile is a private image of Coolify.
+          build-args: |
+            SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max
