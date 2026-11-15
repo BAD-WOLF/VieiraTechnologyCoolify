@@ -41,9 +41,11 @@ resource "aws_vpc_security_group_ingress_rule" "control_wireguard" {
 
 resource "aws_vpc_security_group_ingress_rule" "control_from_nodes" {
   for_each = {
-    loki     = 3100
-    mirror   = 5000
-    registry = 5443
+    loki      = 3100
+    mirror    = 5000
+    registry  = 5443
+    otlp_grpc = 4317
+    otlp_http = 4318
   }
 
   security_group_id            = aws_security_group.control.id

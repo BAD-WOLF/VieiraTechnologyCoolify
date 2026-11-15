@@ -1,0 +1,91 @@
+# Keeps the fork close to the official Coolify (wiki 9, "Atualizações Upstream"): every week the
+# upstream branch is merged into a branch "upstream-sync/<date>" and a pull request to "platform"
+# is opened; when the merge conflicts, an issue lists the files to solve by hand.
+#
+# Secret SYNC_TOKEN (fine-grained token with contents, pull requests, issues and workflows write)
+# is recommended: the default token can not push upstream changes of .github/workflows and PRs it
+# opens do not trigger the CI.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream branch or tag of coollabsio/coolify"
+        default: "v4.x"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: platform
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream
+        id: merge
+        env:
+          REF: ${{ inputs.upstream_ref || 'v4.x' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/coollabsio/coolify.git
+          git fetch --no-tags upstream "$REF"
+          branch="upstream-sync/$(date +%Y-%m-%d)"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "upstream/$REF" HEAD; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git checkout -b "$branch"
+          if git merge --no-edit "upstream/$REF"; then
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/' > conflicts.md
+            git merge --abort
+            echo "status=conflicts" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open the pull request
+        if: steps.merge.outputs.status == 'merged'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          REF: ${{ steps.merge.outputs.ref }}
+        run: |
+          git push -u origin "$BRANCH"
+          gh pr create --base platform --head "$BRANCH" \
+            --title "chore: sync upstream Coolify ($REF)" \
+            --body "Automatic merge of coollabsio/coolify \`$REF\` into \`platform\`. Check the Platform CI (tests/Feature/Platform) before merging."
+
+      - name: Report the conflicts
+        if: steps.merge.outputs.status == 'conflicts'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          REF: ${{ steps.merge.outputs.ref }}
+        run: |
+          {
+            echo "Merging coollabsio/coolify \`$REF\` into \`platform\` has conflicts in:"
+            echo
+            cat conflicts.md
+            echo
+            echo 'Solve them locally:'
+            echo
+            echo '```'
+            echo 'git remote add upstream https://github.com/coollabsio/coolify.git   # once'
+            echo "git fetch upstream && git checkout platform && git merge upstream/$REF"
+            echo '```'
+            echo
+            echo 'The list of upstream files changed by the platform is in docs/security-model.md.'
+          } > body.md
+          gh issue create --title "Upstream sync ($REF) has conflicts" --body-file body.md

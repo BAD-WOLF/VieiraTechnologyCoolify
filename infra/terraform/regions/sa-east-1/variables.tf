@@ -1,11 +1,11 @@
 variable "project" {
   type    = string
-  default = "vieira-technology-cloud"
+  default = "hostrema"
 }
 
 variable "name_prefix" {
   type    = string
-  default = "vtc"
+  default = "hostrema"
 }
 
 variable "vpc_cidr" {

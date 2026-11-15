@@ -17,4 +17,4 @@ public_database_access = false
 nodes_domain           = "sa-east-1.nodes.example.com"
 
 backup_retention_days         = 90
-backup_replication_bucket_arn = "" # arn:aws:s3:::vtc-us-east-1-backups-replica
+backup_replication_bucket_arn = "" # arn:aws:s3:::hostrema-us-east-1-backups-replica

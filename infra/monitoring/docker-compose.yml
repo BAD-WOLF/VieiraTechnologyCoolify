@@ -46,6 +46,28 @@ services:
       - "${PRIVATE_BIND_IP:-127.0.0.1}:3100:3100"
     networks: [monitoring]
 
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - ./tempo:/etc/tempo:ro
+      - tempo-data:/var/tempo
+    networks: [monitoring]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    restart: unless-stopped
+    command: --config=/etc/otelcol/config.yml
+    environment:
+      - REGION=${REGION:?set REGION}
+    volumes:
+      - ./otel-collector:/etc/otelcol:ro
+    ports:
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:4317:4317"
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:4318:4318"
+    networks: [monitoring]
+
   blackbox:
     image: prom/blackbox-exporter:v0.25.0
     restart: unless-stopped
@@ -75,5 +97,6 @@ networks:
 volumes:
   prometheus-data: {}
   alertmanager-data: {}
+  tempo-data: {}
   loki-data: {}
   grafana-data: {}

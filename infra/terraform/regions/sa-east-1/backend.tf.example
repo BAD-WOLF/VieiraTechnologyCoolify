@@ -2,10 +2,10 @@
 # and create the bucket/table first. `terraform init -migrate-state` moves the local state.
 terraform {
   backend "s3" {
-    bucket         = "vtc-terraform-state"
+    bucket         = "hostrema-terraform-state"
     key            = "regions/sa-east-1/terraform.tfstate"
     region         = "sa-east-1"
-    dynamodb_table = "vtc-terraform-locks"
+    dynamodb_table = "hostrema-terraform-locks"
     encrypt        = true
   }
 }

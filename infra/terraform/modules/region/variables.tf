@@ -12,7 +12,7 @@ variable "platform_region" {
 variable "name_prefix" {
   description = "Prefix of every resource name."
   type        = string
-  default     = "vtc"
+  default     = "hostrema"
 }
 
 variable "vpc_cidr" {

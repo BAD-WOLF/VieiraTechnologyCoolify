@@ -4,7 +4,7 @@ all:
   vars:
     platform_region: sa-east-1
     vpc_cidr: 10.20.0.0/16
-    backup_bucket: vtc-sa-east-1-backups-123456789012
+    backup_bucket: hostrema-sa-east-1-backups-123456789012
     control_private_ip: 10.20.0.10
     edge_http_port: 10080
     edge_https_port: 10443
@@ -12,7 +12,7 @@ all:
   children:
     control:
       hosts:
-        vtc-sa-east-1-control:
+        hostrema-sa-east-1-control:
           ansible_host: 203.0.113.50
           private_ip: 10.20.0.10
           data_volume_id: vol-0123456789abcdef0
@@ -20,12 +20,12 @@ all:
       vars:
         ansible_ssh_common_args: "-o ProxyJump=ubuntu@203.0.113.50"
       hosts:
-        vtc-sa-east-1-node-01:
+        hostrema-sa-east-1-node-01:
           ansible_host: 10.20.128.10
           private_ip: 10.20.128.10
           public_ip: ""
           data_volume_id: vol-0123456789abcdef1
-        vtc-sa-east-1-node-02:
+        hostrema-sa-east-1-node-02:
           ansible_host: 10.20.144.10
           private_ip: 10.20.144.10
           public_ip: ""

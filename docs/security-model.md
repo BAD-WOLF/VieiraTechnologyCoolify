@@ -22,6 +22,7 @@ os comandos e os domínios que ele envia são tratados como hostis.
 - **Domínios.** O `DomainPolicy` bloqueia domínios reservados (instância, `PLATFORM_BASE_DOMAIN`, `PLATFORM_RESERVED_HOSTS`) e domínios de outro tenant, e respeita a cota de domínios próprios.
 - **Planos.** O `PlatformGate` aplica cotas e recursos por plano (bancos, docker compose, volumes, previews, bancos públicos, log drains). Há reserva transacional de CPU, memória e containers em `platform_allocations`.
 - **Terminal web.** Fica desligado para tenants (`PLATFORM_TENANT_TERMINAL`), porque o servidor de terminal confia no comando SSH enviado pelo navegador.
+- **Cobrança (Banco Inter).** As credenciais (Client Secret, certificado e chave) e os dados do pagador (CPF/CNPJ, endereço) ficam criptografados com a `APP_KEY` e nunca voltam para o navegador. O webhook exige um token secreto na URL e só serve de gatilho: o status da cobrança é sempre consultado na API do Inter com mTLS. A baixa da fatura é feita com trava de linha, então avisos repetidos não ativam o plano duas vezes.
 - **Audit log.** Registra criação e remoção de recursos, variáveis de ambiente (só a chave), tokens de API, convites, logins e falhas, mudanças de plano/status, ações do operador e eventos do Stripe.
 
 ### Containers (TenantContainerPolicy)
@@ -63,7 +64,7 @@ os comandos e os domínios que ele envia são tratados como hostis.
 - [ ] Dentro do container de um tenant: `curl 169.254.169.254`, IPs privados da VPC, portas 22/9100/9280 do host, outras redes `tenant-*` e tentativas de escape (montagens, `/proc`, capabilities).
 - [ ] Limites: fork bomb (`pids_limit`), estouro de memória (OOM só no container), consumo de CPU (cota), muitos deploys (limite diário) e disco cheio (status `limited`).
 - [ ] Domínios: tomar domínio reservado, domínio de outro tenant ou wildcard; certificado para domínio alheio.
-- [ ] Cobrança: webhook Stripe sem assinatura ou forjado, replay, troca de plano pelo portal, reembolso e cancelamento (bloqueios e reativação).
+- [ ] Cobrança: webhook do Inter sem token, com token errado ou com payload forjado ("RECEBIDO" falso), replay; troca de plano, upgrade proporcional, cancelamento e reativação; outro tenant tentando baixar boleto ou CSV de uso por uuid.
 - [ ] Endpoints internos: `/api/v1/platform/metrics` e `/api/v1/platform/edge/*` sem token ou com token errado (404), e rate limit.
 - [ ] Varredura externa (nmap) do NLB, do bastion e do control plane.
 

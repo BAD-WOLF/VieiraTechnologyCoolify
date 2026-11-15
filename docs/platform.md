@@ -1,6 +1,6 @@
-# Plataforma multi-tenant (Vieira Technology Cloud)
+# Hostrema — plataforma multi-tenant
 
-Este fork transforma o Coolify num PaaS pago e multi-tenant, conforme a wiki do projeto.
+O Hostrema é este fork do Coolify transformado num PaaS pago e multi-tenant, conforme a wiki do projeto.
 Tudo fica desligado até `PLATFORM_ENABLED=true`. Sem isso o fork se comporta como o Coolify original.
 
 ## Conceitos
@@ -14,8 +14,25 @@ Tudo fica desligado até `PLATFORM_ENABLED=true`. Sem isso o fork se comporta co
 | Nó dedicado | Servidor reservado a um tenant (Enterprise). |
 | Rede do tenant | `tenant-{id}`, uma rede Docker por tenant em cada nó (`StandaloneDocker` com `team_id`). |
 
-Fluxo do tenant: assinatura no Stripe, provisionamento das redes nos nós da região, onboarding
+Fluxo do tenant: assinatura paga com Pix ou boleto (Banco Inter), provisionamento das redes nos nós da região, onboarding
 (projeto inicial, sem pedir servidor) e deploys nos nós compartilhados.
+
+## Começo rápido
+
+1. No `.env` do control plane: `PLATFORM_ENABLED=true`, `APP_NAME=Hostrema`, `APP_LOCALE=pt-br` e os tokens `PLATFORM_METRICS_TOKEN`/`PLATFORM_EDGE_TOKEN` (abaixo).
+2. Entre com o usuário root e abra **/admin/platform → Cobrança**. Cole o Client ID, o Client Secret, o certificado (.crt) e a chave (.key) da integração criada no Inter Empresas e clique em **Salvar e conectar**. O painel testa a conexão e registra o webhook sozinho.
+3. Confira os preços dos planos na mesma tela (padrão: Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta).
+
+A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando o Inter confirma o pagamento.
+
+### Criar a integração no Banco Inter
+
+1. No Internet Banking do Inter Empresas, vá em **Soluções para sua empresa → Nova integração** (ou "Integrações → Nova aplicação").
+2. Marque a **API Cobrança (Boleto e Pix)** com as permissões de leitura e escrita (escopos `boleto-cobranca.read` e `boleto-cobranca.write`).
+3. Baixe o arquivo zip: ele traz o certificado (`.crt`) e a chave (`.key`). O Client ID e o Client Secret aparecem na tela da integração.
+4. O certificado vale 1 ano. Antes de vencer, gere outro e cole no console.
+
+Para testar sem dinheiro real, crie a integração no sandbox do Inter, escolha **Sandbox (testes)** no console e use **Simular pagamento Pix** na lista de faturas.
 
 ## Configuração (.env do control plane)
 
@@ -23,7 +40,7 @@ Mínimo para ligar a plataforma:
 
 ```dotenv
 PLATFORM_ENABLED=true            # liga o modo plataforma (implica SELF_HOSTED=false)
-PLATFORM_NAME="Vieira Technology Cloud"
+PLATFORM_NAME=Hostrema
 PLATFORM_SUPPORT_EMAIL=suporte@example.com
 PLATFORM_SALES_URL=https://example.com/contato   # botão "Falar com vendas" do Enterprise
 PLATFORM_CURRENCY=brl
@@ -31,17 +48,20 @@ PLATFORM_DEFAULT_REGION=sa-east-1
 PLATFORM_BASE_DOMAIN=apps.example.com            # domínios padrão dos tenants (*.apps.example.com)
 PLATFORM_RESERVED_HOSTS=www,api,app,admin,dashboard,grafana,prometheus,status,mail,smtp,registry
 
-# Stripe (chaves usadas pelo Coolify)
-STRIPE_API_KEY=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-PLATFORM_STRIPE_PRICE_BASIC_MONTHLY=price_...
-PLATFORM_STRIPE_PRICE_BASIC_YEARLY=price_...
-PLATFORM_STRIPE_PRICE_PRO_MONTHLY=price_...
-PLATFORM_STRIPE_PRICE_PRO_YEARLY=price_...
-PLATFORM_STRIPE_PRICE_ENTERPRISE_MONTHLY=price_...   # opcional (Enterprise é "fale com vendas")
-PLATFORM_STRIPE_PRICE_ENTERPRISE_YEARLY=price_...
-PLATFORM_TRIAL_DAYS=0
-PLATFORM_STRIPE_AUTOMATIC_TAX=false
+# Cobrança (padrão: Banco Inter). As credenciais podem ficar só no console (/admin/platform → Cobrança).
+PLATFORM_BILLING_PROVIDER=inter
+INTER_ENVIRONMENT=production            # ou sandbox
+INTER_CLIENT_ID=...
+INTER_CLIENT_SECRET=...
+INTER_CERTIFICATE=/caminho/certificado.crt   # caminho, conteúdo PEM ou PEM em base64
+INTER_PRIVATE_KEY=/caminho/chave.key
+INTER_CONTA_CORRENTE=                   # só se a integração tiver mais de uma conta
+PLATFORM_BILLING_DUE_DAYS=5             # prazo para pagar cada fatura
+PLATFORM_BILLING_CANCEL_AFTER_DAYS=30   # dias após o vencimento até o banco baixar o boleto
+PLATFORM_BILLING_FINE_PERCENT=2         # multa por atraso
+PLATFORM_BILLING_INTEREST_PERCENT_MONTH=1
+PLATFORM_BASIC_PRICE_MONTHLY=49.90      # preços também editáveis no console
+PLATFORM_PRO_PRICE_MONTHLY=149.90
 
 # Tokens dos endpoints internos (gere com: openssl rand -hex 32)
 PLATFORM_METRICS_TOKEN=...      # Prometheus -> /api/v1/platform/metrics
@@ -68,27 +88,29 @@ O script de upgrade do Coolify já respeita esse arquivo:
 ```yaml
 services:
   coolify:
-    image: "ghcr.io/bad-wolf/vieiratechnologycoolify:platform-v1.0.0"
+    image: "ghcr.io/bad-wolf/hostrema:platform-v1.0.0"
 ```
 
 As variáveis `PLATFORM_*` vão no `/data/coolify/source/.env`. O workflow `platform-release.yml`
 publica a imagem e pode fazer o upgrade com rollback automático (`infra/scripts/upgrade-control-plane.sh`).
 
-## Stripe
+## Cobrança com Banco Inter
 
-1. **Produtos e preços.** Crie um produto por plano, com preço mensal e anual recorrentes em BRL, e copie os `price_...` para o `.env`.
-2. **Webhook.** O endpoint é `https://<control-plane>/api/v1/billing/webhooks/stripe`, o mesmo da wiki. O endpoint original do Coolify também funciona. Eventos:
-   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`,
-   `invoice.created`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.voided`,
-   `invoice.marked_uncollectible` e `charge.refunded`.
-3. **Customer portal.** Ative-o no Stripe: o botão "Gerenciar assinatura" da página *Plan & usage* abre o portal.
+Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela API Cobrança v3, com OAuth2 e certificado mTLS. O cliente vê o QR code, o Pix copia e cola, a linha digitável e o PDF do boleto na própria página de planos e em *Plano e uso*.
 
-O ciclo de cobrança funciona assim:
+- **Assinatura.** A primeira fatura cobre o primeiro período (mensal ou anual). O plano começa quando ela é paga.
+- **Renovação.** No fim de cada período sai uma fatura com o próximo período e o uso excedente do período que fechou, com vencimento em `PLATFORM_BILLING_DUE_DAYS` dias. O cliente continua usando durante o prazo.
+- **Atraso.** Fatura vencida deixa o tenant em atraso: aviso por e-mail, deploys suspensos após 7 dias, containers parados após 30 dias (com backup antes). Ao pagar, tudo volta sozinho. O cliente pode gerar uma nova cobrança se o boleto expirar.
+- **Mudanças de plano.** Upgrade é cobrado proporcionalmente ao resto do período e vale quando é pago. Downgrade e troca de mensal/anual valem na próxima renovação. O cancelamento encerra a assinatura no fim do período.
+- **Confirmação.** O Inter avisa o webhook `https://<painel>/api/v1/billing/webhooks/inter/<token secreto>`, registrado automaticamente pelo console. O aviso só diz qual cobrança mudou: o status é sempre consultado de novo na API do Inter. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
+- **Operador.** Em /admin/platform → Cobrança é possível consultar uma fatura no banco, marcar como paga (pagamento recebido por fora), cancelar, emitir de novo e, no sandbox, simular o pagamento.
+- **Dados do pagador.** Nome, CPF/CNPJ (validado), e-mail e endereço são exigidos pelo banco para registrar o boleto. Ficam criptografados no banco de dados, assim como as credenciais do Inter.
 
-- `checkout.session` cria a assinatura com metadados `team_id`, `platform_plan` e `platform_interval`.
-- `customer.subscription.*` sincroniza plano, período e status: `active`/`trialing` deixam o tenant ativo, `past_due`/`unpaid` iniciam a contagem de inadimplência e `canceled` cancela.
-- `invoice.created` (renovação) calcula o uso do período e anexa os excedentes como itens da própria fatura do Stripe, antes da finalização. Os itens têm chave de idempotência por fatura e linha.
-- `invoice.paid` reativa tenants suspensos por atraso. `invoice.payment_failed` notifica o tenant.
+Não há SDK oficial do Inter para PHP. A integração usa um cliente próprio (`app/Services/Platform/Inter/`) com o cliente HTTP do Laravel, sem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial.
+
+### Stripe (alternativa)
+
+Com `PLATFORM_BILLING_PROVIDER=stripe` vale a integração anterior: assinaturas no Stripe (`STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `PLATFORM_STRIPE_PRICE_*`), webhook em `/api/v1/billing/webhooks/stripe` com os eventos `customer.subscription.*`, `invoice.*` e `charge.refunded`, e o customer portal do Stripe.
 
 ## Medição, preço e faturas (wiki 8)
 
@@ -129,11 +151,18 @@ plano (bancos, docker compose, volumes, previews, bancos públicos e log drains)
 
 ## Console do operador
 
-`/admin/platform`, apenas para o time root, tem três abas:
+`/admin/platform`, apenas para o time root, tem quatro abas:
 
 - **Tenants:** plano, status, uso, overrides de cota (JSON), suspender (manual ou total), reativar e provisionar;
 - **Nós:** região, nó dedicado e reprovisionamento; também permite criar e desativar regiões;
-- **Audit log:** ações de usuários, do sistema e do Stripe.
+- **Cobrança:** credenciais do Inter, preços dos planos, webhook e faturas de todos os tenants;
+- **Audit log:** ações de usuários, do sistema e da cobrança.
+
+## Marca (white-label) e página pública
+
+Com a plataforma ligada, o painel mostra `PLATFORM_NAME` (Hostrema) no lugar de "Coolify", inclusive nos títulos e nos assuntos de e-mail. A troca acontece quando os templates são compilados, sem editar as telas originais. Depois de mudar o nome, rode `php artisan view:clear`. Opcionalmente defina `PLATFORM_FAVICON_URL`, `PLATFORM_DESCRIPTION`, `PLATFORM_TERMS_URL` e `PLATFORM_PRIVACY_URL`.
+
+A página pública `/pricing` lista planos, cotas e preços, com os links de cadastro, termos de uso e privacidade.
 
 ## APIs
 
@@ -147,6 +176,7 @@ Todos os endpoints usam `Authorization: Bearer <token>`.
 | `GET /api/v1/platform/audit-logs` | tenant/root | Audit log do time |
 | `POST /api/v1/platform/servers/{uuid}/region` | root | Região, nó dedicado e wildcard do nó (`region`, `region_name`, `dedicated_team_id`, `wildcard_domain`) |
 | `POST /api/v1/platform/tenants/{teamId}/provision` | root | (Re)provisiona as redes do tenant |
+| `POST /api/v1/billing/webhooks/inter/{token}` | Banco Inter | Aviso de mudança de cobrança (o status é consultado na API do Inter) |
 | `POST /api/v1/rollback` | token com `deploy` | Volta uma aplicação para a imagem de um deploy anterior (`uuid` e, opcionalmente, `commit` ou `deployment_uuid`) |
 | `GET /api/v1/platform/metrics` | `PLATFORM_METRICS_TOKEN` | Métricas Prometheus do control plane |
 | `GET /api/v1/platform/edge/{região}` | `PLATFORM_EDGE_TOKEN` | Configuração dinâmica dos edge routers (Traefik) |
@@ -177,5 +207,5 @@ Canary com divisão de tráfego não existe no Coolify; veja a página 9 da wiki
 As rotas da plataforma ficam em `routes/platform/{api,web}.php` e são carregadas pelo
 `PlatformServiceProvider`, antes das rotas originais. A configuração fica em `config/platform.php`,
 as traduções em `lang/platform/*.json`, e o resto em `app/**/Platform*`, `infra/`, `docs/` e
-`.github/workflows/platform-*.yml`. Os arquivos originais do Coolify que ainda foram alterados
+`.github/workflows/platform-*.yml`. O workflow `platform-upstream-sync.yml` traz as novidades do Coolify oficial toda semana num pull request (ou abre uma issue listando os conflitos). Os arquivos originais do Coolify que ainda foram alterados
 estão listados em `docs/security-model.md` (seção *Arquivos do Coolify alterados*).
