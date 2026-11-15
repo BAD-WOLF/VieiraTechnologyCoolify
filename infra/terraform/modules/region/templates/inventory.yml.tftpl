@@ -27,3 +27,11 @@ all:
           public_ip: "${node.public_ip}"
           data_volume_id: ${node.data_volume_id}
 %{ endfor ~}
+%{ for node in dedicated ~}
+        ${node.name}:
+          ansible_host: ${node.private_ip}
+          private_ip: ${node.private_ip}
+          public_ip: "${node.public_ip}"
+          data_volume_id: ${node.data_volume_id}
+          platform_dedicated_team_id: ${node.team_id}
+%{ endfor ~}

@@ -68,6 +68,35 @@ services:
       - "${PRIVATE_BIND_IP:-127.0.0.1}:4318:4318"
     networks: [monitoring]
 
+  # Tenant traces (wiki 6/8): enable with `docker compose --profile tenant-traces up -d`
+  # after pointing OTLP_DOMAIN to this node (ports 80/443 open).
+  otlp-gateway:
+    image: traefik:v3.3
+    restart: unless-stopped
+    profiles: [tenant-traces]
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:-}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --ping=true
+    environment:
+      - OTLP_DOMAIN=${OTLP_DOMAIN:-}
+      - COOLIFY_URL=${COOLIFY_URL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./otlp-gateway:/etc/traefik:ro
+      - otlp-acme:/acme
+    networks: [monitoring]
+
   blackbox:
     image: prom/blackbox-exporter:v0.25.0
     restart: unless-stopped
@@ -98,5 +127,6 @@ volumes:
   prometheus-data: {}
   alertmanager-data: {}
   tempo-data: {}
+  otlp-acme: {}
   loki-data: {}
   grafana-data: {}

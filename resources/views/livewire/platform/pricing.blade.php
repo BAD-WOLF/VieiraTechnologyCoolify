@@ -70,6 +70,7 @@
                         'public_databases' => __('Public databases'),
                         'dedicated_server' => __('Dedicated nodes (VM isolation)'),
                         'sso' => __('SSO (SAML/OIDC)'),
+                            'traces' => __('Application traces (OpenTelemetry)'),
                     ] as $feature => $label)
                         <li @class(['flex gap-2', 'dark:text-white' => $plan['features'][$feature] ?? false, 'line-through dark:text-neutral-600 text-neutral-400' => !($plan['features'][$feature] ?? false)])>
                             <span>{{ ($plan['features'][$feature] ?? false) ? '✓' : '✗' }}</span>{{ $label }}

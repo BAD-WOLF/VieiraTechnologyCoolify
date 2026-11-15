@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Managed by Ansible (infra/ansible/roles/tenant-limits).
+#
+# Limits of a whole tenant on this node (all its containers run in tenant-<id>.slice):
+#   hostrema-tenant-limits apply <team id> --network=tenant-<id> --cpus=2 --memory-mb=4096 --tasks=7680 \
+#       --read-mbps=200 --write-mbps=200 --iops=4000 --bandwidth-mbps=200      (0 = unlimited)
+#   hostrema-tenant-limits reapply          # boot / timer: slices and bandwidth of every tenant again
+#   hostrema-tenant-limits remove <team id>
+#
+# Bandwidth: traffic from the tenant containers to outside the node is policed on the tenant
+# bridge and traffic to the containers is shaped (tbf). Traffic between the Coolify proxy and the
+# containers (same bridge) is not limited.
+set -euo pipefail
+
+CONF_DIR=/etc/hostrema/tenants
+DATA_PATH=${HOSTREMA_DATA_PATH:-/data}
+mkdir -p "$CONF_DIR"
+
+die() { echo "hostrema-tenant-limits: $*" >&2; exit 1; }
+number() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "invalid number: $1"; }
+
+# Whole disk behind the data directory (cgroup I/O limits apply to disks, not partitions).
+io_device() {
+  local source parent
+  source=$(findmnt -n -o SOURCE --target "$DATA_PATH" 2>/dev/null | head -n1)
+  [[ "$source" == /dev/* ]] || return 0
+  parent=$(lsblk -no PKNAME "$source" 2>/dev/null | head -n1)
+  if [[ -n "$parent" ]]; then echo "/dev/$parent"; else echo "$source"; fi
+}
+
+write_slice() {
+  local id=$1 cpus=$2 memory=$3 tasks=$4 read=$5 write=$6 iops=$7
+  local unit="/etc/systemd/system/tenant-${id}.slice" device
+  device=$(io_device)
+  {
+    echo "# Managed by hostrema-tenant-limits"
+    echo "[Unit]"
+    echo "Description=Hostrema tenant ${id}"
+    echo "[Slice]"
+    echo "CPUAccounting=yes"
+    echo "MemoryAccounting=yes"
+    echo "TasksAccounting=yes"
+    echo "IOAccounting=yes"
+    awk -v c="$cpus" 'BEGIN { if (c > 0) printf "CPUQuota=%d%%\n", c * 100 }'
+    if (( memory > 0 )); then echo "MemoryMax=${memory}M"; echo "MemorySwapMax=0"; fi
+    if (( tasks > 0 )); then echo "TasksMax=${tasks}"; fi
+    if [[ -n "$device" ]]; then
+      if (( read > 0 )); then echo "IOReadBandwidthMax=${device} ${read}M"; fi
+      if (( write > 0 )); then echo "IOWriteBandwidthMax=${device} ${write}M"; fi
+      if (( iops > 0 )); then echo "IOReadIOPSMax=${device} ${iops}"; echo "IOWriteIOPSMax=${device} ${iops}"; fi
+    fi
+  } > "${unit}.tmp"
+  mv "${unit}.tmp" "$unit"
+  systemctl daemon-reload
+  systemctl start "tenant-${id}.slice"
+  # Running slices take the new values right away.
+  local properties=()
+  properties+=("CPUQuota=$(awk -v c="$cpus" 'BEGIN { if (c > 0) printf "%d%%", c * 100; else printf "" }')")
+  properties+=("MemoryMax=$( (( memory > 0 )) && echo "${memory}M" || echo infinity)")
+  properties+=("TasksMax=$( (( tasks > 0 )) && echo "$tasks" || echo infinity)")
+  if [[ -n "$device" ]]; then
+    properties+=("IOReadBandwidthMax=${device} $( (( read > 0 )) && echo "${read}M" || echo max)")
+    properties+=("IOWriteBandwidthMax=${device} $( (( write > 0 )) && echo "${write}M" || echo max)")
+    properties+=("IOReadIOPSMax=${device} $( (( iops > 0 )) && echo "$iops" || echo max)")
+    properties+=("IOWriteIOPSMax=${device} $( (( iops > 0 )) && echo "$iops" || echo max)")
+  fi
+  systemctl set-property --runtime "tenant-${id}.slice" "${properties[@]}" || true
+}
+
+apply_bandwidth() {
+  local network=$1 rate=$2 id bridge burst
+  id=$(docker network inspect -f '{{.Id}}' "$network" 2>/dev/null) || return 0
+  bridge="br-${id:0:12}"
+  ip link show "$bridge" >/dev/null 2>&1 || return 0
+  tc qdisc del dev "$bridge" root >/dev/null 2>&1 || true
+  tc qdisc del dev "$bridge" ingress >/dev/null 2>&1 || true
+  (( rate > 0 )) || return 0
+  burst=$(( rate * 1250 > 32000 ? rate * 1250 : 32000 ))
+  tc qdisc add dev "$bridge" root tbf rate "${rate}mbit" burst "$burst" latency 200ms
+  tc qdisc add dev "$bridge" handle ffff: ingress
+  tc filter add dev "$bridge" parent ffff: protocol all prio 1 u32 match u32 0 0 \
+    police rate "${rate}mbit" burst "$(( rate * 12500 ))" drop flowid :1
+}
+
+apply() {
+  local id=$1; shift
+  [[ "$id" =~ ^[0-9]+$ ]] || die "invalid team id: $id"
+  local network="tenant-$id" cpus=0 memory=0 tasks=0 read=0 write=0 iops=0 bandwidth=0
+  for argument in "$@"; do
+    case "$argument" in
+      --network=*) network=${argument#*=} ;;
+      --cpus=*) cpus=${argument#*=} ;;
+      --memory-mb=*) memory=${argument#*=} ;;
+      --tasks=*) tasks=${argument#*=} ;;
+      --read-mbps=*) read=${argument#*=} ;;
+      --write-mbps=*) write=${argument#*=} ;;
+      --iops=*) iops=${argument#*=} ;;
+      --bandwidth-mbps=*) bandwidth=${argument#*=} ;;
+      *) die "unknown option: $argument" ;;
+    esac
+  done
+  [[ "$network" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid network: $network"
+  for value in "$cpus" "$memory" "$tasks" "$read" "$write" "$iops" "$bandwidth"; do number "$value"; done
+  memory=${memory%.*}; tasks=${tasks%.*}; read=${read%.*}; write=${write%.*}; iops=${iops%.*}; bandwidth=${bandwidth%.*}
+  cat > "$CONF_DIR/$id.conf" <<CONF
+NETWORK=$network
+CPUS=$cpus
+MEMORY_MB=$memory
+TASKS=$tasks
+READ_MBPS=$read
+WRITE_MBPS=$write
+IOPS=$iops
+BANDWIDTH_MBPS=$bandwidth
+CONF
+  write_slice "$id" "$cpus" "$memory" "$tasks" "$read" "$write" "$iops"
+  apply_bandwidth "$network" "$bandwidth"
+}
+
+reapply() {
+  local conf id
+  shopt -s nullglob
+  for conf in "$CONF_DIR"/*.conf; do
+    id=$(basename "$conf" .conf)
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    # shellcheck disable=SC1090,SC2153
+    ( source "$conf"
+      apply "$id" --network="$NETWORK" --cpus="$CPUS" --memory-mb="$MEMORY_MB" --tasks="$TASKS" \
+        --read-mbps="$READ_MBPS" --write-mbps="$WRITE_MBPS" --iops="$IOPS" --bandwidth-mbps="$BANDWIDTH_MBPS" ) \
+      || echo "hostrema-tenant-limits: tenant $id failed" >&2
+  done
+}
+
+remove() {
+  local id=$1 network
+  [[ "$id" =~ ^[0-9]+$ ]] || die "invalid team id: $id"
+  network=$(grep -m1 '^NETWORK=' "$CONF_DIR/$id.conf" 2>/dev/null | cut -d= -f2 || echo "tenant-$id")
+  apply_bandwidth "$network" 0
+  rm -f "$CONF_DIR/$id.conf" "/etc/systemd/system/tenant-${id}.slice"
+  systemctl daemon-reload
+}
+
+case "${1:-}" in
+  apply) shift; [[ $# -ge 1 ]] || die "usage: apply <team id> [options]"; apply "$@" ;;
+  reapply) reapply ;;
+  remove) [[ $# -eq 2 ]] || die "usage: remove <team id>"; remove "$2" ;;
+  *) die "usage: hostrema-tenant-limits apply|reapply|remove" ;;
+esac

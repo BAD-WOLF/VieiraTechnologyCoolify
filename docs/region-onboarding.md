@@ -54,6 +54,18 @@ O que é criado:
 - **DNS (Route53, opcional):** `*.apps_domain` com latency routing e `edge_domain`.
 - **Inventário do Ansible:** `infra/ansible/inventory/sa-east-1.yml`.
 
+**Clientes Enterprise com VM própria** (isolamento por máquina virtual, wiki 3):
+
+```hcl
+dedicated_nodes = {
+  acme = { team_id = 42, instance_type = "m6i.2xlarge" }
+}
+```
+
+Cada entrada cria uma VM na mesma rede e no mesmo balanceador. O inventário marca a VM com `platform_dedicated_team_id`, e o `bootstrap-nodes.yml` a registra no Coolify como nó exclusivo do time 42; nenhum outro cliente é colocado nela. Para tirar o cliente da VM, remova a entrada e rode `terraform apply`.
+
+**Traces dos clientes:** defina `otlp_domain` (por exemplo `otlp.sa-east-1.hostrema.com.br`). As portas 80/443 do nó de controle são abertas e, com Route53, o registro DNS é criado. O Ansible sobe o gateway com certificado Let's Encrypt.
+
 Para habilitar bancos públicos dos tenants, use `public_database_access = true`: os nós vão para sub-redes públicas com EIP e a faixa 20000–29999 é aberta.
 Sem Route53, aponte `*.apps.example.com` e `edge.sa-east-1.example.com` (CNAME) para o output `edge_lb_dns_name`.
 O state remoto é configurado com `backend.tf.example`.
@@ -84,7 +96,8 @@ O playbook do controle (`control-node.yml`) roda os roles `common` (pacotes, sys
 
 O `bootstrap-nodes.yml` roda, em cada nó:
 
-- `common`, `docker` (data-root em `/data/docker`, pools de endereço para uma rede por tenant, `no-new-privileges`, `live-restore`, logs limitados, mirror regional e gVisor opcional) e `firewall`;
+- `tenant-limits`: script `hostrema-tenant-limits`, slice `tenant.slice` (até 90% da memória do nó para os clientes) e timer que reaplica os limites a cada 5 minutos;
+- `common`, `docker` (driver de cgroup do systemd, data-root em `/data/docker`, pools de endereço para uma rede por tenant, `no-new-privileges`, `live-restore`, logs limitados, mirror regional e gVisor opcional) e `firewall`;
 - `monitoring-agent` (node_exporter, cAdvisor e Promtail com labels `tenant_id`) e `edge`;
 - `coolify-agent`, que cria os diretórios `/data/coolify`, autoriza a chave do control plane (só a partir do IP do nó de controle), cadastra o nó via `POST /api/v1/servers`, espera o Coolify validá-lo e então atribui região e wildcard via `POST /api/v1/platform/servers/{uuid}/region`.
 

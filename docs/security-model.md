@@ -48,11 +48,11 @@ os comandos e os domínios que ele envia são tratados como hostis.
 
 ## Riscos residuais (aceitos ou a tratar antes do go-live)
 
-1. **Kernel compartilhado.** Um escape de container (CVE de kernel/runc) dá acesso ao nó e aos tenants vizinhos. Mitigações: gVisor para os tenants, kernel sempre atualizado, nós dedicados para Enterprise.
+1. **Kernel compartilhado.** Nos nós compartilhados, um escape de container (CVE de kernel/runc) dá acesso ao nó e aos clientes vizinhos. Mitigações: gVisor (`PLATFORM_CONTAINER_RUNTIME=runsc`), kernel sempre atualizado e, no Enterprise, VM própria por cliente (`dedicated_nodes` no Terraform).
 2. **Builds.** O build roda no container `coolify-helper`, que tem o `docker.sock` do nó. Os passos `RUN` do Dockerfile do tenant rodam em containers de build do BuildKit (sem o socket), mas uma falha no BuildKit ou no helper expõe o nó. Recomendado: servidores de build dedicados e isolados dos nós de execução.
 3. **SSRF a partir do control plane.** Notificações (webhook, Slack, Discord), URLs de provedores Git próprios e endpoints S3 são chamados pelo control plane. Os endpoints S3 privados já são bloqueados; para o resto, aplique filtro de egress no host do control plane (bloquear RFC1918 e metadata).
 4. **Domínios sem prova de posse.** Um domínio próprio é aceito se estiver livre; não há verificação por TXT. Sugestão: exigir registro TXT antes de emitir o certificado.
-5. **Disco e I/O.** O armazenamento é medido e cobrado, e o excesso leva o tenant a `limited`, mas não existe limite rígido por container sem `PLATFORM_ENFORCE_STORAGE_OPT` (que exige xfs com pquota). I/O de disco e banda não têm limite; egress anômalo gera alerta (`TenantHighEgress`).
+5. **Disco e banda.** Leitura, escrita, IOPS e banda têm teto por cliente em cada nó (slice do systemd e tc). Continuam sem limite rígido o espaço em disco por container, a não ser com `PLATFORM_ENFORCE_STORAGE_OPT` (que exige xfs com pquota; o excesso leva o cliente a `limited`), e as respostas HTTP servidas pelo proxy. Egress anômalo gera alerta (`TenantHighEgress`).
 6. **Operador.** O time root tem acesso total. Proteja-o com 2FA, poucos membros, tokens de API com escopo mínimo e rotação.
 7. **Upstream.** Funcionalidades novas do Coolify que criem entradas ou labels podem precisar de regras novas no `TenantInputGuard`/`LabelPolicy`. Revise cada merge do upstream com os testes de `tests/Feature/Platform`.
 
@@ -66,6 +66,8 @@ os comandos e os domínios que ele envia são tratados como hostis.
 - [ ] Domínios: tomar domínio reservado, domínio de outro tenant ou wildcard; certificado para domínio alheio.
 - [ ] Cobrança: webhook do Inter sem token, com token errado ou com payload forjado ("RECEBIDO" falso), replay; troca de plano, upgrade proporcional, cancelamento e reativação; outro tenant tentando baixar boleto ou CSV de uso por uuid.
 - [ ] Endpoints internos: `/api/v1/platform/metrics` e `/api/v1/platform/edge/*` sem token ou com token errado (404), e rate limit.
+- [ ] Traces: enviar e consultar pelo gateway OTLP com token de outro cliente, sem token ou com `X-Scope-OrgID` forjado (o gateway sempre substitui pelo do token).
+- [ ] Limites por cliente: vários containers do mesmo cliente somando mais CPU, memória, disco ou banda que o plano.
 - [ ] Varredura externa (nmap) do NLB, do bastion e do control plane.
 
 ## Arquivos do Coolify alterados

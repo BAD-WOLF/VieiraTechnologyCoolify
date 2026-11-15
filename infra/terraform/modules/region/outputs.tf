@@ -36,6 +36,16 @@ output "nodes" {
   ]
 }
 
+output "dedicated_nodes" {
+  value = {
+    for name, node in aws_instance.dedicated : name => {
+      id         = node.id
+      private_ip = node.private_ip
+      team_id    = var.dedicated_nodes[name].team_id
+    }
+  }
+}
+
 output "edge_lb_dns_name" {
   description = "Point *.apps_domain (and the CNAME target of custom domains) here when DNS is not managed by Route53."
   value       = aws_lb.edge.dns_name
@@ -71,6 +81,15 @@ output "ansible_inventory" {
         private_ip     = node.private_ip
         public_ip      = var.public_database_access ? aws_eip.node[index].public_ip : ""
         data_volume_id = aws_ebs_volume.node_data[index].id
+      }
+    ]
+    dedicated = [
+      for name, node in aws_instance.dedicated : {
+        name           = node.tags["Name"]
+        private_ip     = node.private_ip
+        public_ip      = var.public_database_access ? aws_eip.dedicated[name].public_ip : ""
+        data_volume_id = aws_ebs_volume.dedicated_data[name].id
+        team_id        = var.dedicated_nodes[name].team_id
       }
     ]
   })

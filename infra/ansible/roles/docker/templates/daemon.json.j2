@@ -3,6 +3,7 @@
   'log-driver': 'json-file',
   'log-opts': {'max-size': docker_log_max_size, 'max-file': docker_log_max_file | string},
   'live-restore': true,
+  'exec-opts': ['native.cgroupdriver=systemd'],
   'no-new-privileges': true,
   'userland-proxy': false,
   'icc': false,

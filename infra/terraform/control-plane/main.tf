@@ -43,8 +43,9 @@ data "aws_ami" "ubuntu" {
 }
 
 locals {
-  name = "hostrema-control-plane"
-  azs  = slice(data.aws_availability_zones.available.names, 0, 2)
+  name    = "hostrema-control-plane"
+  azs     = slice(data.aws_availability_zones.available.names, 0, 2)
+  cluster = var.instance_count > 1
 }
 
 resource "aws_vpc" "this" {
@@ -153,6 +154,8 @@ resource "aws_key_pair" "operator" {
 }
 
 resource "aws_instance" "master" {
+  count = local.cluster ? 0 : 1
+
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public[0].id
@@ -180,12 +183,16 @@ resource "aws_instance" "master" {
 }
 
 resource "aws_eip" "master" {
+  count = local.cluster ? 0 : 1
+
   domain   = "vpc"
-  instance = aws_instance.master.id
+  instance = aws_instance.master[0].id
 }
 
 # AWS moves the instance to healthy hardware (same id, volumes, IPs) when the host fails.
 resource "aws_cloudwatch_metric_alarm" "recover" {
+  count = local.cluster ? 0 : 1
+
   alarm_name          = "${local.name}-recover"
   namespace           = "AWS/EC2"
   metric_name         = "StatusCheckFailed_System"
@@ -194,7 +201,7 @@ resource "aws_cloudwatch_metric_alarm" "recover" {
   evaluation_periods  = 2
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  dimensions          = { InstanceId = aws_instance.master.id }
+  dimensions          = { InstanceId = aws_instance.master[0].id }
   alarm_actions       = ["arn:aws:automate:${var.region}:ec2:recover"]
 }
 
@@ -305,11 +312,26 @@ resource "aws_elasticache_replication_group" "redis" {
 }
 
 resource "aws_route53_record" "panel" {
-  count = var.route53_zone_id != "" && var.domain != "" ? 1 : 0
+  count = ! local.cluster && var.route53_zone_id != "" && var.domain != "" ? 1 : 0
 
   zone_id = var.route53_zone_id
   name    = var.domain
   type    = "A"
   ttl     = 300
-  records = [aws_eip.master.public_ip]
+  records = [aws_eip.master[0].public_ip]
+}
+
+moved {
+  from = aws_instance.master
+  to   = aws_instance.master[0]
+}
+
+moved {
+  from = aws_eip.master
+  to   = aws_eip.master[0]
+}
+
+moved {
+  from = aws_cloudwatch_metric_alarm.recover
+  to   = aws_cloudwatch_metric_alarm.recover[0]
 }

@@ -50,3 +50,13 @@ resource "aws_route53_record" "node" {
   ttl     = 300
   records = [aws_eip.node[count.index].public_ip]
 }
+
+resource "aws_route53_record" "otlp" {
+  count = local.manage_dns && var.otlp_domain != "" ? 1 : 0
+
+  zone_id = var.route53_zone_id
+  name    = var.otlp_domain
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.control.public_ip]
+}

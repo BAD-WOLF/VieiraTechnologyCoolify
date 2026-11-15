@@ -208,3 +208,24 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "otlp_domain" {
+  description = "Public OTLP endpoint of the region for tenant traces (e.g. otlp.sa-east-1.hostrema.com.br): opens 80/443 on the control node. Empty = disabled."
+  type        = string
+  default     = ""
+}
+
+variable "dedicated_nodes" {
+  description = "Enterprise tenants with their own VM (wiki 3, VM isolation): name => { team_id, instance_type, data_volume_gb }. The node is registered as dedicated to the team and never receives other tenants."
+  type = map(object({
+    team_id        = number
+    instance_type  = optional(string)
+    data_volume_gb = optional(number)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for name, node in var.dedicated_nodes : can(regex("^[a-z0-9-]{1,30}$", name)) && node.team_id > 0])
+    error_message = "Use lowercase names (a-z, 0-9, -) and team ids greater than 0."
+  }
+}

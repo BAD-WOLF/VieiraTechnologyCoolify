@@ -5,8 +5,10 @@ use App\Http\Controllers\Api\RollbackController;
 use App\Http\Controllers\PlatformEdgeController;
 use App\Http\Controllers\PlatformInterWebhookController;
 use App\Http\Controllers\PlatformMetricsController;
+use App\Http\Controllers\PlatformOtlpAuthController;
 use App\Http\Controllers\Webhook\Stripe as StripeWebhook;
 use App\Http\Middleware\ApiAllowed;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -24,6 +26,10 @@ Route::post('/v1/billing/webhooks/stripe', [StripeWebhook::class, 'events']);
 Route::post('/v1/billing/webhooks/inter/{token}', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
 Route::get('/v1/platform/metrics', PlatformMetricsController::class);
 Route::get('/v1/platform/edge/{region}', PlatformEdgeController::class)->where('region', '[a-z0-9-]+');
+// Called by the regional OTLP gateways for every export (one source address per region).
+Route::get('/v1/platform/otlp/auth', PlatformOtlpAuthController::class)
+    ->withoutMiddleware([ThrottleRequests::class.':api'])
+    ->middleware('throttle:platform-otlp');
 
 Route::group([
     'middleware' => ['auth:sanctum', ApiAllowed::class, 'api.sensitive'],

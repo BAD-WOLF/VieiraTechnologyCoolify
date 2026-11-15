@@ -11,6 +11,7 @@
     - common
     - docker
     - firewall
+    - tenant-limits
     - monitoring-agent
     - edge
     - coolify-agent

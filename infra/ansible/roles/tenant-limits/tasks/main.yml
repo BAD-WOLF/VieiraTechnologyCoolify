@@ -1,0 +1,63 @@
+# Per-tenant limits on the node (wiki 4): systemd slices (CPU, memory, processes, disk I/O) and
+# tc on the tenant bridges, driven by Coolify through hostrema-tenant-limits.
+- name: Traffic control tools
+  ansible.builtin.apt:
+    name: iproute2
+    state: present
+
+- name: Tenant limits script
+  ansible.builtin.copy:
+    src: hostrema-tenant-limits
+    dest: /usr/local/sbin/hostrema-tenant-limits
+    mode: "0750"
+
+- name: Parent slice of all tenants
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/tenant.slice
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Hostrema tenants
+      [Slice]
+      CPUAccounting=yes
+      MemoryAccounting=yes
+      IOAccounting=yes
+      MemoryMax={{ tenant_slice_memory_max }}
+  notify: Reload systemd
+
+- name: Re-apply the limits at boot and every 5 minutes (bridges change when networks are recreated)
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: hostrema-tenant-limits.service
+      content: |
+        [Unit]
+        Description=Hostrema tenant limits
+        After=docker.service
+        Wants=docker.service
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/hostrema-tenant-limits reapply
+    - name: hostrema-tenant-limits.timer
+      content: |
+        [Unit]
+        Description=Re-apply the Hostrema tenant limits
+        [Timer]
+        OnBootSec=1min
+        OnUnitActiveSec=5min
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd
+
+- name: Apply systemd changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the timer
+  ansible.builtin.systemd_service:
+    name: hostrema-tenant-limits.timer
+    state: started
+    enabled: true

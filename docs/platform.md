@@ -109,7 +109,9 @@ Depois do `terraform apply`:
 3. Copie `docker-compose.custom.yml.example` para `/data/coolify/source/docker-compose.custom.yml`. Ele usa a imagem do Hostrema e desliga o PostgreSQL e o Redis embutidos.
 4. Rode `upgrade-control-plane.sh` (ou o workflow de release).
 
-Para migrar uma instalação existente, faça antes um dump do banco embutido e restaure no RDS. Um control plane ativo/ativo não é suportado pelo Coolify (scheduler e filas assumem um único master).
+Para migrar uma instalação existente, faça antes um dump do banco embutido e restaure no RDS.
+
+**Ativo/ativo:** com `instance_count = 2` (ou mais), o Terraform cria as instâncias em duas zonas atrás de um Application Load Balancer com certificado ACM. Cada instância se configura sozinha no primeiro boot: lê o `.env` do Parameter Store, usa RDS e ElastiCache e liga o realtime ao Redis. Todas atendem painel, API, filas e agendador. Com `PLATFORM_CONTROL_PLANE_CLUSTER=true` (já no `.env` gerado), cada tarefa agendada roda em uma instância só por vez, com trava no Redis. Se uma instância ou uma zona cair, as outras continuam. Defina `domain` e `route53_zone_id` (ou `certificate_arn`), e passe os tokens `PLATFORM_*` em `extra_env`.
 
 ## Cobrança com Banco Inter
 
@@ -165,6 +167,32 @@ Também há guardas nos modelos para todas as entradas (UI, API e webhooks): val
 portas, imagens, caminhos, domínios (sem domínio reservado ou de outro tenant), recursos por
 plano (bancos, docker compose, volumes, previews, bancos públicos e log drains) e o destino do recurso
 (só destinos do próprio tenant).
+
+## Limites por cliente no nó (wiki 4)
+
+Além do limite de cada container, o cliente inteiro tem um teto em cada nó. Todos os containers dele rodam no slice `tenant-<id>.slice` do systemd (`PLATFORM_TENANT_SLICES=true`), e o script `hostrema-tenant-limits` (role `tenant-limits` do Ansible) aplica as cotas do plano:
+
+| Cota (por plano) | Básico | Profissional | Enterprise |
+| --- | --- | --- | --- |
+| CPU e memória | as do plano | as do plano | as do plano |
+| Processos | 256 × containers | 512 × containers | 1024 × containers |
+| Leitura/escrita em disco | 50/50 MB/s | 200/200 MB/s | sem limite |
+| IOPS | 1.000 | 4.000 | sem limite |
+| Banda (bridge do cliente) | 50 Mbit/s | 200 Mbit/s | sem limite |
+
+Os valores podem mudar por `PLATFORM_<PLANO>_DISK_READ_MBPS`, `..._DISK_WRITE_MBPS`, `..._DISK_IOPS`, `..._BANDWIDTH_MBPS` ou por ajuste de cota no console (`{"bandwidth_mbps": 500}`). Ao mudar o plano ou os ajustes, os limites são reaplicados em todos os nós. A banda limita o tráfego entre os containers e a internet; o tráfego entre o proxy e a aplicação (respostas HTTP) não passa por esse limite.
+
+## Traces das aplicações (OpenTelemetry)
+
+Nos planos Profissional e Enterprise, o cliente gera um token em *Plano e uso → Traces das aplicações* e configura no app:
+
+```dotenv
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.sa-east-1.hostrema.com.br
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer hrt_...
+```
+
+O gateway OTLP da região (Traefik no nó de controle, perfil `tenant-traces` do `infra/monitoring`) pergunta ao painel a quem pertence o token (`/api/v1/platform/otlp/auth`) e grava os traces no Tempo separados por cliente (`X-Scope-OrgID=tenant-<id>`). O cliente consulta os próprios traces no Grafana dele, com uma fonte Tempo apontando para `https://otlp.<região>.../tempo` e o mesmo token. Configure `PLATFORM_OTLP_ENDPOINT` (padrão `https://otlp.{region}.hostrema.com.br`) e o `otlp_domain` do Terraform/Ansible.
 
 ## Console do operador
 

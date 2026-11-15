@@ -11,11 +11,15 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
-  - name: Tempo
+  - name: Tempo (platform)
     uid: tempo
     type: tempo
     access: proxy
     url: http://tempo:3200
     jsonData:
+      httpHeaderName1: X-Scope-OrgID
       tracesToLogsV2:
         datasourceUid: loki
+    secureJsonData:
+      # Copy this data source with "tenant-<team id>" to look at a tenant's traces.
+      httpHeaderValue1: platform

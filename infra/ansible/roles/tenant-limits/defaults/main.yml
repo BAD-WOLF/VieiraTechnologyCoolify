@@ -1,0 +1,3 @@
+# Share of the node memory all tenants together may use (the rest stays for the system,
+# Docker, the Coolify proxy and the agents).
+tenant_slice_memory_max: "90%"

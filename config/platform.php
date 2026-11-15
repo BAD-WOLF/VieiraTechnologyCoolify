@@ -97,6 +97,11 @@ return [
                 'custom_domains' => (int) env('PLATFORM_BASIC_CUSTOM_DOMAINS', 1),
                 'egress_gb' => (int) env('PLATFORM_BASIC_EGRESS_GB', 50),
                 'pids_per_container' => 256,
+                // Aggregated per tenant on each node (systemd slice + tc), 0 = unlimited.
+                'disk_read_mbps' => (int) env('PLATFORM_BASIC_DISK_READ_MBPS', 50),
+                'disk_write_mbps' => (int) env('PLATFORM_BASIC_DISK_WRITE_MBPS', 50),
+                'disk_iops' => (int) env('PLATFORM_BASIC_DISK_IOPS', 1000),
+                'bandwidth_mbps' => (int) env('PLATFORM_BASIC_BANDWIDTH_MBPS', 50),
             ],
             'features' => [
                 'databases' => true,
@@ -108,6 +113,7 @@ return [
                 'docker_compose' => true,
                 'dedicated_server' => false,
                 'sso' => false,
+                'traces' => false,
             ],
         ],
 
@@ -130,6 +136,11 @@ return [
                 'custom_domains' => (int) env('PLATFORM_PRO_CUSTOM_DOMAINS', 20),
                 'egress_gb' => (int) env('PLATFORM_PRO_EGRESS_GB', 250),
                 'pids_per_container' => 512,
+                // Aggregated per tenant on each node (systemd slice + tc), 0 = unlimited.
+                'disk_read_mbps' => (int) env('PLATFORM_PRO_DISK_READ_MBPS', 200),
+                'disk_write_mbps' => (int) env('PLATFORM_PRO_DISK_WRITE_MBPS', 200),
+                'disk_iops' => (int) env('PLATFORM_PRO_DISK_IOPS', 4000),
+                'bandwidth_mbps' => (int) env('PLATFORM_PRO_BANDWIDTH_MBPS', 200),
             ],
             'features' => [
                 'databases' => true,
@@ -141,6 +152,7 @@ return [
                 'docker_compose' => true,
                 'dedicated_server' => false,
                 'sso' => false,
+                'traces' => true,
             ],
         ],
 
@@ -163,6 +175,11 @@ return [
                 'custom_domains' => (int) env('PLATFORM_ENTERPRISE_CUSTOM_DOMAINS', 0),
                 'egress_gb' => (int) env('PLATFORM_ENTERPRISE_EGRESS_GB', 1000),
                 'pids_per_container' => 1024,
+                // Aggregated per tenant on each node (systemd slice + tc), 0 = unlimited.
+                'disk_read_mbps' => (int) env('PLATFORM_ENTERPRISE_DISK_READ_MBPS', 0),
+                'disk_write_mbps' => (int) env('PLATFORM_ENTERPRISE_DISK_WRITE_MBPS', 0),
+                'disk_iops' => (int) env('PLATFORM_ENTERPRISE_DISK_IOPS', 0),
+                'bandwidth_mbps' => (int) env('PLATFORM_ENTERPRISE_BANDWIDTH_MBPS', 0),
             ],
             'features' => [
                 'databases' => true,
@@ -174,6 +191,7 @@ return [
                 'docker_compose' => true,
                 'dedicated_server' => true,
                 'sso' => true,
+                'traces' => true,
             ],
         ],
     ],
@@ -199,6 +217,10 @@ return [
         // Capabilities kept after "cap_drop: ALL" (enough for images that start as root and drop privileges).
         'cap_add' => array_values(array_filter(array_map('trim', explode(',', (string) env('PLATFORM_CONTAINER_CAP_ADD', 'CHOWN,DAC_OVERRIDE,FOWNER,FSETID,KILL,SETGID,SETUID,NET_BIND_SERVICE'))))),
         'oom_score_adj' => (int) env('PLATFORM_CONTAINER_OOM_SCORE_ADJ', 500),
+        // Every tenant container runs in the systemd slice tenant-<id>.slice: the node-side script
+        // hostrema-tenant-limits (infra/ansible/roles/tenant-limits) caps the slice with the plan
+        // (CPU, memory, processes, disk I/O) and the tenant bridge with the plan bandwidth.
+        'tenant_slices' => (bool) env('PLATFORM_TENANT_SLICES', true),
         'log_max_size' => env('PLATFORM_CONTAINER_LOG_MAX_SIZE', '10m'),
         'log_max_file' => (string) env('PLATFORM_CONTAINER_LOG_MAX_FILE', '3'),
         // Optional sandboxed OCI runtime for tenant containers (e.g. "runsc" for gVisor). Must be installed on the nodes.
@@ -221,6 +243,22 @@ return [
      * are entered in the operator console (/admin/platform, Billing tab) or through the INTER_*
      * variables below. "stripe": Stripe subscriptions (previous integration).
      */
+    /*
+     * OpenTelemetry for tenant applications: OTLP endpoint of each region ({region} is replaced by
+     * the region slug), authenticated with a per-tenant token (infra/monitoring, otlp-gateway).
+     */
+    'telemetry' => [
+        'endpoint' => env('PLATFORM_OTLP_ENDPOINT', 'https://otlp.{region}.hostrema.com.br'),
+    ],
+
+    /*
+     * Control plane cluster (active/active): every scheduled task runs on one instance only
+     * (cache lock), so any instance can fail without stopping the schedule.
+     */
+    'control_plane' => [
+        'cluster' => (bool) env('PLATFORM_CONTROL_PLANE_CLUSTER', false),
+    ],
+
     'billing' => [
         'provider' => env('PLATFORM_BILLING_PROVIDER', 'inter'),
         // Days to pay a new or renewal invoice; the tenant keeps working meanwhile.

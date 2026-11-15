@@ -152,6 +152,10 @@ class TenantContainerPolicy
      */
     private function hardenService(string $name, array $service, array $serviceNames, array $topVolumes): array
     {
+        // Already hardened (e.g. saved compose of a service): our own slice is set again below.
+        if (($service['cgroup_parent'] ?? null) === TenantLimits::sliceName($this->context->teamId)) {
+            unset($service['cgroup_parent']);
+        }
         foreach (array_keys($service) as $key) {
             $key = (string) $key;
             if (str_starts_with($key, 'x-')) {
@@ -536,6 +540,9 @@ class TenantContainerPolicy
             $service['storage_opt'] = ['size' => max(1, (int) $quotas['storage_gb']).'G'];
         }
         $service['logging'] = $this->logging(data_get($service, 'logging'));
+        if (TenantLimits::enabled() && $this->context->teamId > 0) {
+            $service['cgroup_parent'] = TenantLimits::sliceName($this->context->teamId);
+        }
 
         return $service;
     }

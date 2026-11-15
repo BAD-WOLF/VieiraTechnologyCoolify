@@ -129,6 +129,8 @@
         </section>
     @endif
 
+    <livewire:platform.observability />
+
     <section class="flex flex-col gap-2">
         <h3>{{ __('Invoices') }}</h3>
         @forelse ($invoices as $invoice)

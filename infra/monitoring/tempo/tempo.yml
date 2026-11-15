@@ -1,4 +1,7 @@
 # Distributed tracing (wiki 6 and 8): traces received from the OpenTelemetry Collector.
+# One tenant per X-Scope-OrgID ("platform" for operator components, "tenant-<id>" for tenants).
+multitenancy_enabled: true
+
 server:
   http_listen_port: 3200
 

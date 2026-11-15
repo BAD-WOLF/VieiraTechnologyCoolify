@@ -62,3 +62,6 @@ smtp_from: alerts@example.com
 smtp_username: "{{ vault_smtp_username | default('') }}"
 smtp_password: "{{ vault_smtp_password | default('') }}"
 blackbox_targets: []
+# Public OTLP endpoint of the region for tenant traces (DNS -> control node). Empty = disabled.
+otlp_domain: "otlp.{{ platform_region }}.hostrema.com.br"
+acme_email: "{{ alert_email_to }}"

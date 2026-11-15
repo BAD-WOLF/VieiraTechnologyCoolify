@@ -1,13 +1,23 @@
-# OTLP entry point of the region (operator components such as the edge routers). Tenant
-# containers can not reach it (infra/ansible/roles/firewall): traces of tenant applications would
-# need an authenticated gateway that sets tenant_id.
+# OTLP collector of the region. Operator components (edge routers) send from the VPC without a
+# tenant and land in "platform"; tenant applications come through the otlp-gateway, which sets
+# X-Scope-OrgID=tenant-<id> after checking the tenant token with the control plane.
+extensions:
+  headers_setter:
+    headers:
+      - action: upsert
+        key: X-Scope-OrgID
+        from_context: X-Scope-OrgID
+        default_value: platform
+
 receivers:
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+        include_metadata: true
       http:
         endpoint: 0.0.0.0:4318
+        include_metadata: true
 
 processors:
   memory_limiter:
@@ -18,15 +28,21 @@ processors:
       - key: region
         value: ${env:REGION}
         action: upsert
-  batch: {}
+  # Batches never mix tenants.
+  batch:
+    metadata_keys: [X-Scope-OrgID]
+    metadata_cardinality_limit: 2000
 
 exporters:
   otlp/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
+    auth:
+      authenticator: headers_setter
 
 service:
+  extensions: [headers_setter]
   pipelines:
     traces:
       receivers: [otlp]

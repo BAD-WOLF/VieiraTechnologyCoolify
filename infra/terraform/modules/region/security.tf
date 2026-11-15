@@ -152,3 +152,14 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
+
+resource "aws_vpc_security_group_ingress_rule" "control_otlp_gateway" {
+  for_each = var.otlp_domain != "" ? { http = 80, https = 443 } : {}
+
+  security_group_id = aws_security_group.control.id
+  description       = "OTLP gateway for tenant traces (${each.key})"
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = each.value
+  to_port           = each.value
+}

@@ -1,5 +1,11 @@
 output "public_ip" {
-  value = aws_eip.master.public_ip
+  description = "Single master: IP of the dashboard (point the domain here)."
+  value       = local.cluster ? null : aws_eip.master[0].public_ip
+}
+
+output "load_balancer_dns_name" {
+  description = "Cluster: point the dashboard domain here (CNAME) when Route53 is not used."
+  value       = local.cluster ? aws_lb.panel[0].dns_name : null
 }
 
 output "env" {

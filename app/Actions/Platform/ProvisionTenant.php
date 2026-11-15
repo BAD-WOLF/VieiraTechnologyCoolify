@@ -7,6 +7,7 @@ use App\Models\PlatformTenant;
 use App\Models\Server;
 use App\Models\StandaloneDocker;
 use App\Models\Team;
+use App\Services\Platform\TenantLimits;
 use App\Services\Platform\TenantNetworks;
 use Illuminate\Support\Collection;
 use Lorisleiva\Actions\Concerns\AsAction;
@@ -93,9 +94,13 @@ class ProvisionTenant
             return;
         }
         $name = escapeshellarg($network);
-        instant_remote_process([
+        $commands = [
             "docker network inspect {$name} >/dev/null 2>&1 || docker network create --driver bridge --attachable --label coolify.managed=true --label coolify.tenantId={$teamId} {$name} >/dev/null",
             "docker network connect {$name} coolify-proxy >/dev/null 2>&1 || true",
-        ], $node, false);
+        ];
+        if (TenantLimits::enabled() && $teamId > 0) {
+            $commands[] = TenantLimits::command(PlatformTenant::forTeam($teamId));
+        }
+        instant_remote_process($commands, $node, false);
     }
 }

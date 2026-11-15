@@ -48,8 +48,9 @@
   loop_control:
     label: "{{ item.file }}"
 
-- name: Start Prometheus, Alertmanager, Loki, Grafana and Blackbox
+- name: Start Prometheus, Alertmanager, Loki, Tempo, Grafana and Blackbox (and the OTLP gateway)
   community.docker.docker_compose_v2:
     project_src: "{{ monitoring_dir }}"
     state: present
     pull: missing
+    profiles: "{{ ['tenant-traces'] if (otlp_domain | default('') | length > 0) else [] }}"

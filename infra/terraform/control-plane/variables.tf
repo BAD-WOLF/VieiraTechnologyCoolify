@@ -58,3 +58,46 @@ variable "domain" {
   type        = string
   default     = ""
 }
+
+variable "instance_count" {
+  description = "1 = single master (recovered by AWS). 2 or more = active/active cluster behind an Application Load Balancer, every instance serving the dashboard, the API, the queues and the scheduler (one instance per task)."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.instance_count >= 1
+    error_message = "At least one instance."
+  }
+}
+
+variable "image" {
+  description = "Hostrema image used by the cluster instances."
+  type        = string
+  default     = "ghcr.io/bad-wolf/hostrema:latest"
+}
+
+variable "certificate_arn" {
+  description = "ACM certificate of the dashboard domain (cluster). Empty = requested and validated through route53_zone_id."
+  type        = string
+  default     = ""
+}
+
+variable "registry_username" {
+  description = "GitHub user to pull a private image (cluster)."
+  type        = string
+  default     = ""
+}
+
+variable "registry_password" {
+  description = "Token with read:packages for a private image (cluster)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "extra_env" {
+  description = "Extra lines of the cluster .env (PLATFORM_EDGE_TOKEN, PLATFORM_METRICS_TOKEN, MAIL_*, ...)."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}

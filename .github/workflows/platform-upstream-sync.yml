@@ -51,6 +51,7 @@ jobs:
           if git merge --no-edit "upstream/$REF"; then
             echo "status=merged" >> "$GITHUB_OUTPUT"
           else
+            # shellcheck disable=SC2016
             git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/' > conflicts.md
             git merge --abort
             echo "status=conflicts" >> "$GITHUB_OUTPUT"

@@ -45,6 +45,8 @@ module "region" {
   apps_domain                   = var.apps_domain
   edge_domain                   = var.edge_domain
   nodes_domain                  = var.nodes_domain
+  otlp_domain                   = var.otlp_domain
+  dedicated_nodes               = var.dedicated_nodes
   backup_retention_days         = var.backup_retention_days
   backup_replication_bucket_arn = var.backup_replication_bucket_arn
 }

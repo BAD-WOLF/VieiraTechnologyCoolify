@@ -1,0 +1,42 @@
+# Public OTLP entry point for tenant applications (profile "tenant-traces"). Every request is
+# authorized by the Hostrema control plane, which answers with the tenant (X-Scope-OrgID);
+# that header always replaces the one sent by the client.
+http:
+  middlewares:
+    tenant-auth:
+      forwardAuth:
+        address: '{{ env "COOLIFY_URL" }}/api/v1/platform/otlp/auth'
+        authResponseHeaders:
+          - X-Scope-OrgID
+    otlp-limit:
+      rateLimit:
+        average: 200
+        burst: 400
+    tempo-prefix:
+      stripPrefix:
+        prefixes:
+          - /tempo
+  routers:
+    otlp:
+      rule: 'Host(`{{ env "OTLP_DOMAIN" }}`) && PathPrefix(`/v1/`)'
+      entryPoints: [websecure]
+      middlewares: [otlp-limit, tenant-auth]
+      service: collector
+      tls:
+        certResolver: le
+    tempo-query:
+      rule: 'Host(`{{ env "OTLP_DOMAIN" }}`) && PathPrefix(`/tempo/`)'
+      entryPoints: [websecure]
+      middlewares: [otlp-limit, tenant-auth, tempo-prefix]
+      service: tempo
+      tls:
+        certResolver: le
+  services:
+    collector:
+      loadBalancer:
+        servers:
+          - url: http://otel-collector:4318
+    tempo:
+      loadBalancer:
+        servers:
+          - url: http://tempo:3200

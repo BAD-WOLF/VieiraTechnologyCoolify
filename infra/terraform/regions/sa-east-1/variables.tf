@@ -83,3 +83,19 @@ variable "backup_replication_bucket_arn" {
   type        = string
   default     = ""
 }
+
+variable "otlp_domain" {
+  description = "Public OTLP endpoint for tenant traces, e.g. otlp.sa-east-1.hostrema.com.br."
+  type        = string
+  default     = ""
+}
+
+variable "dedicated_nodes" {
+  description = "Enterprise tenants with their own VM: name => { team_id, instance_type, data_volume_gb }."
+  type = map(object({
+    team_id        = number
+    instance_type  = optional(string)
+    data_volume_gb = optional(number)
+  }))
+  default = {}
+}

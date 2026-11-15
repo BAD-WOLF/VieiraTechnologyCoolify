@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Actions\Platform\ProvisionTenant;
 use App\Exceptions\PlatformPolicyViolation;
 use App\Jobs\PlatformBillingCycleJob;
 use App\Jobs\PlatformCollectUsageJob;
@@ -33,16 +34,20 @@ use App\Services\Platform\DomainPolicy;
 use App\Services\Platform\PlatformBranding;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
+use App\Services\Platform\TenantLimits;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
@@ -64,6 +69,7 @@ class PlatformServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        RateLimiter::for('platform-otlp', fn (Request $request) => Limit::perMinute(12000)->by($request->ip()));
         $this->registerRoutes();
         $this->registerRelations();
         $this->registerSchedule();
@@ -110,16 +116,37 @@ class PlatformServiceProvider extends ServiceProvider
     private function registerSchedule(): void
     {
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
-            if (! isPlatform()) {
-                return;
+            if (isPlatform()) {
+                $this->schedulePlatformJobs($schedule);
             }
-            $interval = max(1, min(30, (int) config('platform.metering.interval_minutes', 5)));
-            $schedule->job(new PlatformCollectUsageJob)->cron("*/{$interval} * * * *")->onOneServer();
-            $schedule->job(new PlatformRollupUsageJob)->hourlyAt(7)->onOneServer();
-            $schedule->job(new PlatformEnforcementJob)->everyTenMinutes()->onOneServer();
-            $schedule->job(new PlatformDailyMaintenanceJob)->dailyAt('03:17')->onOneServer();
-            $schedule->job(new PlatformBillingCycleJob)->everyFifteenMinutes()->onOneServer();
+            if (config('platform.control_plane.cluster')) {
+                self::runScheduleOnOneServer($schedule);
+            }
         });
+    }
+
+    /**
+     * Control plane cluster (wiki 6, active/active): every instance runs the scheduler and each
+     * task takes a cache lock, so it runs on one instance only and keeps running if one fails.
+     */
+    public static function runScheduleOnOneServer(Schedule $schedule): void
+    {
+        foreach ($schedule->events() as $index => $event) {
+            if (blank($event->description)) {
+                $event->description = 'hostrema-scheduled-task-'.$index;
+            }
+            $event->onOneServer();
+        }
+    }
+
+    private function schedulePlatformJobs(Schedule $schedule): void
+    {
+        $interval = max(1, min(30, (int) config('platform.metering.interval_minutes', 5)));
+        $schedule->job(new PlatformCollectUsageJob)->cron("*/{$interval} * * * *")->onOneServer();
+        $schedule->job(new PlatformRollupUsageJob)->hourlyAt(7)->onOneServer();
+        $schedule->job(new PlatformEnforcementJob)->everyTenMinutes()->onOneServer();
+        $schedule->job(new PlatformDailyMaintenanceJob)->dailyAt('03:17')->onOneServer();
+        $schedule->job(new PlatformBillingCycleJob)->everyFifteenMinutes()->onOneServer();
     }
 
     /**
@@ -313,6 +340,10 @@ class PlatformServiceProvider extends ServiceProvider
         PersonalAccessToken::deleted(fn (PersonalAccessToken $token) => isPlatform() && audit_log('api_token.deleted', $token, ['name' => $token->name], $token->team_id ?? null));
         TeamInvitation::created(fn (TeamInvitation $invitation) => isPlatform() && audit_log('team.invitation.created', $invitation, ['email' => $invitation->email, 'role' => $invitation->role], $invitation->team_id));
         PlatformTenant::updated(function (PlatformTenant $tenant) {
+            // New quotas: the slices and bandwidth of the tenant are updated on every node.
+            if (isPlatform() && TenantLimits::enabled() && $tenant->provisioned_at && $tenant->wasChanged(['plan', 'quota_overrides'])) {
+                ProvisionTenant::dispatch($tenant->team_id);
+            }
             if ($tenant->wasChanged(['status', 'plan'])) {
                 audit_log('tenant.updated', $tenant, [
                     'status' => [$tenant->getOriginal('status'), $tenant->status],
