@@ -8,6 +8,11 @@ output "load_balancer_dns_name" {
   value       = local.cluster ? aws_lb.panel[0].dns_name : null
 }
 
+output "ssh_hosts" {
+  description = "Cluster: SSH addresses of the instances, for the CONTROL_PLANE_HOST variable of the release workflow."
+  value       = local.cluster ? join(" ", formatlist("ubuntu@%s", aws_instance.cluster[*].public_ip)) : null
+}
+
 output "env" {
   description = "Lines for /data/coolify/source/.env of the Coolify master (external PostgreSQL and Redis)."
   sensitive   = true

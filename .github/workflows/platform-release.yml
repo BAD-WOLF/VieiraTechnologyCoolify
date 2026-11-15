@@ -63,6 +63,7 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -173,13 +174,33 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
+      # CONTROL_PLANE_HOST: one host, or every instance of a cluster separated by spaces (output
+      # ssh_hosts of infra/terraform/control-plane). Instances are upgraded one at a time; if one
+      # fails it goes back by itself and the ones already upgraded go back too, so the cluster
+      # never stays on two versions.
       - name: Upgrade with automatic rollback
         env:
-          HOST: ${{ vars.CONTROL_PLANE_HOST }}
+          HOSTS: ${{ vars.CONTROL_PLANE_HOST }}
           IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.version }}
         run: |
-          scp -o StrictHostKeyChecking=accept-new infra/scripts/upgrade-control-plane.sh infra/scripts/wait_for_health.sh "$HOST:/tmp/"
-          ssh -o StrictHostKeyChecking=accept-new "$HOST" "sudo bash /tmp/upgrade-control-plane.sh '$IMAGE'"
+          read -ra hosts <<< "$HOSTS"
+          upgraded=()
+          for host in "${hosts[@]}"; do
+            echo "::group::$host"
+            scp -o StrictHostKeyChecking=accept-new infra/scripts/upgrade-control-plane.sh infra/scripts/wait_for_health.sh "$host:/tmp/"
+            if ssh -o StrictHostKeyChecking=accept-new "$host" "sudo bash /tmp/upgrade-control-plane.sh '$IMAGE'"; then
+              upgraded+=("$host")
+              echo "::endgroup::"
+              continue
+            fi
+            echo "::endgroup::"
+            echo "::error::upgrade failed on $host; rolling back ${#upgraded[@]} instance(s) already upgraded"
+            for upgraded_host in "${upgraded[@]}"; do
+              ssh -o StrictHostKeyChecking=accept-new "$upgraded_host" "sudo bash /tmp/upgrade-control-plane.sh --rollback" ||
+                echo "::error::rollback failed on $upgraded_host"
+            done
+            exit 1
+          done
 
       - name: Post-deploy validation
         if: vars.CONTROL_PLANE_URL != ''

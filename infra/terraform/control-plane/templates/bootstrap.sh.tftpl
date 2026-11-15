@@ -26,11 +26,23 @@ chmod 600 .env
 curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.yml -o docker-compose.yml
 curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.prod.yml -o docker-compose.prod.yml
 
+# Version of the cluster: the last one deployed by the release workflow, or the Terraform default.
+IMAGE=$(aws ssm get-parameter --region "${region}" --name "${image_parameter}" \
+  --query Parameter.Value --output text 2>/dev/null || true)
+if [ -z "$IMAGE" ] || [ "$IMAGE" = "None" ]; then
+  IMAGE="${image}"
+fi
+install -d -m 755 /etc/hostrema
+cat > /etc/hostrema/control-plane.env <<ENV
+AWS_REGION=${region}
+IMAGE_PARAMETER=${image_parameter}
+ENV
+
 # Fork image, shared realtime (Redis adapter) and no bundled PostgreSQL/Redis (RDS and ElastiCache).
-cat > docker-compose.custom.yml <<'YAML'
+cat > docker-compose.custom.yml <<YAML
 services:
   coolify:
-    image: "${image}"
+    image: "$IMAGE"
     depends_on: !reset {}
   soketi:
     environment:

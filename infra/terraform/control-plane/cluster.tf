@@ -62,6 +62,21 @@ resource "aws_ssm_parameter" "env" {
   value = local.env_file
 }
 
+# Image of the cluster. Terraform only sets the first value: from then on the release workflow
+# (upgrade-control-plane.sh) records each version it deploys, so an instance created later starts
+# with the same version as the others.
+resource "aws_ssm_parameter" "image" {
+  count = local.cluster ? 1 : 0
+
+  name  = "/hostrema/control-plane/image"
+  type  = "String"
+  value = var.image
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 resource "aws_ssm_parameter" "registry_password" {
   count = local.cluster && var.registry_username != "" ? 1 : 0
 
@@ -88,6 +103,11 @@ data "aws_iam_policy_document" "read_config" {
   }
 
   statement {
+    actions   = ["ssm:PutParameter"]
+    resources = ["arn:aws:ssm:${var.region}:*:parameter/hostrema/control-plane/image"]
+  }
+
+  statement {
     actions   = ["kms:Decrypt"]
     resources = ["*"]
 
@@ -109,7 +129,7 @@ resource "aws_iam_role" "cluster" {
 resource "aws_iam_role_policy" "cluster" {
   count = local.cluster ? 1 : 0
 
-  name   = "read-config"
+  name   = "config"
   role   = aws_iam_role.cluster[0].id
   policy = data.aws_iam_policy_document.read_config.json
 }
@@ -176,6 +196,7 @@ resource "aws_instance" "cluster" {
     region            = var.region
     env_parameter     = aws_ssm_parameter.env[0].name
     image             = var.image
+    image_parameter   = aws_ssm_parameter.image[0].name
     redis_host        = aws_elasticache_replication_group.redis.primary_endpoint_address
     registry_username = var.registry_username
     registry_password = var.registry_username != "" ? aws_ssm_parameter.registry_password[0].name : ""

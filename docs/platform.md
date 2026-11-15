@@ -113,6 +113,8 @@ Para migrar uma instalação existente, faça antes um dump do banco embutido e 
 
 **Ativo/ativo:** com `instance_count = 2` (ou mais), o Terraform cria as instâncias em duas zonas atrás de um Application Load Balancer com certificado ACM. Cada instância se configura sozinha no primeiro boot: lê o `.env` do Parameter Store, usa RDS e ElastiCache e liga o realtime ao Redis. Todas atendem painel, API, filas e agendador. Com `PLATFORM_CONTROL_PLANE_CLUSTER=true` (já no `.env` gerado), cada tarefa agendada roda em uma instância só por vez, com trava no Redis. Se uma instância ou uma zona cair, as outras continuam. Defina `domain` e `route53_zone_id` (ou `certificate_arn`), e passe os tokens `PLATFORM_*` em `extra_env`.
 
+Para o `platform-release.yml` atualizar o cluster, coloque em `CONTROL_PLANE_HOST` a saída `ssh_hosts` (todas as instâncias, separadas por espaço) e libere o SSH em `admin_cidrs`. O workflow atualiza uma instância por vez e, se uma falhar, volta todas para a versão anterior. A versão em uso fica gravada no Parameter Store (`/hostrema/control-plane/image`), e uma instância criada depois já sobe com ela. A primeira versão vem da variável `image` (padrão `ghcr.io/bad-wolf/hostrema:latest`, a última release publicada).
+
 ## Cobrança com Banco Inter
 
 Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela API Cobrança v3, com OAuth2 e certificado mTLS. O cliente vê o QR code, o Pix copia e cola, a linha digitável e o PDF do boleto na própria página de planos e em *Plano e uso*.

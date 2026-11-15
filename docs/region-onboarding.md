@@ -180,7 +180,7 @@ Sem o mirror, o Docker dos nós volta ao Docker Hub automaticamente (`registry-m
 
 ### Atualização do control plane
 
-Crie a tag `platform-vX.Y.Z`. O workflow `platform-release.yml` faz build, scan, assinatura e replicação, e depois o job *deploy* (environment `production`, com aprovação) roda `upgrade-control-plane.sh`, que volta à imagem anterior se `/api/health` não responder em 5 minutos.
+Crie a tag `platform-vX.Y.Z`. O workflow `platform-release.yml` faz build, scan, assinatura e replicação, e depois o job *deploy* (environment `production`, com aprovação) roda `upgrade-control-plane.sh`, que volta à imagem anterior se `/api/health` não responder em 5 minutos. Com o painel em cluster, `CONTROL_PLANE_HOST` lista todas as instâncias (saída `ssh_hosts` do Terraform): elas são atualizadas uma por vez, e uma falha faz todas voltarem à versão anterior.
 
 ## Escala
 
