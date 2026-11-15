@@ -1254,8 +1254,15 @@ class Service extends BaseModel
             "cd $workdir",
         ], $this->server);
 
+        $composeToWrite = $this->docker_compose;
+        if (\App\Services\Platform\PlatformGate::applies($this)) {
+            $composeToWrite = \Symfony\Component\Yaml\Yaml::dump(
+                \App\Services\Platform\PlatformGate::harden($this, \Symfony\Component\Yaml\Yaml::parse((string) $this->docker_compose) ?? [], reserve: false),
+                10
+            );
+        }
         $filename = new Cuid2.'-docker-compose.yml';
-        Storage::disk('local')->put("tmp/{$filename}", $this->docker_compose);
+        Storage::disk('local')->put("tmp/{$filename}", $composeToWrite);
         $path = Storage::path("tmp/{$filename}");
         instant_scp($path, "{$workdir}/docker-compose.yml", $this->server);
         Storage::disk('local')->delete("tmp/{$filename}");

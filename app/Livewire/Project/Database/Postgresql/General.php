@@ -227,6 +227,12 @@ class General extends Component
     {
         $this->authorize('update', $this->database);
 
+        if (! \App\Services\Platform\PathPolicy::isSafeFilename(data_get($script, 'filename'))) {
+            $this->dispatch('error', 'Invalid file name. Use only letters, numbers, "_", "-" and ".".');
+
+            return;
+        }
+
         $initScripts = collect($this->database->init_scripts ?? []);
 
         $existingScript = $initScripts->firstWhere('filename', $script['filename']);
@@ -242,8 +248,8 @@ class General extends Component
         $configuration_dir = database_configuration_dir().'/'.$container_name;
 
         if ($oldScript && $oldScript['filename'] !== $script['filename']) {
-            $old_file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$oldScript['filename']}";
-            $delete_command = "rm -f $old_file_path";
+            $old_file_path = "$configuration_dir/docker-entrypoint-initdb.d/".basename((string) $oldScript['filename']);
+            $delete_command = 'rm -f '.escapeshellarg($old_file_path);
             try {
                 instant_remote_process([$delete_command], $this->server);
             } catch (Exception $e) {
@@ -279,14 +285,20 @@ class General extends Component
     {
         $this->authorize('update', $this->database);
 
+        if (! \App\Services\Platform\PathPolicy::isSafeFilename(data_get($script, 'filename'))) {
+            $this->dispatch('error', 'Invalid file name.');
+
+            return;
+        }
+
         $collection = collect($this->database->init_scripts);
         $found = $collection->firstWhere('filename', $script['filename']);
         if ($found) {
             $container_name = $this->database->uuid;
             $configuration_dir = database_configuration_dir().'/'.$container_name;
-            $file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$script['filename']}";
+            $file_path = "$configuration_dir/docker-entrypoint-initdb.d/".basename((string) $script['filename']);
 
-            $command = "rm -f $file_path";
+            $command = 'rm -f '.escapeshellarg($file_path);
             try {
                 instant_remote_process([$command], $this->server);
             } catch (Exception $e) {

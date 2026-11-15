@@ -94,8 +94,12 @@ class Heading extends Component
 
     public function start()
     {
-        $activity = StartService::run($this->service, pullLatestImages: true);
-        $this->dispatch('activityMonitor', $activity->id);
+        try {
+            $activity = StartService::run($this->service, pullLatestImages: true);
+            $this->dispatch('activityMonitor', $activity->id);
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     public function forceDeploy()
@@ -134,8 +138,12 @@ class Heading extends Component
 
             return;
         }
-        $activity = StartService::run($this->service, stopBeforeStart: true);
-        $this->dispatch('activityMonitor', $activity->id);
+        try {
+            $activity = StartService::run($this->service, stopBeforeStart: true);
+            $this->dispatch('activityMonitor', $activity->id);
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     public function pullAndRestartEvent()
@@ -146,8 +154,12 @@ class Heading extends Component
 
             return;
         }
-        $activity = StartService::run($this->service, pullLatestImages: true, stopBeforeStart: true);
-        $this->dispatch('activityMonitor', $activity->id);
+        try {
+            $activity = StartService::run($this->service, pullLatestImages: true, stopBeforeStart: true);
+            $this->dispatch('activityMonitor', $activity->id);
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     public function render()

@@ -10,6 +10,7 @@ use App\Models\StandaloneMongodb;
 use App\Models\StandaloneMysql;
 use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 class StartDatabase
@@ -20,6 +21,7 @@ class StartDatabase
 
     public function handle(StandaloneRedis|StandalonePostgresql|StandaloneMongodb|StandaloneMysql|StandaloneMariadb|StandaloneKeydb|StandaloneDragonfly|StandaloneClickhouse $database)
     {
+        PlatformGate::assertCanDeploy($database);
         $server = $database->destination->server;
         if (! $server->isFunctional()) {
             return 'Server is not functional';

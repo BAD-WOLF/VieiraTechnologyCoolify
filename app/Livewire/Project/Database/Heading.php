@@ -91,8 +91,17 @@ class Heading extends Component
     {
         $this->authorize('manage', $this->database);
 
-        $activity = StartDatabase::run($this->database);
-        $this->dispatch('activityMonitor', $activity->id, ServiceStatusChanged::class);
+        try {
+            $activity = StartDatabase::run($this->database);
+            if (is_string($activity)) {
+                $this->dispatch('error', $activity);
+
+                return;
+            }
+            $this->dispatch('activityMonitor', $activity->id, ServiceStatusChanged::class);
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
     }
 
     public function render()

@@ -5,6 +5,7 @@ namespace App\Actions\Database;
 use App\Helpers\SslHelper;
 use App\Models\SslCertificate;
 use App\Models\StandaloneMongodb;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Symfony\Component\Yaml\Yaml;
 
@@ -253,6 +254,7 @@ class StartMongodb
             $docker_compose['services'][$container_name]['command'] = $commandParts;
         }
 
+        $docker_compose = PlatformGate::harden($this->database, $docker_compose);
         $docker_compose = Yaml::dump($docker_compose, 10);
         $docker_compose_base64 = base64_encode($docker_compose);
         $this->commands[] = "echo '{$docker_compose_base64}' | base64 -d | tee $this->configuration_dir/docker-compose.yml > /dev/null";

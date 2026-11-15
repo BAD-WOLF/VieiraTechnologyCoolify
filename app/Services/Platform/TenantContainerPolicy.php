@@ -1,0 +1,682 @@
+<?php
+
+namespace App\Services\Platform;
+
+use App\Exceptions\PlatformPolicyViolation;
+
+/**
+ * Isolation policy for every docker compose file deployed for a tenant on a shared node.
+ *
+ * It rejects what would let a workload escape its sandbox or reach other tenants (privileged mode,
+ * host namespaces, devices, host bind mounts outside the resource directory, foreign networks,
+ * host ports, proxy label hijacking, unknown compose features) and then hardens what is left:
+ * CPU/memory/PIDs limits from the plan, "cap_drop: ALL" plus a minimal capability set,
+ * no-new-privileges, bounded json-file logging, OOM priority and tenant labels.
+ */
+class TenantContainerPolicy
+{
+    private const ALLOWED_TOP_LEVEL_KEYS = ['services', 'networks', 'volumes', 'configs', 'secrets', 'name', 'version'];
+
+    /**
+     * Service keys accepted as-is or controlled below. Anything else is rejected, so future
+     * compose features (provider services, API socket injection, ...) are denied by default.
+     */
+    private const ALLOWED_SERVICE_KEYS = [
+        'image', 'build', 'command', 'entrypoint', 'environment', 'env_file', 'labels', 'label_file', 'container_name',
+        'depends_on', 'expose', 'healthcheck', 'hostname', 'domainname', 'init', 'links', 'logging', 'networks', 'restart',
+        'stop_grace_period', 'stop_signal', 'tmpfs', 'user', 'group_add', 'volumes', 'working_dir', 'deploy', 'mem_limit',
+        'memswap_limit', 'mem_reservation', 'mem_swappiness', 'cpus', 'pids_limit', 'ulimits', 'shm_size', 'extra_hosts',
+        'dns', 'dns_opt', 'dns_search', 'mac_address', 'read_only', 'tty', 'stdin_open', 'platform', 'profiles', 'pull_policy',
+        'configs', 'secrets', 'sysctls', 'cap_drop', 'cap_add', 'security_opt', 'annotations', 'attach', 'blkio_config',
+        'oom_score_adj', 'storage_opt', 'runtime', 'scale', 'post_start', 'pre_stop', 'develop', 'network_mode', 'ipc', 'pid',
+        'volumes_from', 'cpuset', 'cpu_shares', 'cpu_quota', 'cpu_period', 'cpu_count', 'cpu_percent', 'cpu_rt_runtime',
+        'cpu_rt_period', 'ports', 'expose', 'stop_signal', 'isolation', 'privileged', 'devices', 'device_cgroup_rules', 'userns_mode',
+        'uts', 'cgroup', 'cgroup_parent', 'credential_spec', 'external_links', 'oom_kill_disable', 'gpus', 'use_api_socket', 'provider',
+    ];
+
+    /**
+     * Keys that are always refused for tenants.
+     *
+     * @var array<string, string>
+     */
+    private const FORBIDDEN_SERVICE_KEYS = [
+        'privileged' => 'privileged mode',
+        'devices' => 'host devices',
+        'device_cgroup_rules' => 'device cgroup rules',
+        'userns_mode' => 'host user namespace',
+        'uts' => 'host UTS namespace',
+        'cgroup' => 'host cgroup namespace',
+        'cgroup_parent' => 'custom cgroup parent',
+        'credential_spec' => 'credential specs',
+        'external_links' => 'external links',
+        'oom_kill_disable' => 'disabling the OOM killer',
+        'gpus' => 'GPUs',
+        'use_api_socket' => 'the Docker API socket',
+        'provider' => 'provider services',
+        'isolation' => 'isolation technology',
+        'ports' => 'publishing host ports (expose your service through a domain instead)',
+    ];
+
+    private const STRIPPED_SERVICE_KEYS = [
+        'cpuset', 'cpu_shares', 'cpu_quota', 'cpu_period', 'cpu_count', 'cpu_percent', 'cpu_rt_runtime', 'cpu_rt_period',
+        'develop', 'storage_opt', 'memswap_limit', 'mem_swappiness',
+    ];
+
+    private const ALLOWED_BUILD_KEYS = [
+        'context', 'dockerfile', 'dockerfile_inline', 'args', 'target', 'labels', 'cache_from', 'cache_to', 'network',
+        'extra_hosts', 'shm_size', 'ulimits', 'platforms', 'tags', 'no_cache', 'pull', 'secrets', 'additional_contexts',
+    ];
+
+    private const NAMESPACED_SYSCTL_PREFIXES = ['net.', 'kernel.shm', 'kernel.msg', 'kernel.sem', 'fs.mqueue.'];
+
+    /**
+     * @var array<int, string>
+     */
+    private array $violations = [];
+
+    public function __construct(private HardeningContext $context) {}
+
+    /**
+     * Validate and harden a compose definition. Throws when the definition is not acceptable.
+     *
+     * @param  array<string, mixed>  $compose
+     * @return array{compose: array<string, mixed>, cpus: float, memory_mb: int, containers: int}
+     */
+    public function apply(array $compose): array
+    {
+        $this->violations = [];
+        $compose = convertToArray($compose);
+        $serviceNames = array_keys((array) data_get($compose, 'services', []));
+
+        foreach (array_keys($compose) as $key) {
+            if (! in_array($key, self::ALLOWED_TOP_LEVEL_KEYS, true) && ! str_starts_with((string) $key, 'x-')) {
+                $this->violations[] = "Top-level compose key \"{$key}\" is not allowed.";
+            }
+        }
+
+        $topNetworks = (array) data_get($compose, 'networks', []);
+        foreach ($topNetworks as $name => $definition) {
+            $this->checkTopLevelNetwork((string) $name, is_array($definition) ? $definition : []);
+        }
+        $topVolumes = (array) data_get($compose, 'volumes', []);
+        foreach ($topVolumes as $name => $definition) {
+            $this->checkTopLevelVolume((string) $name, is_array($definition) ? $definition : []);
+        }
+        foreach (['configs', 'secrets'] as $section) {
+            foreach ((array) data_get($compose, $section, []) as $name => $definition) {
+                if (is_array($definition) && array_key_exists('file', $definition)) {
+                    $this->assertBindablePath((string) $definition['file'], "{$section}.{$name}.file");
+                }
+                if (is_array($definition) && (data_get($definition, 'external') || data_get($definition, 'driver'))) {
+                    $this->violations[] = "External or driver based {$section} (\"{$name}\") are not allowed.";
+                }
+            }
+        }
+
+        $totalCpus = 0.0;
+        $totalMemory = 0;
+        $containers = 0;
+        $services = (array) data_get($compose, 'services', []);
+        foreach ($services as $name => $service) {
+            if (! is_array($service)) {
+                $this->violations[] = "Service \"{$name}\" is not a valid definition.";
+
+                continue;
+            }
+            $service = $this->hardenService((string) $name, $service, $serviceNames, $topVolumes);
+            $replicas = $this->replicas($service);
+            $totalCpus += (float) $service['cpus'] * $replicas;
+            $totalMemory += $this->memoryToMb($service['mem_limit']) * $replicas;
+            $containers += $replicas;
+            $services[$name] = $service;
+        }
+        $compose['services'] = $services;
+
+        if (count($this->violations) > 0) {
+            throw new PlatformPolicyViolation($this->violations);
+        }
+
+        return [
+            'compose' => $compose,
+            'cpus' => round($totalCpus, 3),
+            'memory_mb' => $totalMemory,
+            'containers' => $containers,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     * @param  array<int, string>  $serviceNames
+     * @param  array<string, mixed>  $topVolumes
+     * @return array<string, mixed>
+     */
+    private function hardenService(string $name, array $service, array $serviceNames, array $topVolumes): array
+    {
+        foreach (array_keys($service) as $key) {
+            $key = (string) $key;
+            if (str_starts_with($key, 'x-')) {
+                continue;
+            }
+            if (! in_array($key, self::ALLOWED_SERVICE_KEYS, true)) {
+                $this->violations[] = "Service \"{$name}\": option \"{$key}\" is not supported on the platform.";
+            }
+        }
+        foreach (self::FORBIDDEN_SERVICE_KEYS as $key => $description) {
+            if (! array_key_exists($key, $service)) {
+                continue;
+            }
+            $value = $service[$key];
+            if ($value === false || $value === null || $value === [] || $value === 'false') {
+                unset($service[$key]);
+
+                continue;
+            }
+            $this->violations[] = "Service \"{$name}\": {$description} is not allowed.";
+        }
+        foreach (self::STRIPPED_SERVICE_KEYS as $key) {
+            unset($service[$key]);
+        }
+
+        $this->checkNamespaces($name, $service, $serviceNames);
+        $this->checkCapabilities($name, $service);
+        $this->checkSecurityOptions($name, $service);
+        $this->checkSysctls($name, $service);
+        $this->checkVolumes($name, $service, $serviceNames, $topVolumes);
+        $this->checkBuild($name, $service);
+        $this->checkEnvFiles($name, $service);
+        $this->checkRuntime($name, $service);
+        $this->checkHooks($name, $service);
+        $this->checkDeploy($name, $service);
+
+        if (array_key_exists('container_name', $service)) {
+            $containerName = (string) $service['container_name'];
+            if (! str_contains(strtolower($containerName), strtolower($this->context->resourceUuid)) || str_contains($containerName, '$')) {
+                $this->violations[] = "Service \"{$name}\": container_name must contain the resource UUID.";
+            }
+        }
+
+        $labels = new LabelPolicy($this->context->resourceUuid, $this->context->allowedHosts, $this->context->allowedNetworks, $this->context->resourceIds);
+        $result = $labels->check((array) data_get($service, 'labels', []));
+        foreach ($result['violations'] as $violation) {
+            $this->violations[] = "Service \"{$name}\": {$violation}";
+        }
+        $service['labels'] = array_merge($result['labels'], [
+            'tenant_id='.$this->context->teamId,
+            'tenant_plan='.($this->context->plan !== '' ? $this->context->plan : 'none'),
+            'coolify.tenantId='.$this->context->teamId,
+        ]);
+
+        return $this->applyLimits($name, $service);
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     * @param  array<int, string>  $serviceNames
+     */
+    private function checkNamespaces(string $name, array $service, array $serviceNames): void
+    {
+        $networkMode = data_get($service, 'network_mode');
+        if (! is_null($networkMode)) {
+            $networkMode = (string) $networkMode;
+            $ok = $networkMode === 'none'
+                || (str_starts_with($networkMode, 'service:') && in_array(substr($networkMode, 8), $serviceNames, true));
+            if (! $ok) {
+                $this->violations[] = "Service \"{$name}\": network_mode \"{$networkMode}\" is not allowed (only \"none\" or \"service:<name>\" of this stack).";
+            }
+        }
+        foreach (['ipc', 'pid'] as $namespace) {
+            $value = data_get($service, $namespace);
+            if (is_null($value)) {
+                continue;
+            }
+            $value = (string) $value;
+            $ok = in_array($value, ['private', 'shareable'], true)
+                || (str_starts_with($value, 'service:') && in_array(substr($value, 8), $serviceNames, true));
+            if (! $ok) {
+                $this->violations[] = "Service \"{$name}\": {$namespace} \"{$value}\" is not allowed.";
+            }
+        }
+        foreach ((array) data_get($service, 'volumes_from', []) as $source) {
+            $source = (string) $source;
+            $serviceName = str($source)->before(':')->value();
+            if (str_starts_with($source, 'container:') || ! in_array($serviceName, $serviceNames, true)) {
+                $this->violations[] = "Service \"{$name}\": volumes_from may only reference services of this stack.";
+            }
+        }
+        $networks = data_get($service, 'networks', []);
+        if (is_array($networks)) {
+            foreach ($networks as $key => $value) {
+                $networkName = is_int($key) ? (string) $value : (string) $key;
+                if (str_contains($networkName, '$')) {
+                    $this->violations[] = "Service \"{$name}\": network names can not use variables.";
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkCapabilities(string $name, array $service): void
+    {
+        $allowed = array_map('strtoupper', (array) config('platform.container.cap_add', []));
+        foreach ((array) data_get($service, 'cap_add', []) as $capability) {
+            $capability = strtoupper(str((string) $capability)->after('CAP_')->value());
+            if (! in_array($capability, $allowed, true)) {
+                $this->violations[] = "Service \"{$name}\": capability {$capability} is not allowed.";
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkSecurityOptions(string $name, array $service): void
+    {
+        foreach ((array) data_get($service, 'security_opt', []) as $option) {
+            $option = strtolower(str_replace(' ', '', (string) $option));
+            if (! in_array($option, ['no-new-privileges', 'no-new-privileges:true', 'no-new-privileges=true'], true)) {
+                $this->violations[] = "Service \"{$name}\": security option \"{$option}\" is not allowed.";
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkSysctls(string $name, array $service): void
+    {
+        foreach ((array) data_get($service, 'sysctls', []) as $key => $value) {
+            $sysctl = is_int($key) ? str((string) $value)->before('=')->value() : (string) $key;
+            $allowed = false;
+            foreach (self::NAMESPACED_SYSCTL_PREFIXES as $prefix) {
+                if (str_starts_with($sysctl, $prefix)) {
+                    $allowed = true;
+                }
+            }
+            if (! $allowed) {
+                $this->violations[] = "Service \"{$name}\": sysctl {$sysctl} is not allowed.";
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     * @param  array<int, string>  $serviceNames
+     * @param  array<string, mixed>  $topVolumes
+     */
+    private function checkVolumes(string $name, array $service, array $serviceNames, array $topVolumes): void
+    {
+        foreach ((array) data_get($service, 'volumes', []) as $volume) {
+            if (is_string($volume)) {
+                $parsed = parseDockerVolumeString($volume);
+                $source = (string) $parsed['source'];
+                $type = $this->looksLikePath($source) ? 'bind' : 'volume';
+            } elseif (is_array($volume)) {
+                $type = (string) data_get($volume, 'type', 'volume');
+                $source = (string) data_get($volume, 'source', '');
+                if (data_get($volume, 'bind.create_host_path') === true && $type === 'bind') {
+                    // Allowed: the path is checked below.
+                }
+            } else {
+                $this->violations[] = "Service \"{$name}\": invalid volume definition.";
+
+                continue;
+            }
+            if ($type === 'tmpfs') {
+                continue;
+            }
+            if ($type === 'bind') {
+                $this->assertBindablePath($source, "service \"{$name}\" volume");
+
+                continue;
+            }
+            if ($type === 'volume') {
+                if ($source === '') {
+                    continue;
+                }
+                if (str_contains($source, '$') || str_contains($source, '/')) {
+                    $this->violations[] = "Service \"{$name}\": volume \"{$source}\" is not allowed.";
+
+                    continue;
+                }
+                $definition = $topVolumes[$source] ?? null;
+                $explicitName = is_array($definition) ? data_get($definition, 'name') : null;
+                $isExternal = is_array($definition) && (bool) data_get($definition, 'external', false);
+                if (($isExternal || filled($explicitName)) && ! $this->containsUuid((string) ($explicitName ?? $source))) {
+                    $this->violations[] = "Service \"{$name}\": volume \"{$source}\" must belong to this resource.";
+                }
+                if (is_null($definition) && ! $this->containsUuid($source)) {
+                    $this->violations[] = "Service \"{$name}\": named volume \"{$source}\" must be declared or belong to this resource.";
+                }
+
+                continue;
+            }
+            $this->violations[] = "Service \"{$name}\": volume type \"{$type}\" is not allowed.";
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkBuild(string $name, array $service): void
+    {
+        $build = data_get($service, 'build');
+        if (is_null($build)) {
+            return;
+        }
+        if (is_string($build)) {
+            $this->assertBuildPath($build, $name, 'build context');
+
+            return;
+        }
+        if (! is_array($build)) {
+            $this->violations[] = "Service \"{$name}\": invalid build definition.";
+
+            return;
+        }
+        foreach (array_keys($build) as $key) {
+            if (! in_array($key, self::ALLOWED_BUILD_KEYS, true) && ! str_starts_with((string) $key, 'x-')) {
+                $this->violations[] = "Service \"{$name}\": build option \"{$key}\" is not allowed.";
+            }
+        }
+        if (array_key_exists('context', $build)) {
+            $this->assertBuildPath((string) $build['context'], $name, 'build context');
+        }
+        if (array_key_exists('dockerfile', $build)) {
+            $dockerfile = (string) $build['dockerfile'];
+            if (str_starts_with($dockerfile, '/') || str_contains($dockerfile, '..') || str_contains($dockerfile, '$')) {
+                $this->violations[] = "Service \"{$name}\": the Dockerfile must be a path inside the build context.";
+            }
+        }
+        $network = data_get($build, 'network');
+        if (! is_null($network) && ! in_array((string) $network, ['default', 'none'], true)) {
+            $this->violations[] = "Service \"{$name}\": build network \"{$network}\" is not allowed.";
+        }
+        foreach (['cache_from', 'cache_to'] as $cacheKey) {
+            foreach ((array) data_get($build, $cacheKey, []) as $cache) {
+                if (str_contains(strtolower((string) $cache), 'type=local')) {
+                    $this->violations[] = "Service \"{$name}\": local build caches are not allowed.";
+                }
+            }
+        }
+        foreach ((array) data_get($build, 'additional_contexts', []) as $contextName => $contextValue) {
+            $contextValue = (string) $contextValue;
+            if (preg_match('#^(docker-image|service|https?|git)://#', $contextValue) || str_starts_with($contextValue, 'service:')) {
+                continue;
+            }
+            $this->assertBuildPath($contextValue, $name, "additional context {$contextName}");
+        }
+    }
+
+    private function assertBuildPath(string $path, string $service, string $what): void
+    {
+        if (preg_match('#^(https?|git|ssh)://#', $path) || str_starts_with($path, 'git@')) {
+            return;
+        }
+        if (str_contains($path, '$')) {
+            $this->violations[] = "Service \"{$service}\": {$what} can not use variables.";
+
+            return;
+        }
+        $resolved = PathPolicy::resolve($path, $this->context->baseDirectory);
+        $isRelativeInside = ! str_starts_with($path, '/') && ! is_null($resolved) && PathPolicy::isWithin($resolved, [$this->context->baseDirectory]);
+        if (! $isRelativeInside && ! PathPolicy::isWithin($resolved, $this->context->bindRoots)) {
+            $this->violations[] = "Service \"{$service}\": {$what} \"{$path}\" must stay inside the project.";
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkEnvFiles(string $name, array $service): void
+    {
+        $envFiles = data_get($service, 'env_file');
+        if (is_null($envFiles)) {
+            return;
+        }
+        foreach ((array) $envFiles as $envFile) {
+            $path = is_array($envFile) ? (string) data_get($envFile, 'path', '') : (string) $envFile;
+            if (str_contains($path, '$')) {
+                $this->violations[] = "Service \"{$name}\": env_file can not use variables.";
+
+                continue;
+            }
+            if (! str_starts_with($path, '/')) {
+                $resolved = PathPolicy::resolve($path, $this->context->baseDirectory);
+                if (is_null($resolved) || ! PathPolicy::isWithin($resolved, [$this->context->baseDirectory])) {
+                    $this->violations[] = "Service \"{$name}\": env_file \"{$path}\" must stay inside the project.";
+                }
+
+                continue;
+            }
+            if (! PathPolicy::isWithin($path, $this->context->bindRoots)) {
+                $this->violations[] = "Service \"{$name}\": env_file \"{$path}\" must stay inside the project.";
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkRuntime(string $name, array $service): void
+    {
+        $runtime = data_get($service, 'runtime');
+        if (! is_null($runtime) && $runtime !== config('platform.container.runtime')) {
+            $this->violations[] = "Service \"{$name}\": runtime \"{$runtime}\" is not allowed.";
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkHooks(string $name, array $service): void
+    {
+        foreach (['post_start', 'pre_stop'] as $hookKey) {
+            foreach ((array) data_get($service, $hookKey, []) as $hook) {
+                if (is_array($hook) && (bool) data_get($hook, 'privileged', false)) {
+                    $this->violations[] = "Service \"{$name}\": privileged lifecycle hooks are not allowed.";
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function checkDeploy(string $name, array $service): void
+    {
+        $devices = data_get($service, 'deploy.resources.reservations.devices');
+        if (! empty($devices)) {
+            $this->violations[] = "Service \"{$name}\": device reservations (GPUs) are not allowed.";
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     * @return array<string, mixed>
+     */
+    private function applyLimits(string $name, array $service): array
+    {
+        $requestedMemory = $this->memoryToMb(data_get($service, 'mem_limit') ?? data_get($service, 'deploy.resources.limits.memory'));
+        $requestedCpus = (float) (data_get($service, 'cpus') ?? data_get($service, 'deploy.resources.limits.cpus') ?? 0);
+
+        if ($this->context->maxMemoryMb <= 0 || $this->context->maxCpus <= 0) {
+            $this->violations[] = 'Your plan does not include CPU/memory for workloads.';
+        }
+        $memory = $requestedMemory > 0 ? $requestedMemory : $this->context->defaultMemoryMb;
+        $memory = max(16, min($memory, $this->context->maxMemoryMb));
+        $cpus = $requestedCpus > 0 ? $requestedCpus : $this->context->defaultCpus;
+        $cpus = max(0.01, min($cpus, $this->context->maxCpus));
+
+        $reservation = $this->memoryToMb(data_get($service, 'mem_reservation'));
+        if ($reservation > $memory) {
+            unset($service['mem_reservation']);
+        }
+        data_forget($service, 'deploy.resources');
+        if (empty(data_get($service, 'deploy'))) {
+            unset($service['deploy']);
+        }
+
+        $service['mem_limit'] = "{$memory}m";
+        $service['memswap_limit'] = "{$memory}m";
+        $service['cpus'] = round($cpus, 3);
+        $requestedPids = (int) data_get($service, 'pids_limit', 0);
+        $service['pids_limit'] = $requestedPids > 0 ? min($requestedPids, $this->context->pidsLimit) : $this->context->pidsLimit;
+        $service['cap_drop'] = ['ALL'];
+        $service['cap_add'] = array_values(array_unique(array_map('strtoupper', (array) config('platform.container.cap_add', []))));
+        $service['security_opt'] = ['no-new-privileges:true'];
+        $service['oom_score_adj'] = (int) config('platform.container.oom_score_adj', 500);
+        $runtime = config('platform.container.runtime');
+        if (filled($runtime)) {
+            $service['runtime'] = $runtime;
+        }
+        if (config('platform.container.enforce_storage_opt')) {
+            $quotas = \App\Models\PlatformTenant::forTeam($this->context->teamId)->quotas();
+            $service['storage_opt'] = ['size' => max(1, (int) $quotas['storage_gb']).'G'];
+        }
+        $service['logging'] = $this->logging(data_get($service, 'logging'));
+
+        return $service;
+    }
+
+    /**
+     * Keep Coolify's fluentd log drain, otherwise force bounded json-file logs (no syslog/gelf/awslogs to arbitrary targets).
+     *
+     * @return array<string, mixed>
+     */
+    private function logging(mixed $logging): array
+    {
+        if (is_array($logging) && data_get($logging, 'driver') === 'fluentd' && function_exists('generate_fluentd_configuration')) {
+            $expected = generate_fluentd_configuration();
+            if (data_get($logging, 'options.fluentd-address') === data_get($expected, 'options.fluentd-address')) {
+                return $expected;
+            }
+        }
+
+        return [
+            'driver' => 'json-file',
+            'options' => [
+                'max-size' => (string) config('platform.container.log_max_size', '10m'),
+                'max-file' => (string) config('platform.container.log_max_file', '3'),
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $definition
+     */
+    private function checkTopLevelNetwork(string $name, array $definition): void
+    {
+        $external = data_get($definition, 'external', false);
+        $explicitName = data_get($definition, 'name');
+        if (is_array($external)) {
+            $explicitName = data_get($external, 'name', $explicitName);
+            $external = true;
+        }
+        if ((bool) $external === true) {
+            $networkName = (string) ($explicitName ?? $name);
+            if (! in_array($networkName, $this->context->allowedNetworks, true)) {
+                $this->violations[] = "Network \"{$networkName}\" does not belong to your team.";
+            }
+
+            return;
+        }
+        if (filled($explicitName) && ! $this->containsUuid((string) $explicitName) && ! in_array($explicitName, $this->context->allowedNetworks, true)) {
+            $this->violations[] = "Network name \"{$explicitName}\" must contain the resource UUID.";
+        }
+        $driver = data_get($definition, 'driver');
+        if (! is_null($driver) && $driver !== 'bridge') {
+            $this->violations[] = "Network driver \"{$driver}\" is not allowed.";
+        }
+        foreach (['driver_opts', 'ipam'] as $forbidden) {
+            if (! empty(data_get($definition, $forbidden))) {
+                $this->violations[] = "Network \"{$name}\": {$forbidden} is not allowed.";
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $definition
+     */
+    private function checkTopLevelVolume(string $name, array $definition): void
+    {
+        $driver = data_get($definition, 'driver');
+        if (! is_null($driver) && $driver !== 'local') {
+            $this->violations[] = "Volume \"{$name}\": driver \"{$driver}\" is not allowed.";
+        }
+        if (! empty(data_get($definition, 'driver_opts'))) {
+            $this->violations[] = "Volume \"{$name}\": driver_opts are not allowed.";
+        }
+        $external = data_get($definition, 'external', false);
+        $explicitName = data_get($definition, 'name');
+        if (is_array($external)) {
+            $explicitName = data_get($external, 'name', $explicitName);
+            $external = true;
+        }
+        if (((bool) $external || filled($explicitName)) && ! $this->containsUuid((string) ($explicitName ?? $name))) {
+            $this->violations[] = "Volume \"{$name}\" must belong to this resource.";
+        }
+    }
+
+    private function assertBindablePath(string $source, string $what): void
+    {
+        if ($source === '/var/run/docker.sock' || str_contains($source, 'docker.sock')) {
+            $this->violations[] = "Mounting the Docker socket is not allowed ({$what}).";
+
+            return;
+        }
+        if (str_contains($source, '$')) {
+            $this->violations[] = "Host paths can not use variables ({$what}).";
+
+            return;
+        }
+        $resolved = PathPolicy::resolve($source, $this->context->baseDirectory);
+        if (! PathPolicy::isWithin($resolved, $this->context->bindRoots)) {
+            $this->violations[] = "Host path \"{$source}\" is outside of this resource's directory ({$what}).";
+        }
+    }
+
+    private function looksLikePath(string $source): bool
+    {
+        return str_starts_with($source, '/') || str_starts_with($source, '.') || str_starts_with($source, '~');
+    }
+
+    private function containsUuid(string $value): bool
+    {
+        return $this->context->resourceUuid !== '' && str_contains(strtolower($value), strtolower($this->context->resourceUuid));
+    }
+
+    /**
+     * @param  array<string, mixed>  $service
+     */
+    private function replicas(array $service): int
+    {
+        $replicas = (int) (data_get($service, 'deploy.replicas') ?? data_get($service, 'scale') ?? 1);
+
+        return max(1, $replicas);
+    }
+
+    public function memoryToMb(mixed $value): int
+    {
+        if (is_null($value) || $value === '' || $value === '0' || $value === 0) {
+            return 0;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (int) floor($value / 1024 / 1024);
+        }
+        $value = strtolower(trim((string) $value));
+        if (! preg_match('/^(\d+(?:\.\d+)?)\s*([bkmgt]?)i?b?$/', $value, $matches)) {
+            return 0;
+        }
+        $number = (float) $matches[1];
+
+        return (int) floor(match ($matches[2]) {
+            'k' => $number / 1024,
+            'm' => $number,
+            'g' => $number * 1024,
+            't' => $number * 1024 * 1024,
+            default => $number / 1024 / 1024,
+        });
+    }
+}

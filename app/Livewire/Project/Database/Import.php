@@ -6,6 +6,7 @@ use App\Models\Server;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 
 class Import extends Component
@@ -14,6 +15,7 @@ class Import extends Component
 
     public bool $unsupported = false;
 
+    #[Locked]
     public $resource;
 
     public $parameters;
@@ -34,8 +36,10 @@ class Import extends Component
 
     public bool $error = false;
 
+    #[Locked]
     public Server $server;
 
+    #[Locked]
     public string $container;
 
     public array $importCommands = [];
@@ -148,11 +152,36 @@ EOD;
         }
     }
 
+    /**
+     * A server path is read on the node and copied into the database container: tenants of shared
+     * platform nodes must upload their dump instead, and paths are always validated and escaped.
+     */
+    private function assertCustomLocationAllowed(): string
+    {
+        if (\App\Services\Platform\PlatformGate::applies($this->resource)) {
+            throw new \Exception('Importing from a server path is not available on the platform. Upload the backup file instead.');
+        }
+        $path = \App\Services\Platform\PathPolicy::normalize($this->customLocation);
+        if (is_null($path)) {
+            throw new \Exception('Invalid file path.');
+        }
+
+        return escapeshellarg($path);
+    }
+
+    private function assertContainerAllowed(): void
+    {
+        if ($this->container !== $this->resource->uuid || ! preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$/', $this->container)) {
+            throw new \Exception('Invalid container.');
+        }
+    }
+
     public function checkFile()
     {
         if (filled($this->customLocation)) {
             try {
-                $result = instant_remote_process(["ls -l {$this->customLocation}"], $this->server, throwError: false);
+                $location = $this->assertCustomLocationAllowed();
+                $result = instant_remote_process(["ls -l {$location}"], $this->server, throwError: false);
                 if (blank($result)) {
                     $this->dispatch('error', 'The file does not exist or has been deleted.');
 
@@ -178,9 +207,11 @@ EOD;
         try {
             $this->importRunning = true;
             $this->importCommands = [];
+            $this->assertContainerAllowed();
             if (filled($this->customLocation)) {
+                $location = $this->assertCustomLocationAllowed();
                 $backupFileName = '/tmp/restore_'.$this->resource->uuid;
-                $this->importCommands[] = "docker cp {$this->customLocation} {$this->container}:{$backupFileName}";
+                $this->importCommands[] = "docker cp {$location} {$this->container}:{$backupFileName}";
                 $tmpPath = $backupFileName;
             } else {
                 $backupFileName = "upload/{$this->resource->uuid}/restore";

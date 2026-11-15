@@ -4,6 +4,7 @@ namespace App\Actions\Application;
 
 use App\Models\Application;
 use App\Models\Server;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 class StopApplicationOneServer
@@ -12,6 +13,7 @@ class StopApplicationOneServer
 
     public function handle(Application $application, Server $server)
     {
+        PlatformGate::release($application, $server->id);
         if ($application->destination->server->isSwarm()) {
             return;
         }

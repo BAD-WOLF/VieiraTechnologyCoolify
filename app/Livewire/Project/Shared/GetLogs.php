@@ -17,6 +17,7 @@ use App\Models\StandaloneMysql;
 use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
 use Illuminate\Support\Facades\Process;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 
 class GetLogs extends Component
@@ -25,12 +26,19 @@ class GetLogs extends Component
 
     public string $errors = '';
 
+    #[Locked]
     public Application|Service|StandalonePostgresql|StandaloneRedis|StandaloneMongodb|StandaloneMysql|StandaloneMariadb|StandaloneKeydb|StandaloneDragonfly|StandaloneClickhouse|null $resource = null;
 
+    #[Locked]
     public ServiceApplication|ServiceDatabase|null $servicesubtype = null;
 
+    #[Locked]
     public Server $server;
 
+    /**
+     * Interpolated into a shell command on the server: locked and validated.
+     */
+    #[Locked]
     public ?string $container = null;
 
     public ?string $pull_request = null;
@@ -101,6 +109,12 @@ class GetLogs extends Component
         if ($this->numberOfLines <= 0 || is_null($this->numberOfLines)) {
             $this->numberOfLines = 1000;
         }
+        $this->numberOfLines = min((int) $this->numberOfLines, 50000);
+        if ($this->container && ! $this->isContainerAllowed($this->container)) {
+            $this->outputs = 'Invalid container.';
+
+            return;
+        }
         if ($this->container) {
             if ($this->showTimeStamps) {
                 if ($this->server->isSwarm()) {
@@ -150,6 +164,25 @@ class GetLogs extends Component
                 })->join("\n");
             }
         }
+    }
+
+    /**
+     * The container name ends up in a shell command on the server and, on shared platform nodes,
+     * must belong to the resource whose logs are being displayed.
+     */
+    private function isContainerAllowed(string $container): bool
+    {
+        if (! preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$/', $container)) {
+            return false;
+        }
+        if (is_null($this->resource)) {
+            return ! isPlatformTenant() || (int) $this->server->team_id === (int) currentTeam()?->id;
+        }
+        if (\App\Services\Platform\PlatformGate::applies($this->resource)) {
+            return str_contains($container, (string) $this->resource->uuid);
+        }
+
+        return true;
     }
 
     public function render()

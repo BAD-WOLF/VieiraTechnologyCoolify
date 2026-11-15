@@ -67,6 +67,12 @@ class AuthServiceProvider extends ServiceProvider
 
         // Register gate for terminal access
         Gate::define('canAccessTerminal', function ($user) {
+            // Shared platform nodes: the terminal server trusts the SSH command sent by the browser,
+            // so tenants only get it when explicitly enabled (see config/platform.php).
+            if (isPlatformTenant() && ! config('platform.tenant_terminal')) {
+                return false;
+            }
+
             return $user->isAdmin() || $user->isOwner();
         });
     }

@@ -5,6 +5,7 @@ namespace App\Actions\Database;
 use App\Helpers\SslHelper;
 use App\Models\SslCertificate;
 use App\Models\StandalonePostgresql;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Symfony\Component\Yaml\Yaml;
 
@@ -216,6 +217,7 @@ class StartPostgresql
             $docker_compose['services'][$container_name]['command'] = $command;
         }
 
+        $docker_compose = PlatformGate::harden($this->database, $docker_compose);
         $docker_compose = Yaml::dump($docker_compose, 10);
         $docker_compose_base64 = base64_encode($docker_compose);
         $this->commands[] = "echo '{$docker_compose_base64}' | base64 -d | tee $this->configuration_dir/docker-compose.yml > /dev/null";
@@ -303,6 +305,11 @@ class StartPostgresql
 
         foreach ($this->database->init_scripts as $init_script) {
             $filename = data_get($init_script, 'filename');
+            if (! \App\Services\Platform\PathPolicy::isSafeFilename($filename)) {
+                $this->commands[] = "echo 'Skipping init script with an invalid file name.'";
+
+                continue;
+            }
             $content = data_get($init_script, 'content');
             $content_base64 = base64_encode($content);
             $this->commands[] = "echo '{$content_base64}' | base64 -d | tee $this->configuration_dir/docker-entrypoint-initdb.d/{$filename} > /dev/null";

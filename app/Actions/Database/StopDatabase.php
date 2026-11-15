@@ -12,6 +12,7 @@ use App\Models\StandaloneMongodb;
 use App\Models\StandaloneMysql;
 use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 class StopDatabase
@@ -20,6 +21,7 @@ class StopDatabase
 
     public function handle(StandaloneRedis|StandalonePostgresql|StandaloneMongodb|StandaloneMysql|StandaloneMariadb|StandaloneKeydb|StandaloneDragonfly|StandaloneClickhouse $database, bool $dockerCleanup = true)
     {
+        PlatformGate::release($database);
         try {
             $server = $database->destination->server;
             if (! $server->isFunctional()) {

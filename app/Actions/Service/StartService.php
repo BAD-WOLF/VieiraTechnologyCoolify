@@ -3,6 +3,7 @@
 namespace App\Actions\Service;
 
 use App\Models\Service;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Symfony\Component\Yaml\Yaml;
 
@@ -14,11 +15,15 @@ class StartService
 
     public function handle(Service $service, bool $pullLatestImages = false, bool $stopBeforeStart = false)
     {
+        PlatformGate::assertCanDeploy($service);
         $service->parse();
         if ($stopBeforeStart) {
             StopService::run(service: $service, dockerCleanup: false);
         }
         $service->saveComposeConfigs();
+        if (PlatformGate::applies($service)) {
+            PlatformGate::harden($service, Yaml::parse((string) $service->docker_compose) ?? []);
+        }
         $service->isConfigurationChanged(save: true);
         $commands[] = 'cd '.$service->workdir();
         $commands[] = "echo 'Saved configuration files to {$service->workdir()}.'";

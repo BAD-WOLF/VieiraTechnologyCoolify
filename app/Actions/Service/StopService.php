@@ -6,6 +6,7 @@ use App\Actions\Server\CleanupDocker;
 use App\Events\ServiceStatusChanged;
 use App\Models\Server;
 use App\Models\Service;
+use App\Services\Platform\PlatformGate;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 class StopService
@@ -16,6 +17,7 @@ class StopService
 
     public function handle(Service $service, bool $deleteConnectedNetworks = false, bool $dockerCleanup = true)
     {
+        PlatformGate::release($service);
         try {
             $server = $service->destination->server;
             if (! $server->isFunctional()) {
