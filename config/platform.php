@@ -223,4 +223,18 @@ return [
      * The endpoint is disabled while this is empty.
      */
     'metrics_token' => env('PLATFORM_METRICS_TOKEN'),
+
+    /*
+     * Regional edge routers (infra/ansible/roles/edge). Each one polls
+     * /api/v1/platform/edge/{region} with this bearer token and forwards every public host
+     * to the node(s) running it: HTTP by Host header, HTTPS passed through by SNI.
+     */
+    'edge' => [
+        'token' => env('PLATFORM_EDGE_TOKEN'),
+        'node_http_port' => (int) env('PLATFORM_EDGE_NODE_HTTP_PORT', 80),
+        'node_https_port' => (int) env('PLATFORM_EDGE_NODE_HTTPS_PORT', 443),
+        // Send PROXY protocol v2 to the node proxies (enable proxyProtocol.trustedIPs on them first).
+        'proxy_protocol' => (bool) env('PLATFORM_EDGE_PROXY_PROTOCOL', false),
+        'cache_seconds' => (int) env('PLATFORM_EDGE_CACHE_SECONDS', 10),
+    ],
 ];

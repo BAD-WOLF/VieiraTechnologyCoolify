@@ -5,15 +5,12 @@ use App\Http\Controllers\Api\DatabasesController;
 use App\Http\Controllers\Api\DeployController;
 use App\Http\Controllers\Api\GithubController;
 use App\Http\Controllers\Api\OtherController;
-use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ResourcesController;
 use App\Http\Controllers\Api\SecurityController;
 use App\Http\Controllers\Api\ServersController;
 use App\Http\Controllers\Api\ServicesController;
 use App\Http\Controllers\Api\TeamController;
-use App\Http\Controllers\PlatformMetricsController;
-use App\Http\Controllers\Webhook\Stripe as StripeWebhook;
 use App\Http\Middleware\ApiAllowed;
 use App\Jobs\PushServerUpdateJob;
 use App\Models\Server;
@@ -27,22 +24,6 @@ Route::group([
 });
 
 Route::post('/feedback', [OtherController::class, 'feedback']);
-
-// Platform (multi-tenant PaaS): Stripe webhook alias from the wiki and the Prometheus endpoint.
-Route::post('/v1/billing/webhooks/stripe', [StripeWebhook::class, 'events']);
-Route::get('/v1/platform/metrics', PlatformMetricsController::class);
-
-Route::group([
-    'middleware' => ['auth:sanctum', ApiAllowed::class, 'api.sensitive'],
-    'prefix' => 'v1/platform',
-], function () {
-    Route::get('/plans', [PlatformController::class, 'plans'])->middleware(['api.ability:read']);
-    Route::get('/usage', [PlatformController::class, 'usage'])->middleware(['api.ability:read']);
-    Route::get('/invoices', [PlatformController::class, 'invoices'])->middleware(['api.ability:read']);
-    Route::get('/audit-logs', [PlatformController::class, 'auditLogs'])->middleware(['api.ability:read']);
-    Route::post('/servers/{uuid}/region', [PlatformController::class, 'assignServerRegion'])->middleware(['api.ability:write']);
-    Route::post('/tenants/{teamId}/provision', [PlatformController::class, 'provisionTenant'])->middleware(['api.ability:write'])->whereNumber('teamId');
-});
 
 Route::group([
     'middleware' => ['auth:sanctum', 'api.ability:write'],

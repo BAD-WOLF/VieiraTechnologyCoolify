@@ -102,6 +102,7 @@ class PlatformController extends Controller
             'region' => ['required', 'string', 'max:64'],
             'region_name' => ['nullable', 'string', 'max:255'],
             'dedicated_team_id' => ['nullable', 'integer'],
+            'wildcard_domain' => ['nullable', 'url', 'max:255'],
         ]);
         $server = Server::query()->where('team_id', 0)->where('uuid', $uuid)->first();
         if (! $server) {
@@ -115,6 +116,9 @@ class PlatformController extends Controller
             'platform_region_id' => $region->id,
             'platform_dedicated_team_id' => $validated['dedicated_team_id'] ?? null,
         ])->save();
+        if (! empty($validated['wildcard_domain'])) {
+            $server->settings->forceFill(['wildcard_domain' => rtrim($validated['wildcard_domain'], '/')])->save();
+        }
         audit_log('platform.node.assigned', $server, ['region' => $region->slug], 0);
         PlatformTenant::query()->where('platform_region_id', $region->id)->whereNotNull('provisioned_at')->pluck('team_id')
             ->each(fn ($teamId) => ProvisionTenant::dispatch($teamId, $region));

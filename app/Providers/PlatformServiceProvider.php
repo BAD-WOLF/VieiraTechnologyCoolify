@@ -26,8 +26,10 @@ use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -48,12 +50,28 @@ class PlatformServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->registerRoutes();
+        $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
         $this->registerInputGuards();
         $this->registerDomainGuards();
         $this->registerFeatureGuards();
         $this->registerServerGuards();
         $this->registerAuditTrail();
+    }
+
+    /**
+     * The platform routes live in routes/platform/*.php. This provider boots before the
+     * RouteServiceProvider, so they are registered ahead of the upstream catch-all routes.
+     */
+    private function registerRoutes(): void
+    {
+        if ($this->app instanceof CachesRoutes && $this->app->routesAreCached()) {
+            return;
+        }
+
+        Route::middleware('api')->prefix('api')->group(base_path('routes/platform/api.php'));
+        Route::middleware('web')->group(base_path('routes/platform/web.php'));
     }
 
     private function registerWorkloadGuards(): void
