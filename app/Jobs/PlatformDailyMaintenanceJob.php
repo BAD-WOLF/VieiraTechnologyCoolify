@@ -8,6 +8,7 @@ use App\Models\PlatformTenant;
 use App\Services\Platform\InterBilling;
 use App\Services\Platform\StripeBilling;
 use App\Services\Platform\UsageAggregator;
+use App\Services\Platform\Webhooks;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -44,6 +45,7 @@ class PlatformDailyMaintenanceJob implements ShouldBeUnique, ShouldQueue
         });
         UsageAggregator::reconcileDay(now()->subDay());
         UsageAggregator::pruneRawEvents();
+        Webhooks::prune();
     }
 
     private function reconcile(PlatformTenant $tenant): void

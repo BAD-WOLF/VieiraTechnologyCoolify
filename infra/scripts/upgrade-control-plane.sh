@@ -8,7 +8,9 @@
 # The image is set in /data/coolify/source/docker-compose.custom.yml, the override file the
 # Coolify upgrade script already honours, so the upstream compose files stay untouched.
 # On a cluster instance (/etc/hostrema/control-plane.env, written by the Terraform bootstrap),
-# the deployed image is also recorded in Parameter Store, so instances created later start with it.
+# the .env is read again from Parameter Store (so changes there, such as an APP_KEY rotation,
+# reach every instance with the next rollout) and the deployed image is recorded there, so
+# instances created later start with it.
 set -euo pipefail
 
 if [[ ${1:-} == --rollback ]]; then
@@ -40,6 +42,28 @@ set_image() {
   fi
 }
 
+refresh_env() {
+  local AWS_REGION='' ENV_PARAMETER='' ROLE='' tmp
+  [[ -f "$CLUSTER_CONF" ]] || return 0
+  # shellcheck disable=SC1090
+  source "$CLUSTER_CONF"
+  [[ -n "$ENV_PARAMETER" ]] || return 0
+  tmp=$(mktemp)
+  if ! aws ssm get-parameter --region "$AWS_REGION" --name "$ENV_PARAMETER" --with-decryption \
+    --query Parameter.Value --output text > "$tmp"; then
+    echo "warning: could not read $ENV_PARAMETER, keeping the current .env" >&2
+    rm -f "$tmp"
+    return 0
+  fi
+  sed -i '/^HORIZON_ENABLED=/d; /^SCHEDULER_ENABLED=/d' "$tmp"
+  case "$ROLE" in
+    web) printf 'HORIZON_ENABLED=false\nSCHEDULER_ENABLED=false\n' >> "$tmp" ;;
+    worker) printf 'HORIZON_ENABLED=true\nSCHEDULER_ENABLED=true\n' >> "$tmp" ;;
+  esac
+  install -m 600 "$tmp" "$SOURCE_DIR/.env"
+  rm -f "$tmp"
+}
+
 record_image() {
   local image=$1 AWS_REGION='' IMAGE_PARAMETER=''
   [[ -f "$CLUSTER_CONF" ]] || return 0
@@ -63,6 +87,7 @@ echo "current image: ${previous:-upstream default}"
 echo "pulling $IMAGE"
 docker pull "$IMAGE"
 
+refresh_env
 set_image "$IMAGE"
 compose up -d --no-deps --force-recreate coolify
 if "$HERE/wait_for_health.sh" "$HEALTH_URL" 300 5; then

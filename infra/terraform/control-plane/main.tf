@@ -45,7 +45,7 @@ data "aws_ami" "ubuntu" {
 locals {
   name    = "hostrema-control-plane"
   azs     = slice(data.aws_availability_zones.available.names, 0, 2)
-  cluster = var.instance_count > 1
+  cluster = var.instance_count > 1 || var.worker_count > 0
 }
 
 resource "aws_vpc" "this" {

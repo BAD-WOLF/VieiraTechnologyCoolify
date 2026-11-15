@@ -55,6 +55,11 @@ output "edge_lb_zone_id" {
   value = aws_lb.edge.zone_id
 }
 
+output "control_plane_peering_id" {
+  description = "VPC peering with the control plane (empty without control_plane_peering)."
+  value       = local.peering ? aws_vpc_peering_connection.control_plane[0].id : ""
+}
+
 output "backup_bucket" {
   value = aws_s3_bucket.backups.bucket
 }
@@ -65,6 +70,7 @@ output "ansible_inventory" {
     platform_region = local.platform_region
     aws_region      = var.region
     vpc_cidr        = var.vpc_cidr
+    control_plane   = local.peering ? var.control_plane_peering.cidr : ""
     backup_bucket   = aws_s3_bucket.backups.bucket
     edge_http_port  = var.edge_http_port
     edge_https_port = var.edge_https_port

@@ -1,0 +1,379 @@
+openapi: 3.1.0
+info:
+  title: Hostrema platform API
+  version: 1.0.0
+  description: |
+    Endpoints added by the platform on top of the Coolify API (the Coolify endpoints are documented
+    in openapi.yaml at the root of the repository). Authenticate with an API token of the team
+    (Keys & Tokens → API tokens): `Authorization: Bearer <token>`.
+
+    Events: every event is delivered to the webhooks of the team as a signed POST (see `webhooks`),
+    published to the Redis stream `hostrema:events` and raised as the Laravel event
+    `App\Events\PlatformEventOccurred` (docs/extensions.md).
+servers:
+  - url: /api
+security:
+  - bearerAuth: []
+tags:
+  - name: Tenant
+  - name: Webhooks
+  - name: Operator
+  - name: Internal
+paths:
+  /v1/platform/openapi.json:
+    get:
+      tags: [Tenant]
+      summary: This document as JSON
+      security: []
+      responses:
+        "200":
+          description: OpenAPI document
+  /v1/platform/plans:
+    get:
+      tags: [Tenant]
+      summary: Plans, quotas and features
+      responses:
+        "200":
+          description: Plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, examples: [pro] }
+                    name: { type: string }
+                    description: { type: [string, "null"] }
+                    quotas: { type: object, additionalProperties: true }
+                    features: { type: object, additionalProperties: { type: boolean } }
+                    self_service: { type: boolean }
+  /v1/platform/usage:
+    get:
+      tags: [Tenant]
+      summary: Current usage, quotas and invoice preview of the period
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plan: { type: string }
+                  status: { type: string }
+                  period: { type: object, properties: { start: { type: string }, end: { type: string } } }
+                  quotas: { type: object, additionalProperties: true }
+                  current: { type: object, additionalProperties: true }
+                  invoice_preview: { type: object, additionalProperties: true }
+                  hourly: { type: array, items: { type: object, additionalProperties: true } }
+        "404": { $ref: "#/components/responses/NotTenant" }
+  /v1/platform/invoices:
+    get:
+      tags: [Tenant]
+      summary: Last 100 invoices
+      responses:
+        "200":
+          description: Invoices
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Invoice" } }
+        "404": { $ref: "#/components/responses/NotTenant" }
+  /v1/platform/audit-logs:
+    get:
+      tags: [Tenant]
+      summary: Last 200 entries of the audit log of the team
+      responses:
+        "200":
+          description: Audit log
+          content:
+            application/json:
+              schema: { type: array, items: { type: object, additionalProperties: true } }
+  /v1/platform/logs:
+    get:
+      tags: [Tenant]
+      summary: Log history of an application, service or database of the team
+      parameters:
+        - { name: resource_uuid, in: query, required: true, schema: { type: string } }
+        - { name: range, in: query, schema: { type: string, enum: [15m, 1h, 6h, 24h, 7d, 30d], default: 1h } }
+        - { name: filter, in: query, description: "Literal text the lines must contain", schema: { type: string, maxLength: 200 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 500 } }
+      responses:
+        "200":
+          description: Lines, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resource_uuid: { type: string }
+                  lines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        time: { type: string, examples: ["2026-11-15 14:03:12"] }
+                        container: { type: string }
+                        line: { type: string }
+        "404": { description: "Resource not found (or of another team)" }
+        "422": { description: "Invalid parameters or log history unavailable" }
+  /v1/platform/event-types:
+    get:
+      tags: [Webhooks]
+      summary: Event types that webhooks can receive
+      responses:
+        "200":
+          description: Event types
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type: { type: string, examples: [deployment.finished] }
+                    description: { type: string }
+  /v1/platform/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: Webhooks of the team
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Webhook" } }
+    post:
+      tags: [Webhooks]
+      summary: Create a webhook (the secret is returned only here)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, description: "Public HTTPS URL" }
+                events:
+                  type: array
+                  items: { type: string }
+                  description: Event types, patterns such as "deployment.*", or "*"
+                  examples: [["deployment.*", "resource.status_changed"]]
+                description: { type: string, maxLength: 255 }
+                all_teams: { type: boolean, description: "Operator only - receive the events of every team" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Webhook"
+                  - type: object
+                    properties:
+                      secret: { type: string, examples: [whsec_...] }
+        "422": { description: "Invalid URL (must be public HTTPS), unknown event or limit reached" }
+  /v1/platform/webhooks/{uuid}:
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook
+      parameters:
+        - { name: uuid, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "Deleted" }
+        "404": { description: "Not found" }
+  /v1/platform/webhooks/{uuid}/test:
+    post:
+      tags: [Webhooks]
+      summary: Send a webhook.test event
+      parameters:
+        - { name: uuid, in: path, required: true, schema: { type: string } }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  delivery_uuid: { type: string }
+                  event_id: { type: string }
+        "404": { description: "Not found" }
+  /v1/rollback:
+    post:
+      tags: [Tenant]
+      summary: Roll an application back to the image of a previous deployment (token with deploy)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uuid]
+              properties:
+                uuid: { type: string, description: "Application uuid" }
+                commit: { type: string }
+                deployment_uuid: { type: string }
+      responses:
+        "200": { description: "Rollback deployment queued" }
+        "404": { description: "Application or previous deployment not found" }
+  /v1/platform/servers/{uuid}/region:
+    post:
+      tags: [Operator]
+      summary: Assign a node to a region (operator token)
+      parameters:
+        - { name: uuid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [region]
+              properties:
+                region: { type: string, examples: [sa-east-1] }
+                region_name: { type: string }
+                dedicated_team_id: { type: [integer, "null"] }
+                wildcard_domain: { type: string, format: uri }
+                logs_url: { type: string, format: uri, description: "Loki of the region, read by the log history" }
+      responses:
+        "200": { description: "Assigned" }
+        "403": { description: "Not the operator" }
+  /v1/platform/tenants/{teamId}/provision:
+    post:
+      tags: [Operator]
+      summary: (Re)provision the networks and node limits of a tenant (operator token)
+      parameters:
+        - { name: teamId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: "Queued" }
+        "403": { description: "Not the operator" }
+  /v1/platform/metrics:
+    get:
+      tags: [Internal]
+      summary: Prometheus metrics of the control plane (PLATFORM_METRICS_TOKEN)
+      responses:
+        "200": { description: "Prometheus text format" }
+        "404": { description: "Wrong or missing token" }
+  /v1/platform/edge/{region}:
+    get:
+      tags: [Internal]
+      summary: Dynamic configuration of the regional edge routers (PLATFORM_EDGE_TOKEN)
+      parameters:
+        - { name: region, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "Traefik dynamic configuration" }
+        "404": { description: "Wrong token or unknown region" }
+  /v1/platform/otlp/auth:
+    get:
+      tags: [Internal]
+      summary: forwardAuth of the regional OTLP gateways (tenant trace tokens)
+      responses:
+        "200": { description: "Valid token, X-Scope-OrgID header set" }
+        "401": { description: "Invalid token" }
+  /v1/billing/webhooks/inter/{token}:
+    post:
+      tags: [Internal]
+      summary: Banco Inter charge notifications (the status is always read back from the Inter API)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "Accepted" }
+        "404": { description: "Wrong token" }
+  /v1/billing/webhooks/stripe:
+    post:
+      tags: [Internal]
+      summary: Stripe events (signature checked)
+      security: []
+      responses:
+        "200": { description: "Accepted" }
+webhooks:
+  platformEvent:
+    post:
+      summary: Platform event delivered to a webhook
+      description: |
+        Headers: `X-Hostrema-Event` (type), `X-Hostrema-Delivery` (delivery uuid) and
+        `X-Hostrema-Signature: t=<unix time>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" with the webhook secret>`.
+        Answer with any 2xx within 10 seconds. Network errors, 408, 429 and 5xx are retried with
+        backoff (8 attempts over about 9 hours); other answers are not retried. The same event can be
+        delivered more than once: deduplicate by `id`.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlatformEvent" }
+      responses:
+        "200": { description: "Received" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    NotTenant:
+      description: The token team is not a platform tenant
+  schemas:
+    PlatformEvent:
+      type: object
+      required: [id, type, created_at, data]
+      properties:
+        id: { type: string, examples: [evt_01jcz3kq8m7d0f9x2v6n4b5t1a] }
+        type:
+          type: string
+          enum:
+            - deployment.queued
+            - deployment.started
+            - deployment.finished
+            - deployment.failed
+            - deployment.cancelled
+            - resource.created
+            - resource.deleted
+            - resource.status_changed
+            - backup.succeeded
+            - backup.failed
+            - tenant.plan_changed
+            - tenant.status_changed
+            - invoice.created
+            - invoice.paid
+            - invoice.status_changed
+            - webhook.test
+        created_at: { type: string, format: date-time }
+        team_id: { type: [integer, "null"] }
+        data:
+          type: object
+          additionalProperties: true
+          description: |
+            deployment.*: deployment_uuid, status, application {uuid, name, type}, commit, pull_request_id, rollback.
+            resource.*: resource {uuid, name, type}; status_changed adds status, previous_status and component (services).
+            backup.*: backup_uuid, database {uuid, name, type}, database_name, size_bytes, message.
+            tenant.*: plan/previous_plan or status/previous_status/reason.
+            invoice.*: invoice_uuid, number, type, status, amount_cents, currency, period_start, period_end, due_date, paid_at.
+    Webhook:
+      type: object
+      properties:
+        uuid: { type: string }
+        url: { type: string }
+        events: { type: array, items: { type: string } }
+        description: { type: [string, "null"] }
+        all_teams: { type: boolean }
+        enabled: { type: boolean }
+        disabled_reason: { type: [string, "null"] }
+        last_response_status: { type: [integer, "null"] }
+        last_delivery_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    Invoice:
+      type: object
+      properties:
+        uuid: { type: string }
+        type: { type: string, enum: [subscription, upgrade, usage] }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        amount_cents: { type: integer }
+        currency: { type: string }
+        status: { type: string }
+        lines: { type: [array, "null"], items: { type: object, additionalProperties: true } }
+        paid_at: { type: [string, "null"], format: date-time }

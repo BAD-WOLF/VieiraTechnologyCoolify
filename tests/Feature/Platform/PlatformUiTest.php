@@ -94,3 +94,24 @@ it('restricts the operator console to the root team', function () {
     uiTenantUser('pro');
     Livewire::test(Admin::class)->assertRedirect(route('dashboard'));
 });
+
+it('renders the integrations page with webhooks, logs, traces and the API document', function () {
+    $user = uiTenantUser('pro');
+    $team = $user->teams()->first();
+    \App\Models\Subscription::create(['team_id' => $team->id, 'stripe_customer_id' => 'inter', 'stripe_invoice_paid' => true]);
+    $team->forceFill(['show_boarding' => false])->save();
+    \Illuminate\Support\Facades\Cache::forget('team:'.$user->id);
+    session(['currentTeam' => $team->fresh()]);
+    config(['subscription.provider' => null]);
+    \App\Providers\PlatformServiceProvider::alignSubscriptionProvider();
+    expect(config('subscription.provider'))->toBe('stripe');
+
+    Livewire::test(\App\Livewire\Platform\Integrations::class)
+        ->assertSee('Platform API (OpenAPI)')
+        ->assertSee('Webhooks')
+        ->assertSee('Log history')
+        ->assertSee('Application traces (OpenTelemetry)');
+
+    $this->withoutVite()->get('/platform/integrations')->assertOk()->assertSee('Integrations');
+    $this->withoutVite()->get('/platform/logs')->assertOk()->assertSee('Log history');
+});

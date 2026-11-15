@@ -28,6 +28,17 @@ variable "control_plane_cidrs" {
   type        = list(string)
 }
 
+variable "control_plane_peering" {
+  description = "Output region_peering of infra/terraform/control-plane: peers this region with the control plane VPC."
+  type = object({
+    vpc_id          = string
+    cidr            = string
+    region          = string
+    route_table_ids = list(string)
+  })
+  default = null
+}
+
 variable "node_count" {
   type    = number
   default = 2

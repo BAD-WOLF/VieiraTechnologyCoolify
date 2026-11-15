@@ -82,6 +82,7 @@
                 <div wire:key="region-{{ $region->id }}" class="flex flex-wrap items-center gap-2 p-2 border rounded-sm dark:border-coolgray-300">
                     <strong class="dark:text-white">{{ $region->name }}</strong> <span class="text-xs">{{ $region->slug }}</span>
                     <span class="text-xs">{{ $region->servers_count }} {{ __('nodes') }}</span>
+                    <span class="text-xs">{{ __('Logs') }}: {{ $region->logs_url ?: '—' }}</span>
                     @if ($region->is_default)
                         <span class="text-xs text-success">{{ __('default') }}</span>
                     @else

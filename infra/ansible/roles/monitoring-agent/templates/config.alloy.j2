@@ -1,0 +1,58 @@
+// Managed by Ansible (infra/ansible/roles/monitoring-agent). Ships the logs of every container
+// of the node to the regional Loki, labelled with the tenant (container labels set by the
+// platform: tenant_id, tenant_plan) so the dashboard can show each tenant only its own logs.
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  // Operator containers have no tenant_id label and are kept with tenant_id="".
+  rule {
+    source_labels = ["__meta_docker_container_label_tenant_id"]
+    target_label  = "tenant_id"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_tenant_plan"]
+    target_label  = "tenant_plan"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_coolify_resourceName"]
+    target_label  = "resource"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.docker.containers.targets
+  relabel_rules    = discovery.relabel.containers.rules
+  refresh_interval = "15s"
+  forward_to       = [loki.write.region.receiver]
+}
+
+loki.write "region" {
+  endpoint {
+    url = "http://{{ control_private_ip }}:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    region = "{{ platform_region }}",
+    node   = "{{ inventory_hostname }}",
+  }
+}

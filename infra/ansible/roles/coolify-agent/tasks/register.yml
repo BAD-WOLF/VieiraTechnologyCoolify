@@ -64,7 +64,8 @@
       Accept: application/json
     body_format: json
     body: >-
-      {{ {'region': platform_region, 'region_name': platform_region_name, 'wildcard_domain': platform_apps_wildcard}
+      {{ {'region': platform_region, 'region_name': platform_region_name, 'wildcard_domain': platform_apps_wildcard,
+          'logs_url': 'http://' ~ control_private_ip ~ ':3100'}
          | combine({'dedicated_team_id': platform_dedicated_team_id | int} if platform_dedicated_team_id | string | length > 0 else {}) }}
   no_log: "{{ coolify_no_log }}"
 

@@ -13,7 +13,7 @@ locals {
     "APP_ID=${random_id.app_id.hex}",
     "APP_NAME=Hostrema",
     "APP_ENV=production",
-    "APP_KEY=base64:${random_bytes.app_key.base64}",
+    "APP_KEY=${var.app_key != "" ? var.app_key : "base64:${random_bytes.app_key.base64}"}",
     "APP_LOCALE=pt-br",
     "DB_HOST=${aws_db_instance.coolify.address}",
     "DB_PORT=${aws_db_instance.coolify.port}",
@@ -29,7 +29,7 @@ locals {
     "PLATFORM_ENABLED=true",
     "PLATFORM_CONTROL_PLANE_CLUSTER=true",
     "AUTOUPDATE=false",
-  ], [for key, value in var.extra_env : "${key}=${value}"]))
+  ], length(var.app_previous_keys) > 0 ? ["APP_PREVIOUS_KEYS=${join(",", var.app_previous_keys)}"] : [], [for key, value in var.extra_env : "${key}=${value}"]))
 }
 
 resource "random_id" "app_id" {
@@ -192,7 +192,9 @@ resource "aws_instance" "cluster" {
   associate_public_ip_address = true
 
   user_data = templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
-    index             = count.index
+    name              = format("%s-%02d", local.name, count.index + 1)
+    role              = var.worker_count > 0 ? "web" : "all"
+    wait_for_panel    = count.index > 0
     region            = var.region
     env_parameter     = aws_ssm_parameter.env[0].name
     image             = var.image
@@ -234,6 +236,67 @@ resource "aws_cloudwatch_metric_alarm" "cluster_recover" {
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   dimensions          = { InstanceId = aws_instance.cluster[count.index].id }
+  alarm_actions       = ["arn:aws:automate:${var.region}:ec2:recover"]
+}
+
+# Queue workers: Horizon and the scheduler, outside the load balancer, so long deployments and
+# server checks never compete with the dashboard for CPU (wiki 9, "Arquitetura monolítica").
+resource "aws_instance" "worker" {
+  count = local.cluster ? var.worker_count : 0
+
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.worker_instance_type != "" ? var.worker_instance_type : var.instance_type
+  subnet_id                   = aws_subnet.public[(count.index + 1) % 2].id
+  vpc_security_group_ids      = [aws_security_group.app.id]
+  key_name                    = aws_key_pair.operator.key_name
+  iam_instance_profile        = aws_iam_instance_profile.cluster[0].name
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
+    name              = format("%s-worker-%02d", local.name, count.index + 1)
+    role              = "worker"
+    wait_for_panel    = true
+    region            = var.region
+    env_parameter     = aws_ssm_parameter.env[0].name
+    image             = var.image
+    image_parameter   = aws_ssm_parameter.image[0].name
+    redis_host        = aws_elasticache_replication_group.redis.primary_endpoint_address
+    registry_username = var.registry_username
+    registry_password = var.registry_username != "" ? aws_ssm_parameter.registry_password[0].name : ""
+    health_url        = "https://${var.domain}/api/health"
+  })
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  root_block_device {
+    volume_size = var.disk_gb
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
+  tags = { Name = format("%s-worker-%02d", local.name, count.index + 1) }
+
+  lifecycle {
+    ignore_changes = [ami, user_data]
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "worker_recover" {
+  count = local.cluster ? var.worker_count : 0
+
+  alarm_name          = format("%s-worker-%02d-recover", local.name, count.index + 1)
+  namespace           = "AWS/EC2"
+  metric_name         = "StatusCheckFailed_System"
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  dimensions          = { InstanceId = aws_instance.worker[count.index].id }
   alarm_actions       = ["arn:aws:automate:${var.region}:ec2:recover"]
 }
 

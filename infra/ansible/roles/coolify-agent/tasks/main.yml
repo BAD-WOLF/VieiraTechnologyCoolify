@@ -9,11 +9,7 @@
   loop: "{{ coolify_directories }}"
 
 - name: Authorize the Coolify control plane key
-  ansible.posix.authorized_key:
-    user: "{{ coolify_ssh_user }}"
-    key: "{{ coolify_ssh_public_key }}"
-    key_options: "{{ ('from=\"' ~ (coolify_ssh_from | join(',')) ~ '\"') if coolify_ssh_from | length > 0 else omit }}"
-    state: present
+  ansible.builtin.include_tasks: authorize-key.yml
 
 - name: Register the node in Coolify
   ansible.builtin.include_tasks: register.yml

@@ -1,0 +1,155 @@
+# Rotation of the SSH key Coolify uses on the nodes (wiki 9, "Gestão de Credenciais"), in two
+# phases so no node is ever unreachable:
+#
+#   1. ansible-playbook -i inventory/sa-east-1.yml playbooks/rotate-coolify-key.yml --ask-vault-pass
+#      creates a new key, authorizes it on every node next to the current one, stores it in
+#      Coolify (same private key uuid) and validates every node with it;
+#   2. after checking that every server is reachable in Coolify:
+#      ansible-playbook ... playbooks/rotate-coolify-key.yml -e rotation_phase=finish --ask-vault-pass
+#      revokes the old key and deletes the local copy of the new private key.
+#
+# Run phase 1 once for all the regions (same Coolify key) and phase 2 in every region.
+- name: Rotate the Coolify SSH key
+  hosts: coolify_nodes
+  become: true
+  gather_facts: false
+  vars:
+    rotation_phase: start
+    rotation_dir: "{{ playbook_dir }}/../.rotation"
+    rotation_key: "{{ rotation_dir }}/coolify_ed25519"
+    coolify_key_options: "{{ ('from=\"' ~ (coolify_ssh_from | join(',')) ~ '\" ') if coolify_ssh_from | length > 0 else '' }}"
+  tasks:
+    - name: Home of the SSH user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ coolify_ssh_user }}"
+
+    - name: New key pair (kept on the operator machine until the end of the rotation)  # noqa: run-once[task]
+      community.crypto.openssh_keypair:
+        path: "{{ rotation_key }}"
+        type: ed25519
+        comment: hostrema-coolify
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: rotation_phase == 'start'
+
+    - name: Public part of the new key
+      ansible.builtin.set_fact:
+        rotation_public_key: "{{ (lookup('ansible.builtin.file', rotation_key ~ '.pub').split(' '))[0:2] | join(' ') }}"
+
+    - name: Authorize the new key next to the current one
+      ansible.builtin.lineinfile:
+        path: "{{ getent_passwd[coolify_ssh_user][4] }}/.ssh/authorized_keys"
+        regexp: " hostrema-coolify-next$"
+        line: "{{ coolify_key_options }}{{ rotation_public_key }} hostrema-coolify-next"
+        create: true
+        owner: "{{ coolify_ssh_user }}"
+        mode: "0600"
+      when: rotation_phase == 'start'
+
+    - name: Store the new private key in Coolify (the servers keep the same key uuid)  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ coolify_url }}/api/v1/security/keys/{{ coolify_private_key_uuid }}"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ coolify_api_token }}"
+          Accept: application/json
+        body_format: json
+        body:
+          private_key: "{{ lookup('ansible.builtin.file', rotation_key) }}"
+        status_code: [200, 201]
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: true
+      when: rotation_phase == 'start'
+
+    - name: Servers of the control plane  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ coolify_url }}/api/v1/servers"
+        headers:
+          Authorization: "Bearer {{ coolify_api_token }}"
+          Accept: application/json
+        return_content: true
+      register: rotation_servers
+      delegate_to: localhost
+      become: false
+      run_once: true
+      no_log: "{{ coolify_no_log }}"
+      when: rotation_phase == 'start'
+
+    - name: Validate the node with the new key
+      ansible.builtin.uri:
+        url: "{{ coolify_url }}/api/v1/servers/{{ (rotation_servers.json | selectattr('ip', 'equalto', private_ip) | first).uuid }}/validate"
+        headers:
+          Authorization: "Bearer {{ coolify_api_token }}"
+          Accept: application/json
+        status_code: [200, 201]
+      delegate_to: localhost
+      become: false
+      no_log: "{{ coolify_no_log }}"
+      when: rotation_phase == 'start'
+
+    - name: Wait for the validation  # noqa: run-once[task]
+      ansible.builtin.pause:
+        seconds: 30
+      run_once: true
+      when: rotation_phase == 'start'
+
+    - name: Every node must be reachable with the new key
+      ansible.builtin.uri:
+        url: "{{ coolify_url }}/api/v1/servers/{{ (rotation_servers.json | selectattr('ip', 'equalto', private_ip) | first).uuid }}"
+        headers:
+          Authorization: "Bearer {{ coolify_api_token }}"
+          Accept: application/json
+        return_content: true
+      register: rotation_status
+      until: rotation_status.json.settings.is_reachable | default(false) | bool
+      retries: 20
+      delay: 15
+      delegate_to: localhost
+      become: false
+      no_log: "{{ coolify_no_log }}"
+      when: rotation_phase == 'start'
+
+    - name: Replace the managed key with the new one
+      ansible.builtin.lineinfile:
+        path: "{{ getent_passwd[coolify_ssh_user][4] }}/.ssh/authorized_keys"
+        regexp: " hostrema-coolify$"
+        line: "{{ coolify_key_options }}{{ rotation_public_key }} hostrema-coolify"
+        create: true
+        owner: "{{ coolify_ssh_user }}"
+        mode: "0600"
+      when: rotation_phase == 'finish'
+
+    - name: Remove the temporary line
+      ansible.builtin.lineinfile:
+        path: "{{ getent_passwd[coolify_ssh_user][4] }}/.ssh/authorized_keys"
+        regexp: " hostrema-coolify-next$"
+        state: absent
+      when: rotation_phase == 'finish'
+
+    - name: Revoke the key of the vault (installs from before the managed line)
+      ansible.posix.authorized_key:
+        user: "{{ coolify_ssh_user }}"
+        key: "{{ coolify_ssh_public_key }}"
+        state: absent
+      when:
+        - rotation_phase == 'finish'
+        - coolify_ssh_public_key | default('') | length > 0
+        - (coolify_ssh_public_key.split(' '))[1] | default('') != (rotation_public_key.split(' '))[1]
+
+    - name: Next step  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: "{{ rotation_next_step[rotation_phase] }}"
+      vars:
+        rotation_next_step:
+          start: >-
+            New key active in Coolify and authorized on the nodes. Check the servers in Coolify,
+            then run again with -e rotation_phase=finish in every region.
+          finish: >-
+            Old key revoked. Delete {{ rotation_dir }} after the last region and set
+            vault_coolify_ssh_public_key to: {{ rotation_public_key }}
+      run_once: true

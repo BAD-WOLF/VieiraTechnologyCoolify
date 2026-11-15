@@ -150,9 +150,9 @@ class PlatformGate
         }
         $team = platformTeamOf($resource);
         $tenant = PlatformTenant::forTeam($team);
-        $context = HardeningContext::for($resource, $team, $pullRequestId);
-        $result = (new TenantContainerPolicy($context))->apply($compose);
         $serverId ??= (int) data_get($resource, 'destination.server_id', 0);
+        $context = HardeningContext::for($resource, $team, $pullRequestId, $serverId ?: null);
+        $result = (new TenantContainerPolicy($context))->apply($compose);
         if (! $reserve) {
             return $result['compose'];
         }

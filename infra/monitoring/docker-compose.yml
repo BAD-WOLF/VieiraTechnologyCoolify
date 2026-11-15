@@ -1,5 +1,5 @@
 # Regional observability stack (wiki 6 & 8): Prometheus + Alertmanager + Grafana + Loki + Blackbox.
-# Runs on the region control node. Node agents (node_exporter, cAdvisor, Promtail) are installed on
+# Runs on the region control node. Node agents (node_exporter, cAdvisor, Alloy) are installed on
 # every execution node by infra/ansible/roles/monitoring-agent.
 #
 #   cp .env.example .env && docker compose up -d
@@ -42,7 +42,8 @@ services:
       - ./loki:/etc/loki:ro
       - loki-data:/loki
     ports:
-      # Promtail agents on the nodes push here through the private network only.
+      # Alloy agents on the nodes push here and the dashboard reads the tenant logs (log viewer)
+      # through the private network only.
       - "${PRIVATE_BIND_IP:-127.0.0.1}:3100:3100"
     networks: [monitoring]
 

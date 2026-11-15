@@ -25,6 +25,10 @@ Fluxo do tenant: assinatura paga com Pix ou boleto (Banco Inter), provisionament
 
 A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando o Inter confirma o pagamento.
 
+### Ao atualizar uma instalação existente
+
+Versões anteriores tinham um erro: com a plataforma instalada, o Coolify não criava as configurações de aplicações novas nem o volume de dados de bancos novos. Depois de atualizar, rode `php artisan platform:repair-resources` para listar os recursos afetados e, depois de fazer backup dos bancos listados, `php artisan platform:repair-resources --fix`. O volume novo é montado no próximo reinício do banco.
+
 ### Criar a integração no Banco Inter
 
 1. No Internet Banking do Inter Empresas, vá em **Soluções para sua empresa → Nova integração** (ou "Integrações → Nova aplicação").
@@ -72,7 +76,7 @@ Outras opções (todas com padrão em `config/platform.php`):
 
 - **Cotas por plano.** `PLATFORM_{BASIC,PRO,ENTERPRISE}_{CPUS,MEMORY_MB,STORAGE_GB,RESOURCES,CONTAINERS,DEPLOYMENTS_PER_DAY,CUSTOM_DOMAINS,EGRESS_GB}`. O valor `0` significa ilimitado para deploys e domínios.
 - **Excedentes.** `PLATFORM_OVERAGE_EGRESS_GB_CENTS` e `PLATFORM_OVERAGE_STORAGE_GB_MONTH_CENTS`.
-- **Containers.** `PLATFORM_CONTAINER_DEFAULT_CPUS`, `..._DEFAULT_MEMORY_MB`, `..._CAP_ADD`, `..._OOM_SCORE_ADJ`, `..._LOG_MAX_SIZE/FILE`. Com `PLATFORM_CONTAINER_RUNTIME=runsc` os tenants rodam no gVisor (ative `docker_gvisor_enabled` no Ansible). `PLATFORM_ENFORCE_STORAGE_OPT=true` aplica limite de disco por container, o que exige overlay2 sobre xfs com pquota.
+- **Containers.** `PLATFORM_CONTAINER_DEFAULT_CPUS`, `..._DEFAULT_MEMORY_MB`, `..._CAP_ADD`, `..._OOM_SCORE_ADJ`, `..._LOG_MAX_SIZE/FILE`. Recomendado: `PLATFORM_CONTAINER_RUNTIME=runsc`, que roda os clientes dos nós compartilhados no gVisor (um kernel próprio por container; o Ansible já instala o gVisor nos nós). As VMs dedicadas do Enterprise usam `PLATFORM_DEDICATED_CONTAINER_RUNTIME` (vazio = runtime nativo, porque a VM já isola o cliente). `PLATFORM_ENFORCE_STORAGE_OPT=true` aplica limite de disco por container, o que exige overlay2 sobre xfs com pquota.
 - **Bloqueios.** `PLATFORM_QUOTA_WARNING_PERCENT` (80), `PLATFORM_SUSPEND_AFTER_DAYS` (7) e `PLATFORM_HARD_SUSPEND_AFTER_DAYS` (30).
 - **Medição.** `PLATFORM_METERING_INTERVAL_MINUTES` (5) e `PLATFORM_METERING_RAW_RETENTION_DAYS` (90).
 - **Bancos públicos.** `PLATFORM_PUBLIC_PORT_MIN/MAX` (20000–29999) definem a faixa de portas públicas.
@@ -111,7 +115,11 @@ Depois do `terraform apply`:
 
 Para migrar uma instalação existente, faça antes um dump do banco embutido e restaure no RDS.
 
-**Ativo/ativo:** com `instance_count = 2` (ou mais), o Terraform cria as instâncias em duas zonas atrás de um Application Load Balancer com certificado ACM. Cada instância se configura sozinha no primeiro boot: lê o `.env` do Parameter Store, usa RDS e ElastiCache e liga o realtime ao Redis. Todas atendem painel, API, filas e agendador. Com `PLATFORM_CONTROL_PLANE_CLUSTER=true` (já no `.env` gerado), cada tarefa agendada roda em uma instância só por vez, com trava no Redis. Se uma instância ou uma zona cair, as outras continuam. Defina `domain` e `route53_zone_id` (ou `certificate_arn`), e passe os tokens `PLATFORM_*` em `extra_env`.
+**Ativo/ativo:** com `instance_count = 2` (ou mais), o Terraform cria as instâncias em duas zonas atrás de um Application Load Balancer com certificado ACM. Cada instância se configura sozinha no primeiro boot: lê o `.env` do Parameter Store, usa RDS e ElastiCache e liga o realtime ao Redis. Todas atendem painel, API, filas e agendador. Com `PLATFORM_CONTROL_PLANE_CLUSTER=true` (já no `.env` gerado), cada tarefa agendada roda em uma instância só por vez, com trava no Redis. Se uma instância ou uma zona cair, as outras continuam. Defina `domain` e `route53_zone_id` (ou `certificate_arn`), e passe os tokens `PLATFORM_*` em `extra_env`. As instâncias falam com os nós das regiões pelo peering entre as VPCs: cole a saída `region_peering` em `control_plane_peering` de cada região (veja `docs/region-onboarding.md`).
+
+**Outra região (recuperação de desastre):** com `dr_region = "us-east-1"` (por exemplo), o RDS copia os backups automáticos e os logs de transação do banco do painel para essa região. Se a região principal inteira cair, restaure o banco lá no ponto mais recente (`aws rds restore-db-instance-to-point-in-time --source-db-instance-automated-backups-arn <saída dr_backups_arn> --use-latest-restorable-time --target-db-instance-identifier hostrema-control-plane --region us-east-1`), suba o painel nessa região com o `DB_HOST` do `.env` apontando para o banco restaurado (mesma `APP_KEY`) e troque o DNS do painel. Os nós e os dados dos clientes ficam nas regiões deles e não dependem do painel para continuar no ar.
+
+Com `worker_count` maior que zero, o cluster separa os papéis: as `instance_count` instâncias atrás do balanceador só atendem painel, API e realtime, e os workers (fora do balanceador) rodam as filas do Horizon e o agendador. Assim, deploys longos e checagens de servidor não disputam CPU com o painel, e cada lado escala sozinho (`worker_instance_type` define o tamanho dos workers).
 
 Para o `platform-release.yml` atualizar o cluster, coloque em `CONTROL_PLANE_HOST` a saída `ssh_hosts` (todas as instâncias, separadas por espaço) e libere o SSH em `admin_cidrs`. O workflow atualiza uma instância por vez e, se uma falhar, volta todas para a versão anterior. A versão em uso fica gravada no Parameter Store (`/hostrema/control-plane/image`), e uma instância criada depois já sobe com ela. A primeira versão vem da variável `image` (padrão `ghcr.io/bad-wolf/hostrema:latest`, a última release publicada).
 
@@ -196,6 +204,44 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer hrt_...
 
 O gateway OTLP da região (Traefik no nó de controle, perfil `tenant-traces` do `infra/monitoring`) pergunta ao painel a quem pertence o token (`/api/v1/platform/otlp/auth`) e grava os traces no Tempo separados por cliente (`X-Scope-OrgID=tenant-<id>`). O cliente consulta os próprios traces no Grafana dele, com uma fonte Tempo apontando para `https://otlp.<região>.../tempo` e o mesmo token. Configure `PLATFORM_OTLP_ENDPOINT` (padrão `https://otlp.{region}.hostrema.com.br`) e o `otlp_domain` do Terraform/Ansible.
 
+## Histórico de logs
+
+O Grafana Alloy de cada nó manda os logs de todos os containers ao Loki da região, com o label `tenant_id`. Em **Integrações → Histórico de logs** (`/platform/logs`), o cliente escolhe uma aplicação, um serviço ou um banco, o período (até 30 dias, 90 no Enterprise) e um texto opcional. O painel monta a consulta sozinho, sempre presa ao time e ao recurso, então ninguém lê log de outro cliente. O mesmo está na API (`GET /api/v1/platform/logs`). O endereço do Loki de cada região é registrado pelo Ansible junto com os nós (`logs_url`). Para regiões antigas, rode o `bootstrap-nodes.yml` de novo ou defina `PLATFORM_LOKI_URL` (`{region}` vira o slug da região).
+
+## Eventos, webhooks e extensões (wiki 9)
+
+Cada evento da plataforma (deploys, recursos criados e excluídos, containers que sobem ou caem, backups, plano, status da conta e faturas) sai por três caminhos:
+
+- **Webhooks**: em **Integrações**, o admin do time cadastra uma URL HTTPS pública e escolhe os eventos. Cada entrega é um POST JSON assinado (`X-Hostrema-Signature: t=<unix>,v1=<HMAC-SHA256 de "<t>.<corpo>">`), com novas tentativas em erros temporários e histórico das últimas entregas. Endereços privados, metadata e redirecionamentos são recusados (sem SSRF). O operador pode receber os eventos de todos os clientes.
+- **Stream no Redis** `hostrema:events` (sem prefixo), para serviços internos lerem com `XREADGROUP`.
+- **Evento Laravel** `App\Events\PlatformEventOccurred`, para extensões do fork.
+
+Exemplos de verificação da assinatura, leitura do stream e listener estão em `docs/extensions.md`. A API da plataforma está descrita em OpenAPI (`GET /api/v1/platform/openapi.json`).
+
+## Segurança do operador e rotação de credenciais
+
+- **2FA obrigatório para o operador.** Quem é do time root só navega depois de ativar a autenticação em dois fatores no perfil. `PLATFORM_REQUIRE_2FA=all` exige de todos os usuários; `none` desliga.
+- **Tokens do operador presos à origem.** Com `PLATFORM_OPERATOR_API_CIDRS=203.0.113.0/24,10.0.0.0/8`, tokens de API do time root só funcionam a partir dessas redes (CI, VPN, máquina do Ansible). Tokens dos clientes não mudam.
+- **Rotação da APP_KEY** (criptografa variáveis de ambiente, chaves SSH, credenciais S3/Git, dados de cobrança e segredos de webhook). Instância única: gere a nova chave (`php artisan key:generate --show`), coloque a atual em `APP_PREVIOUS_KEYS`, a nova em `APP_KEY`, reinicie e rode `php artisan platform:rotate-app-key`; depois tire `APP_PREVIOUS_KEYS` e reinicie. Em cluster, faça pelo Terraform em três aplicações, rodando o release depois de cada uma: (1) `app_previous_keys = ["<nova>"]`; (2) `app_key = "<nova>"` e `app_previous_keys = ["<antiga>"]`, e então `platform:rotate-app-key` em uma instância; (3) `app_previous_keys = []`. A cada rollout as instâncias releem o `.env` do Parameter Store.
+- **Rotação da chave SSH dos nós.** `ansible-playbook playbooks/rotate-coolify-key.yml` cria uma chave nova, autoriza nos nós ao lado da atual, grava no Coolify (mesmo uuid) e valida todos os nós; depois, `-e rotation_phase=finish` revoga a antiga. As instâncias do painel trocam o arquivo da chave sozinhas quando ela muda no banco.
+
+## Limitações do Coolify (wiki 9) e como foram tratadas
+
+| Limitação | Como ficou |
+| --- | --- |
+| Arquitetura monolítica | Painel em cluster atrás de balanceador, com instâncias web e workers separados (`worker_count`); execução isolada nos nós (rede, slice, gVisor) e VM própria no Enterprise. |
+| Banco de dados único | Um schema por cliente exigiria reescrever o Coolify. Os metadados ficam num PostgreSQL Multi-AZ, isolados por time em todas as entradas (políticas, guardas e testes de acesso cruzado); os bancos dos clientes já são containers e volumes próprios. |
+| API interna | O Coolify já tem API REST documentada; a plataforma soma a sua (OpenAPI), webhooks assinados e o stream de eventos, sem ninguém ler o banco por fora. |
+| Escalabilidade horizontal | Cluster ativo/ativo (ALB com sessão persistente, RDS, ElastiCache, tarefas agendadas em uma instância por vez) em vez de réplicas somente leitura. |
+| Multi-região | Regiões com DNS por latência, backups em S3 com replicação entre regiões e cópia dos backups do banco do painel em outra região (`dr_region`). |
+| Logs e monitoramento | Alloy (o Promtail chegou ao fim da vida em 2026) → Loki, Prometheus com métricas próprias, Grafana; histórico de logs e traces por cliente. |
+| Isolamento de containers | Rede por cliente, firewall para metadata/VPC/painel, seccomp e AppArmor padrão do Docker sem como desligar, capabilities mínimas, slices por cliente e gVisor. |
+| Gestão de credenciais | Segredos criptografados (AES-256) com a APP_KEY guardada fora do banco (Parameter Store no cluster), rotação da APP_KEY e da chave SSH, variáveis compartilhadas do Coolify como referência central de segredos. |
+| Permissões e shell | Painel em instâncias próprias; chave SSH restrita por `from=` e rede privada; 2FA obrigatório e tokens restritos por origem para o operador; terminal desligado para clientes. |
+| Plugins e hooks | Evento Laravel, stream no Redis e webhooks (acima). |
+| Atualizações do upstream | Sincronização semanal por pull request e checagem no CI da lista de arquivos originais alterados (`infra/scripts/upstream-touched-files.sh`), em vez de patches soltos. |
+| Painel unificado e marca | O seletor de times do Coolify separa os clientes; o nome Hostrema substitui o Coolify em tempo de compilação das telas, sem editar os arquivos originais. |
+
 ## Console do operador
 
 `/admin/platform`, apenas para o time root, tem quatro abas:
@@ -221,6 +267,10 @@ Todos os endpoints usam `Authorization: Bearer <token>`.
 | `GET /api/v1/platform/usage` | tenant | Uso atual e cotas |
 | `GET /api/v1/platform/invoices` | tenant | Faturas de uso |
 | `GET /api/v1/platform/audit-logs` | tenant/root | Audit log do time |
+| `GET /api/v1/platform/logs` | tenant | Histórico de logs de um recurso (`resource_uuid`, `range`, `filter`, `limit`) |
+| `GET /api/v1/platform/event-types` | qualquer token | Tipos de evento dos webhooks |
+| `GET/POST /api/v1/platform/webhooks`, `DELETE .../{uuid}`, `POST .../{uuid}/test` | tenant/root | Webhooks do time (o segredo só aparece na criação) |
+| `GET /api/v1/platform/openapi.json` | público | Este conjunto de endpoints em OpenAPI 3.1 |
 | `POST /api/v1/platform/servers/{uuid}/region` | root | Região, nó dedicado e wildcard do nó (`region`, `region_name`, `dedicated_team_id`, `wildcard_domain`) |
 | `POST /api/v1/platform/tenants/{teamId}/provision` | root | (Re)provisiona as redes do tenant |
 | `POST /api/v1/billing/webhooks/inter/{token}` | Banco Inter | Aviso de mudança de cobrança (o status é consultado na API do Inter) |

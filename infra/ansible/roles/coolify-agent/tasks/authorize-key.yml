@@ -1,0 +1,56 @@
+# The key is read from Coolify (Keys & Tokens → Private Keys), so after a rotation
+# (playbooks/rotate-coolify-key.yml) every run authorizes the current key. It lives on one line
+# marked "hostrema-coolify", restricted with from= to the control plane addresses.
+- name: Current public key of the Coolify private key
+  ansible.builtin.uri:
+    url: "{{ coolify_url }}/api/v1/security/keys/{{ coolify_private_key_uuid }}"
+    headers:
+      Authorization: "Bearer {{ coolify_api_token }}"
+      Accept: application/json
+    return_content: true
+  register: coolify_key
+  delegate_to: localhost
+  become: false
+  run_once: true
+  no_log: "{{ coolify_no_log }}"
+
+- name: Remember the public key
+  ansible.builtin.set_fact:
+    coolify_current_public_key: "{{ (coolify_key.json.public_key | default(coolify_ssh_public_key | default(''))) | trim }}"
+
+- name: The key must be known
+  ansible.builtin.assert:
+    that: coolify_current_public_key is match('^(ssh-|ecdsa-)')
+    fail_msg: "Coolify did not return the public key of {{ coolify_private_key_uuid }}."
+
+- name: Home of the SSH user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ coolify_ssh_user }}"
+
+- name: SSH directory
+  ansible.builtin.file:
+    path: "{{ getent_passwd[coolify_ssh_user][4] }}/.ssh"
+    state: directory
+    owner: "{{ coolify_ssh_user }}"
+    mode: "0700"
+
+- name: Managed line of the Coolify key
+  ansible.builtin.lineinfile:
+    path: "{{ getent_passwd[coolify_ssh_user][4] }}/.ssh/authorized_keys"
+    regexp: " hostrema-coolify$"
+    line: "{{ coolify_key_options }}{{ (coolify_current_public_key.split(' '))[0:2] | join(' ') }} hostrema-coolify"
+    create: true
+    owner: "{{ coolify_ssh_user }}"
+    mode: "0600"
+  vars:
+    coolify_key_options: "{{ ('from=\"' ~ (coolify_ssh_from | join(',')) ~ '\" ') if coolify_ssh_from | length > 0 else '' }}"
+
+- name: Revoke the key of the vault when it is no longer the current one (before a rotation)
+  ansible.posix.authorized_key:
+    user: "{{ coolify_ssh_user }}"
+    key: "{{ coolify_ssh_public_key }}"
+    state: absent
+  when:
+    - coolify_ssh_public_key | default('') | length > 0
+    - (coolify_ssh_public_key.split(' '))[1] | default('') != (coolify_current_public_key.split(' '))[1] | default('')

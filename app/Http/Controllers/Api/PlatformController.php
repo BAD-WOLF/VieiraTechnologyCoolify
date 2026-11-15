@@ -12,6 +12,7 @@ use App\Models\PlatformTenant;
 use App\Models\Server;
 use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PricingEngine;
+use App\Services\Platform\TenantLogs;
 use App\Services\Platform\TenantUsage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -91,6 +92,33 @@ class PlatformController extends Controller
     }
 
     /**
+     * Tenant: log history of one of its resources (regional Loki), oldest line first.
+     */
+    public function logs(Request $request): JsonResponse
+    {
+        $tenant = $this->tenant();
+        if ($tenant instanceof JsonResponse) {
+            return $tenant;
+        }
+        $validated = $request->validate([
+            'resource_uuid' => ['required', 'string', 'max:64'],
+            'range' => ['nullable', 'in:'.implode(',', array_keys(TenantLogs::RANGES))],
+            'filter' => ['nullable', 'string', 'max:'.TenantLogs::MAX_FILTER_LENGTH],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:'.(int) config('platform.logs.max_lines', 1000)],
+        ]);
+        $resource = TenantLogs::findResource($tenant->team_id, $validated['resource_uuid']);
+        if (is_null($resource)) {
+            return response()->json(['message' => 'Resource not found.'], 404);
+        }
+        $result = TenantLogs::fetch($tenant->team_id, $resource, $validated['range'] ?? '1h', (string) ($validated['filter'] ?? ''), (int) ($validated['limit'] ?? 500));
+        if ($result['error']) {
+            return response()->json(['message' => $result['error']], 422);
+        }
+
+        return response()->json(['resource_uuid' => $validated['resource_uuid'], 'lines' => $result['lines']]);
+    }
+
+    /**
      * Operator only: assign a node to a region (used by infra/scripts/register-node.sh).
      */
     public function assignServerRegion(Request $request, string $uuid): JsonResponse
@@ -103,6 +131,7 @@ class PlatformController extends Controller
             'region_name' => ['nullable', 'string', 'max:255'],
             'dedicated_team_id' => ['nullable', 'integer'],
             'wildcard_domain' => ['nullable', 'url', 'max:255'],
+            'logs_url' => ['nullable', 'url:http,https', 'max:255'],
         ]);
         $server = Server::query()->where('team_id', 0)->where('uuid', $uuid)->first();
         if (! $server) {
@@ -112,6 +141,9 @@ class PlatformController extends Controller
             ['slug' => str($validated['region'])->lower()->slug()->value()],
             ['name' => $validated['region_name'] ?? $validated['region']],
         );
+        if (! empty($validated['logs_url'])) {
+            $region->forceFill(['logs_url' => rtrim($validated['logs_url'], '/')])->save();
+        }
         $server->forceFill([
             'platform_region_id' => $region->id,
             'platform_dedicated_team_id' => $validated['dedicated_team_id'] ?? null,

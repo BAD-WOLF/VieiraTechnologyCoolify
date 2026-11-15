@@ -34,9 +34,10 @@ class HardeningContext
         public int $defaultMemoryMb,
         public int $pidsLimit,
         public array $resourceIds = [],
+        public bool $dedicatedNode = false,
     ) {}
 
-    public static function for(Model $resource, ?Team $team = null, int $pullRequestId = 0): self
+    public static function for(Model $resource, ?Team $team = null, int $pullRequestId = 0, ?int $serverId = null): self
     {
         $team ??= platformTeamOf($resource);
         $tenant = PlatformTenant::forTeam($team);
@@ -83,6 +84,20 @@ class HardeningContext
             defaultMemoryMb: min((int) config('platform.container.default_memory_mb', 512), $maxMemory),
             pidsLimit: max(32, (int) ($quotas['pids_per_container'] ?? 256)),
             resourceIds: $resourceIds,
+            dedicatedNode: self::isDedicatedNode($resource, $serverId),
         );
+    }
+
+    /**
+     * Enterprise VM reserved to the tenant (the VM is the isolation boundary there).
+     */
+    private static function isDedicatedNode(Model $resource, ?int $serverId): bool
+    {
+        $serverId ??= (int) (data_get($resource, 'destination.server_id') ?? data_get($resource, 'server_id') ?? 0);
+        if ($serverId <= 0) {
+            return false;
+        }
+
+        return \App\Models\Server::query()->whereKey($serverId)->whereNotNull('platform_dedicated_team_id')->exists();
     }
 }

@@ -1,5 +1,7 @@
 monitoring_agent_dir: /opt/platform-agents
 node_exporter_image: prom/node-exporter:v1.8.2
 cadvisor_image: gcr.io/cadvisor/cadvisor:v0.49.1
-promtail_image: grafana/promtail:3.2.1
+# Grafana Alloy ships the container logs to the regional Loki (Promtail reached end of life on 2026-03-02).
+alloy_image: grafana/alloy:v1.21.0
+alloy_port: 12345
 cadvisor_port: 9280

@@ -8,9 +8,19 @@ output "load_balancer_dns_name" {
   value       = local.cluster ? aws_lb.panel[0].dns_name : null
 }
 
+output "region_peering" {
+  description = "Value of control_plane_peering in each region (infra/terraform/regions/*): private link to the nodes."
+  value = {
+    vpc_id          = aws_vpc.this.id
+    cidr            = aws_vpc.this.cidr_block
+    region          = var.region
+    route_table_ids = [aws_route_table.public.id]
+  }
+}
+
 output "ssh_hosts" {
   description = "Cluster: SSH addresses of the instances, for the CONTROL_PLANE_HOST variable of the release workflow."
-  value       = local.cluster ? join(" ", formatlist("ubuntu@%s", aws_instance.cluster[*].public_ip)) : null
+  value       = local.cluster ? join(" ", formatlist("ubuntu@%s", concat(aws_instance.cluster[*].public_ip, aws_instance.worker[*].public_ip))) : null
 }
 
 output "env" {
@@ -25,4 +35,9 @@ output "env" {
     REDIS_HOST=${aws_elasticache_replication_group.redis.primary_endpoint_address}
     REDIS_PORT=6379
   EOT
+}
+
+output "dr_backups_arn" {
+  description = "Replicated automated backups in dr_region (restore with aws rds restore-db-instance-to-point-in-time --source-db-instance-automated-backups-arn)."
+  value       = var.dr_region != "" ? aws_db_instance_automated_backups_replication.dr[0].id : null
 }

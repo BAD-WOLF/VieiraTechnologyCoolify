@@ -35,12 +35,17 @@ services:
       - {{ docker_data_root | default('/var/lib/docker') }}:/var/lib/docker:ro
       - /dev/disk:/dev/disk:ro
 
-  promtail:
-    image: {{ promtail_image }}
+  alloy:
+    image: {{ alloy_image }}
     restart: unless-stopped
     network_mode: host
-    command: -config.file=/etc/promtail/promtail.yml
+    command:
+      - run
+      - --server.http.listen-addr={{ private_ip }}:{{ alloy_port }}
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
     volumes:
-      - ./promtail.yml:/etc/promtail/promtail.yml:ro
+      - ./config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /data/promtail:/var/lib/promtail
+      - /data/alloy:/var/lib/alloy/data

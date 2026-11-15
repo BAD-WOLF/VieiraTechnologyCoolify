@@ -328,6 +328,14 @@
                         </li>
                     @endif
 
+                    @if (isPlatform())
+                        <li>
+                            <a title="Integrations" class="{{ request()->is('platform/integrations') || request()->is('platform/logs') ? 'menu-item-active menu-item' : 'menu-item' }}" href="{{ route('platform.integrations') }}">
+                                <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7H6a3 3 0 0 0 0 6h3m6-6h3a3 3 0 0 1 0 6h-3m-7-3h8" /></svg>
+                                {{ __('Integrations') }}
+                            </a>
+                        </li>
+                    @endif
                     @if (isPlatform() && isInstanceAdmin() && (int) currentTeam()?->id === 0)
                         <li>
                             <a title="Platform" class="{{ request()->is('admin/platform') ? 'menu-item-active menu-item' : 'menu-item' }}" href="{{ route('admin.platform') }}">

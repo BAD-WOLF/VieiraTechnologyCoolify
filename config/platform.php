@@ -223,8 +223,11 @@ return [
         'tenant_slices' => (bool) env('PLATFORM_TENANT_SLICES', true),
         'log_max_size' => env('PLATFORM_CONTAINER_LOG_MAX_SIZE', '10m'),
         'log_max_file' => (string) env('PLATFORM_CONTAINER_LOG_MAX_FILE', '3'),
-        // Optional sandboxed OCI runtime for tenant containers (e.g. "runsc" for gVisor). Must be installed on the nodes.
+        // Sandboxed OCI runtime for tenant containers on the shared nodes (recommended: "runsc",
+        // gVisor, installed by the Ansible role docker). Dedicated Enterprise VMs use
+        // dedicated_runtime (empty = native runtime: the VM is already the isolation boundary).
         'runtime' => env('PLATFORM_CONTAINER_RUNTIME'),
+        'dedicated_runtime' => env('PLATFORM_DEDICATED_CONTAINER_RUNTIME'),
         // Requires overlay2 on XFS with pquota on the nodes.
         'enforce_storage_opt' => (bool) env('PLATFORM_ENFORCE_STORAGE_OPT', false),
         // Host ports tenants may publish (public databases). Outside this range publishing is refused.
@@ -249,6 +252,57 @@ return [
      */
     'telemetry' => [
         'endpoint' => env('PLATFORM_OTLP_ENDPOINT', 'https://otlp.{region}.hostrema.com.br'),
+    ],
+
+    /*
+     * Log history of the tenant applications (wiki 9, "Limitações de Logs"): the dashboard reads
+     * the regional Loki (fed by Alloy on the nodes) and only ever asks for the tenant's own
+     * containers. The address of each region is registered by Ansible with the nodes; this one
+     * is the fallback ({region} is replaced by the region slug).
+     */
+    'logs' => [
+        'loki_url' => env('PLATFORM_LOKI_URL'),
+        'timeout' => (int) env('PLATFORM_LOKI_TIMEOUT', 10),
+        'max_lines' => 1000,
+    ],
+
+    /*
+     * Operator protections (wiki 9, "Permissões de Sistema e Shell Access").
+     */
+    'security' => [
+        // Two-factor authentication required for: "operator" (root team), "all" users or "none".
+        'require_two_factor' => env('PLATFORM_REQUIRE_2FA', 'operator'),
+        // Networks allowed to use API tokens of the root team (comma separated CIDRs). Empty = any.
+        'operator_api_cidrs' => array_values(array_filter(array_map('trim', explode(',', (string) env('PLATFORM_OPERATOR_API_CIDRS', ''))))),
+    ],
+
+    /*
+     * Rotation of APP_KEY (wiki 9, "Gestão de Credenciais"): put the old key in APP_PREVIOUS_KEYS
+     * (comma separated), set the new APP_KEY and run "php artisan platform:rotate-app-key".
+     */
+    'encryption' => [
+        'previous_keys' => array_values(array_filter(array_map('trim', explode(',', (string) env('APP_PREVIOUS_KEYS', ''))))),
+    ],
+
+    /*
+     * Event hooks (wiki 9, "Plugins e Hooks"): every platform event is a Laravel event
+     * (App\Events\PlatformEventOccurred), an entry of a Redis stream and a signed webhook delivery.
+     */
+    'events' => [
+        // Redis stream read by internal consumers (XREAD/XREADGROUP); empty = disabled.
+        'stream' => env('PLATFORM_EVENTS_STREAM', 'hostrema:events'),
+        'stream_max_length' => (int) env('PLATFORM_EVENTS_STREAM_MAX_LENGTH', 100000),
+    ],
+
+    'webhooks' => [
+        'max_per_team' => (int) env('PLATFORM_WEBHOOKS_PER_TEAM', 10),
+        'timeout' => (int) env('PLATFORM_WEBHOOKS_TIMEOUT', 10),
+        'retention_days' => (int) env('PLATFORM_WEBHOOKS_RETENTION_DAYS', 14),
+        'disable_after_failures' => (int) env('PLATFORM_WEBHOOKS_DISABLE_AFTER_FAILURES', 50),
+        // Tests and internal setups only: plain HTTP targets.
+        'allow_http' => (bool) env('PLATFORM_WEBHOOKS_ALLOW_HTTP', false),
+        // Operator webhooks (team 0) may target private addresses (internal systems).
+        'operator_private_targets' => (bool) env('PLATFORM_WEBHOOKS_OPERATOR_PRIVATE_TARGETS', false),
     ],
 
     /*

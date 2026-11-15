@@ -5,12 +5,12 @@
     mode: "0750"
   loop:
     - "{{ monitoring_agent_dir }}"
-    - /data/promtail
+    - /data/alloy
 
-- name: Promtail configuration (tenant_id labels from the container labels)
+- name: Alloy configuration (tenant_id labels from the container labels)
   ansible.builtin.template:
-    src: promtail.yml.j2
-    dest: "{{ monitoring_agent_dir }}/promtail.yml"
+    src: config.alloy.j2
+    dest: "{{ monitoring_agent_dir }}/config.alloy"
     mode: "0640"
   notify: Restart monitoring agents
 
@@ -20,8 +20,18 @@
     dest: "{{ monitoring_agent_dir }}/docker-compose.yml"
     mode: "0640"
 
-- name: Start node_exporter, cAdvisor and Promtail
+# remove_orphans also removes the Promtail container of older installs.
+- name: Start node_exporter, cAdvisor and Alloy
   community.docker.docker_compose_v2:
     project_src: "{{ monitoring_agent_dir }}"
     state: present
     pull: missing
+    remove_orphans: true
+
+- name: Old Promtail files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ monitoring_agent_dir }}/promtail.yml"
+    - /data/promtail

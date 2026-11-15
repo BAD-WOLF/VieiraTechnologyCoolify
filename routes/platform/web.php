@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\PlatformPricingPageController;
 use App\Livewire\Platform\Admin;
+use App\Livewire\Platform\Integrations;
+use App\Livewire\Platform\Logs;
 use App\Livewire\Platform\Onboarding;
 use Illuminate\Support\Facades\Route;
 
@@ -20,4 +22,6 @@ Route::get('/pricing', PlatformPricingPageController::class)->name('platform.pri
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/platform/onboarding', Onboarding::class)->name('platform.onboarding');
+    Route::get('/platform/logs', Logs::class)->name('platform.logs');
+    Route::get('/platform/integrations', Integrations::class)->name('platform.integrations');
 });

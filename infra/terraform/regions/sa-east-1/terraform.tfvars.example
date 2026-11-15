@@ -3,6 +3,15 @@ ssh_public_key      = "ssh-ed25519 AAAA... operator@example.com"
 admin_cidrs         = ["203.0.113.10/32"]
 control_plane_cidrs = ["198.51.100.20/32"]
 
+# Private link with the control plane VPC (required for a control plane cluster, recommended on AWS).
+# Paste the region_peering output of infra/terraform/control-plane. With it, WireGuard is not needed.
+# control_plane_peering = {
+#   vpc_id          = "vpc-0123456789abcdef0"
+#   cidr            = "10.10.0.0/16"
+#   region          = "sa-east-1"
+#   route_table_ids = ["rtb-0123456789abcdef0"]
+# }
+
 node_count         = 2
 node_instance_type = "m6i.8xlarge" # 32 vCPU / 128 GB
 control_instance_type = "m6i.2xlarge"

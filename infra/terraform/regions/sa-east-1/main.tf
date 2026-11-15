@@ -26,8 +26,26 @@ provider "aws" {
   }
 }
 
+# Region of the Coolify control plane, for the VPC peering (control_plane_peering).
+provider "aws" {
+  alias  = "control_plane"
+  region = try(var.control_plane_peering.region, "sa-east-1")
+
+  default_tags {
+    tags = {
+      Project = var.project
+      Region  = "sa-east-1"
+    }
+  }
+}
+
 module "region" {
   source = "../../modules/region"
+
+  providers = {
+    aws               = aws
+    aws.control_plane = aws.control_plane
+  }
 
   region                        = "sa-east-1"
   platform_region               = "sa-east-1"
@@ -36,6 +54,7 @@ module "region" {
   ssh_public_key                = var.ssh_public_key
   admin_cidrs                   = var.admin_cidrs
   control_plane_cidrs           = var.control_plane_cidrs
+  control_plane_peering         = var.control_plane_peering
   node_count                    = var.node_count
   node_instance_type            = var.node_instance_type
   node_data_volume_gb           = var.node_data_volume_gb

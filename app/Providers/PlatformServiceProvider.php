@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Actions\Platform\ProvisionTenant;
 use App\Exceptions\PlatformPolicyViolation;
+use App\Http\Middleware\PlatformOperatorApiAllowlist;
+use App\Http\Middleware\PlatformRequireTwoFactor;
 use App\Jobs\PlatformBillingCycleJob;
 use App\Jobs\PlatformCollectUsageJob;
 use App\Jobs\PlatformDailyMaintenanceJob;
@@ -19,6 +21,7 @@ use App\Models\PersonalAccessToken;
 use App\Models\PlatformRegion;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
+use App\Models\PrivateKey;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledTask;
@@ -32,6 +35,7 @@ use App\Models\TeamInvitation;
 use App\Services\Platform\DestinationPolicy;
 use App\Services\Platform\DomainPolicy;
 use App\Services\Platform\PlatformBranding;
+use App\Services\Platform\PlatformEvents;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
 use App\Services\Platform\TenantLimits;
@@ -49,6 +53,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -67,8 +72,19 @@ class PlatformServiceProvider extends ServiceProvider
         return array_merge([Application::class, Service::class], PlatformGate::databaseModels());
     }
 
+    public function register(): void
+    {
+        // APP_PREVIOUS_KEYS: values encrypted with an older APP_KEY keep working during a rotation.
+        if (blank(config('app.previous_keys')) && filled(config('platform.encryption.previous_keys'))) {
+            config(['app.previous_keys' => config('platform.encryption.previous_keys')]);
+        }
+    }
+
     public function boot(): void
     {
+        self::alignSubscriptionProvider();
+        $this->app['router']->pushMiddlewareToGroup('web', PlatformRequireTwoFactor::class);
+        $this->app['router']->pushMiddlewareToGroup('api', PlatformOperatorApiAllowlist::class);
         RateLimiter::for('platform-otlp', fn (Request $request) => Limit::perMinute(12000)->by($request->ip()));
         $this->registerRoutes();
         $this->registerRelations();
@@ -84,6 +100,48 @@ class PlatformServiceProvider extends ServiceProvider
         $this->registerFeatureGuards();
         $this->registerServerGuards();
         $this->registerAuditTrail();
+        $this->registerKeyFileSync();
+        PlatformEvents::register();
+    }
+
+    /**
+     * Coolify writes the SSH key file of a private key only when the file is missing, and the API
+     * (PATCH /security/keys) does not rewrite it. After a key rotation every instance of the control
+     * plane would keep connecting with the old key, so the file is refreshed whenever it no longer
+     * matches the key stored in the database.
+     */
+    private function registerKeyFileSync(): void
+    {
+        PrivateKey::retrieved(function (PrivateKey $key): void {
+            // Only full models: a query that did not select the key must not touch the file.
+            $attributes = $key->getAttributes();
+            if (! isPlatform() || blank($attributes['private_key'] ?? null) || blank($attributes['uuid'] ?? null)) {
+                return;
+            }
+            try {
+                $disk = Storage::disk('ssh-keys');
+                $file = "ssh_key@{$key->uuid}";
+                $privateKey = $key->private_key;
+                if (is_string($privateKey) && $privateKey !== '' && $disk->exists($file) && $disk->get($file) !== $privateKey) {
+                    $key->storeInFileSystem();
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        });
+    }
+
+    /**
+     * Coolify (cloud mode) opens the dashboard only to teams whose subscription record is paid, and
+     * reads that record only when the subscription provider is "stripe". The platform keeps the
+     * record in sync with its own billing (Banco Inter or Stripe), so the check must read it
+     * whatever the provider; otherwise every paying tenant is sent back to /subscription/new.
+     */
+    public static function alignSubscriptionProvider(): void
+    {
+        if (isPlatform() && blank(config('subscription.provider'))) {
+            config(['subscription.provider' => 'stripe']);
+        }
     }
 
     /**
@@ -328,17 +386,41 @@ class PlatformServiceProvider extends ServiceProvider
         });
     }
 
+    /**
+     * The listeners never return a value: a listener that returns false stops the event, and the
+     * model's own listeners (settings of a new application, data volume of a new database...)
+     * would not run.
+     */
     private function registerAuditTrail(): void
     {
+        $audit = function (string $action, ?Model $subject, array $metadata = [], ?int $teamId = null, ?string $actorType = null): void {
+            if (isPlatform() && ! PlatformEvents::isMuted()) {
+                audit_log($action, $subject, $metadata, $teamId, $actorType);
+            }
+        };
         foreach (self::workloadModels() as $model) {
-            $model::created(fn (Model $resource) => isPlatform() && audit_log('resource.created', $resource, ['name' => $resource->getAttribute('name')]));
-            $model::deleted(fn (Model $resource) => isPlatform() && audit_log('resource.deleted', $resource, ['name' => $resource->getAttribute('name')]));
+            $model::created(function (Model $resource) use ($audit): void {
+                $audit('resource.created', $resource, ['name' => $resource->getAttribute('name')]);
+            });
+            $model::deleted(function (Model $resource) use ($audit): void {
+                $audit('resource.deleted', $resource, ['name' => $resource->getAttribute('name')]);
+            });
         }
-        EnvironmentVariable::saved(fn (EnvironmentVariable $variable) => isPlatform() && audit_log($variable->wasRecentlyCreated ? 'env.created' : 'env.updated', $variable, ['key' => $variable->key]));
-        EnvironmentVariable::deleted(fn (EnvironmentVariable $variable) => isPlatform() && audit_log('env.deleted', $variable, ['key' => $variable->key]));
-        PersonalAccessToken::created(fn (PersonalAccessToken $token) => isPlatform() && audit_log('api_token.created', $token, ['name' => $token->name, 'abilities' => $token->abilities], $token->team_id ?? null));
-        PersonalAccessToken::deleted(fn (PersonalAccessToken $token) => isPlatform() && audit_log('api_token.deleted', $token, ['name' => $token->name], $token->team_id ?? null));
-        TeamInvitation::created(fn (TeamInvitation $invitation) => isPlatform() && audit_log('team.invitation.created', $invitation, ['email' => $invitation->email, 'role' => $invitation->role], $invitation->team_id));
+        EnvironmentVariable::saved(function (EnvironmentVariable $variable) use ($audit): void {
+            $audit($variable->wasRecentlyCreated ? 'env.created' : 'env.updated', $variable, ['key' => $variable->key]);
+        });
+        EnvironmentVariable::deleted(function (EnvironmentVariable $variable) use ($audit): void {
+            $audit('env.deleted', $variable, ['key' => $variable->key]);
+        });
+        PersonalAccessToken::created(function (PersonalAccessToken $token) use ($audit): void {
+            $audit('api_token.created', $token, ['name' => $token->name, 'abilities' => $token->abilities], $token->team_id ?? null);
+        });
+        PersonalAccessToken::deleted(function (PersonalAccessToken $token) use ($audit): void {
+            $audit('api_token.deleted', $token, ['name' => $token->name], $token->team_id ?? null);
+        });
+        TeamInvitation::created(function (TeamInvitation $invitation) use ($audit): void {
+            $audit('team.invitation.created', $invitation, ['email' => $invitation->email, 'role' => $invitation->role], $invitation->team_id);
+        });
         PlatformTenant::updated(function (PlatformTenant $tenant) {
             // New quotas: the slices and bandwidth of the tenant are updated on every node.
             if (isPlatform() && TenantLimits::enabled() && $tenant->provisioned_at && $tenant->wasChanged(['plan', 'quota_overrides'])) {
@@ -352,7 +434,11 @@ class PlatformServiceProvider extends ServiceProvider
                 ], $tenant->team_id);
             }
         });
-        Event::listen(Login::class, fn (Login $event) => isPlatform() && audit_log('auth.login', $event->user, [], null, 'user'));
-        Event::listen(Failed::class, fn (Failed $event) => isPlatform() && audit_log('auth.failed', null, ['email' => data_get($event->credentials, 'email')], null, 'anonymous'));
+        Event::listen(Login::class, function (Login $event) use ($audit): void {
+            $audit('auth.login', $event->user, [], null, 'user');
+        });
+        Event::listen(Failed::class, function (Failed $event) use ($audit): void {
+            $audit('auth.failed', null, ['email' => data_get($event->credentials, 'email')], null, 'anonymous');
+        });
     }
 }

@@ -56,6 +56,18 @@ resource "aws_vpc_security_group_ingress_rule" "control_from_nodes" {
   to_port                      = each.value
 }
 
+# The dashboard reads the tenant logs (log viewer) from the regional Loki over the peering.
+resource "aws_vpc_security_group_ingress_rule" "control_loki_control_plane" {
+  count = local.peering ? 1 : 0
+
+  security_group_id = aws_security_group.control.id
+  description       = "Loki queries from the Coolify control plane (peered network)"
+  cidr_ipv4         = var.control_plane_peering.cidr
+  ip_protocol       = "tcp"
+  from_port         = 3100
+  to_port           = 3100
+}
+
 resource "aws_vpc_security_group_ingress_rule" "node_ssh_control" {
   security_group_id            = aws_security_group.node.id
   description                  = "SSH from the control node (Ansible bastion and Coolify through WireGuard)"
@@ -66,7 +78,7 @@ resource "aws_vpc_security_group_ingress_rule" "node_ssh_control" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "node_ssh_control_plane" {
-  for_each = toset(var.control_plane_cidrs)
+  for_each = toset(concat(var.control_plane_cidrs, local.peering ? [var.control_plane_peering.cidr] : []))
 
   security_group_id = aws_security_group.node.id
   description       = "SSH from the Coolify control plane (peered networks)"

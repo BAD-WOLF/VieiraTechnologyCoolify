@@ -129,7 +129,13 @@
         </section>
     @endif
 
-    <livewire:platform.observability />
+    <section class="flex flex-col gap-2">
+        <h3>{{ __('Integrations') }}</h3>
+        <div class="text-sm dark:text-neutral-400">
+            {{ __('API, webhooks, log history and application traces.') }}
+            <a class="underline dark:text-white" href="{{ route('platform.integrations') }}">{{ __('Open integrations') }}</a>
+        </div>
+    </section>
 
     <section class="flex flex-col gap-2">
         <h3>{{ __('Invoices') }}</h3>

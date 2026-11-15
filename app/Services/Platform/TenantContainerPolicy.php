@@ -460,13 +460,20 @@ class TenantContainerPolicy
         }
     }
 
+    private function runtime(): ?string
+    {
+        $runtime = $this->context->dedicatedNode ? config('platform.container.dedicated_runtime') : config('platform.container.runtime');
+
+        return filled($runtime) ? (string) $runtime : null;
+    }
+
     /**
      * @param  array<string, mixed>  $service
      */
     private function checkRuntime(string $name, array $service): void
     {
         $runtime = data_get($service, 'runtime');
-        if (! is_null($runtime) && $runtime !== config('platform.container.runtime')) {
+        if (! is_null($runtime) && $runtime !== $this->runtime()) {
             $this->violations[] = "Service \"{$name}\": runtime \"{$runtime}\" is not allowed.";
         }
     }
@@ -531,9 +538,13 @@ class TenantContainerPolicy
         $service['cap_add'] = array_values(array_unique(array_map('strtoupper', (array) config('platform.container.cap_add', []))));
         $service['security_opt'] = ['no-new-privileges:true'];
         $service['oom_score_adj'] = (int) config('platform.container.oom_score_adj', 500);
-        $runtime = config('platform.container.runtime');
+        // gVisor (or another sandbox) on the shared nodes; dedicated Enterprise VMs are already
+        // isolated by the hypervisor and use their own setting (native runtime by default).
+        $runtime = $this->runtime();
         if (filled($runtime)) {
             $service['runtime'] = $runtime;
+        } else {
+            unset($service['runtime']);
         }
         if (config('platform.container.enforce_storage_opt')) {
             $quotas = \App\Models\PlatformTenant::forTeam($this->context->teamId)->quotas();

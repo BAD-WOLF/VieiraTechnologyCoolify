@@ -10,6 +10,10 @@ output "edge_lb_dns_name" {
   value = module.region.edge_lb_dns_name
 }
 
+output "control_plane_peering_id" {
+  value = module.region.control_plane_peering_id
+}
+
 output "backup_bucket" {
   value = module.region.backup_bucket
 }

@@ -21,7 +21,7 @@ O exemplo usa `sa-east-1` (São Paulo).
    Prometheus/Alertmanager/Loki/Grafana/Blackbox
 ```
 
-- O **control plane** (Coolify master) gerencia os nós por SSH (não há agente residente) pelo túnel WireGuard até o nó de controle, que faz NAT apenas para a porta 22 dos nós.
+- O **control plane** (Coolify master) gerencia os nós por SSH (não há agente residente), pelo peering entre as VPCs ou pelo túnel WireGuard até o nó de controle, que faz NAT apenas para a porta 22 dos nós.
 - O **edge** existe porque um único wildcard DNS/LB precisa chegar a qualquer nó. Cada edge sabe, via `GET /api/v1/platform/edge/sa-east-1`, em que nó(s) roda cada host. O TLS continua no proxy do Coolify de cada nó, e os desafios ACME HTTP-01 passam pelo edge normalmente.
 - Os **containers dos tenants** não alcançam o metadata service, a VPC, o WireGuard nem as portas de gerência do host (role `firewall`). O IMDSv2 com hop limit 1 também impede o uso das credenciais da instância.
 
@@ -32,7 +32,7 @@ O exemplo usa `sa-east-1` (São Paulo).
    - **Keys & Tokens → Private Keys**: crie ou gere a chave que o Coolify usará nos nós e anote o uuid e a chave pública;
    - **Keys & Tokens → API tokens**: crie um token com permissões *read* e *write* para o Ansible.
 3. Conta AWS com permissão para VPC, EC2, ELB, S3, IAM, DLM e Route53 (opcional), Terraform ≥ 1.6 e Ansible ≥ 9 (`pip install ansible`).
-4. WireGuard no host do control plane (`wg genkey | tee priv | wg pubkey > pub`).
+4. Na AWS, a saída `region_peering` do control plane. Fora dela, WireGuard no host do control plane (`wg genkey | tee priv | wg pubkey > pub`).
 
 ## 1. Infraestrutura (Terraform)
 
@@ -98,14 +98,16 @@ O `bootstrap-nodes.yml` roda, em cada nó:
 
 - `tenant-limits`: script `hostrema-tenant-limits`, slice `tenant.slice` (até 90% da memória do nó para os clientes) e timer que reaplica os limites a cada 5 minutos;
 - `common`, `docker` (driver de cgroup do systemd, data-root em `/data/docker`, pools de endereço para uma rede por tenant, `no-new-privileges`, `live-restore`, logs limitados, mirror regional e gVisor opcional) e `firewall`;
-- `monitoring-agent` (node_exporter, cAdvisor e Promtail com labels `tenant_id`) e `edge`;
-- `coolify-agent`, que cria os diretórios `/data/coolify`, autoriza a chave do control plane (só a partir do IP do nó de controle), cadastra o nó via `POST /api/v1/servers`, espera o Coolify validá-lo e então atribui região e wildcard via `POST /api/v1/platform/servers/{uuid}/region`.
+- `monitoring-agent` (node_exporter, cAdvisor e Grafana Alloy, que manda os logs dos containers ao Loki com o label `tenant_id`; o Promtail chegou ao fim da vida em março de 2026 e é removido) e `edge`;
+- `coolify-agent`, que cria os diretórios `/data/coolify`, autoriza a chave do control plane (lida do próprio Coolify, numa linha marcada `hostrema-coolify` e só a partir do nó de controle ou da rede do painel), cadastra o nó via `POST /api/v1/servers`, espera o Coolify validá-lo e então atribui região, wildcard e o endereço do Loki da região (histórico de logs) via `POST /api/v1/platform/servers/{uuid}/region`.
 
 Na atribuição de região o Coolify também cria as redes `tenant-{id}` dos tenants já provisionados no novo nó.
 
-### Conectar o control plane (WireGuard)
+### Conectar o control plane
 
-No host do control plane, crie `/etc/wireguard/wg-sa-east-1.conf`:
+**Na AWS (recomendado, e obrigatório com o painel em cluster):** cole a saída `region_peering` de `infra/terraform/control-plane` em `control_plane_peering` no `terraform.tfvars` da região e rode `terraform apply`. O Terraform cria o peering entre as duas VPCs, as rotas dos dois lados e a regra de SSH nos nós. O inventário gerado já desliga o WireGuard e autoriza a chave do Coolify a partir da rede do painel. Use um CIDR diferente para cada região (`10.20.0.0/16`, `10.21.0.0/16`…), que não se sobreponha ao do painel (`10.10.0.0/16`).
+
+**Fora da AWS (WireGuard):** no host do control plane, crie `/etc/wireguard/wg-sa-east-1.conf`:
 
 ```ini
 [Interface]
@@ -119,7 +121,7 @@ AllowedIPs = 10.20.0.0/16
 PersistentKeepalive = 25
 ```
 
-Depois rode `systemctl enable --now wg-quick@wg-sa-east-1`. Se o control plane estiver numa VPC com peering, desligue `wireguard_enabled` e inclua o CIDR dele em `coolify_ssh_from` e em `control_plane_cidrs`.
+Depois rode `systemctl enable --now wg-quick@wg-sa-east-1`.
 
 ### Proxy dos nós (IP real do cliente)
 
@@ -177,6 +179,16 @@ Os dados dos tenants não são replicados entre regiões automaticamente: restau
 ### Registry indisponível
 
 Sem o mirror, o Docker dos nós volta ao Docker Hub automaticamente (`registry-mirrors` é só cache). Corrija rodando `control-node.yml` de novo ou recriando o nó de controle.
+
+### Rotação da chave SSH do Coolify
+
+```bash
+ansible-playbook -i inventory/sa-east-1.yml playbooks/rotate-coolify-key.yml --ask-vault-pass
+# confira no Coolify que todos os servidores estão "reachable", depois, em cada região:
+ansible-playbook -i inventory/sa-east-1.yml playbooks/rotate-coolify-key.yml -e rotation_phase=finish --ask-vault-pass
+```
+
+A primeira fase cria a chave nova, autoriza nos nós ao lado da atual, grava no Coolify com o mesmo uuid e valida todos os nós. A segunda revoga a antiga. A chave privada nova fica só em `infra/ansible/.rotation/` até o fim (apague depois da última região).
 
 ### Atualização do control plane
 

@@ -64,6 +64,20 @@ it('puts every tenant container in the tenant slice and keeps the policy idempot
     expect(fn () => (new TenantContainerPolicy(isolationContext(42)))->apply($foreign))->toThrow(\App\Exceptions\PlatformPolicyViolation::class);
 });
 
+it('sandboxes the shared nodes and keeps the native runtime on dedicated VMs', function () {
+    config(['platform.container.runtime' => 'runsc', 'platform.container.dedicated_runtime' => null]);
+    $compose = ['services' => ['web' => ['image' => 'nginx:alpine']]];
+    $shared = (new TenantContainerPolicy(isolationContext(42)))->apply($compose)['compose'];
+    expect($shared['services']['web']['runtime'])->toBe('runsc')
+        ->and((new TenantContainerPolicy(isolationContext(42)))->apply($shared)['compose']['services']['web']['runtime'])->toBe('runsc');
+
+    $context = isolationContext(42);
+    $context->dedicatedNode = true;
+    $dedicated = (new TenantContainerPolicy($context))->apply($compose)['compose'];
+    expect($dedicated['services']['web'])->not->toHaveKey('runtime');
+    expect(fn () => (new TenantContainerPolicy($context))->apply($shared))->toThrow(\App\Exceptions\PlatformPolicyViolation::class);
+});
+
 it('turns the plan into node limits for the whole tenant', function () {
     $tenant = isolationTenant('pro');
     $limits = TenantLimits::of($tenant);

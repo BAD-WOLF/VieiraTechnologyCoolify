@@ -54,6 +54,21 @@ variable "control_plane_cidrs" {
   type        = list(string)
 }
 
+variable "control_plane_peering" {
+  description = <<-EOT
+    VPC of the Coolify control plane (output region_peering of infra/terraform/control-plane). When set,
+    the region VPC is peered with it, routes are added on both sides and the control plane reaches the
+    nodes over the peering (no WireGuard needed). Required for a control plane cluster. The CIDRs must not overlap.
+  EOT
+  type = object({
+    vpc_id          = string
+    cidr            = string
+    region          = string
+    route_table_ids = list(string)
+  })
+  default = null
+}
+
 variable "wireguard_port" {
   description = "UDP port of the WireGuard tunnel between the Coolify control plane and the region."
   type        = number

@@ -91,6 +91,21 @@ jobs:
         run: vendor/bin/pest --compact
         continue-on-error: true
 
+  upstream:
+    name: Upstream files touched
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Keeps pulls from the official Coolify conflict-free: changing one of its files must be a
+      # conscious decision, recorded in docs/security-model.md.
+      - name: Compare with docs/security-model.md
+        run: |
+          git fetch --no-tags https://github.com/coollabsio/coolify.git v4.x:refs/remotes/upstream/v4.x
+          infra/scripts/upstream-touched-files.sh --check docs/security-model.md upstream/v4.x
+
   infra:
     name: Infrastructure as code
     runs-on: ubuntu-latest
@@ -130,10 +145,11 @@ jobs:
         run: |
           pip install --quiet ansible ansible-lint
           ansible-playbook --syntax-check -i inventory/example.yml playbooks/site.yml
+          ansible-playbook --syntax-check -i inventory/example.yml playbooks/rotate-coolify-key.yml
           ansible-lint --offline playbooks roles
 
       - name: Shell scripts
-        run: shellcheck infra/scripts/*.sh
+        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits
 
       - name: Prometheus and Alertmanager configuration
         working-directory: infra/monitoring

@@ -5,12 +5,15 @@
 coolify_url: "https://cloud.example.com"
 # API token of the root team (Keys & Tokens > API tokens) with read + write permissions.
 coolify_api_token: "{{ vault_coolify_api_token }}"
-# Private key Coolify uses to reach the nodes (Keys & Tokens > Private Keys): uuid + public part.
+# Private key Coolify uses to reach the nodes (Keys & Tokens > Private Keys). The public part is
+# read from Coolify on every run; the one of the vault is only revoked once it is not the current
+# key anymore (after playbooks/rotate-coolify-key.yml).
 coolify_private_key_uuid: "{{ vault_coolify_private_key_uuid }}"
-coolify_ssh_public_key: "{{ vault_coolify_ssh_public_key }}"
+coolify_ssh_public_key: "{{ vault_coolify_ssh_public_key | default('') }}"
 coolify_ssh_user: root
-# Source addresses allowed to use that key (control node = WireGuard exit, plus peered networks).
-coolify_ssh_from: ["{{ control_private_ip }}"]
+# Source addresses allowed to use that key: the control node (WireGuard exit) and, with the VPC
+# peering of Terraform (control_plane_peering), the control plane network.
+coolify_ssh_from: "{{ [control_private_ip] + ([control_plane_vpc_cidr] if (control_plane_vpc_cidr | default('') | length > 0) else []) }}"
 coolify_validate_timeout: 900
 coolify_no_log: true
 
@@ -30,7 +33,9 @@ docker_address_pools:
     size: 24
 docker_log_max_size: 10m
 docker_log_max_file: 3
-docker_gvisor_enabled: false
+# gVisor (runsc) installed on every node, so PLATFORM_CONTAINER_RUNTIME=runsc is enough to
+# sandbox the tenants of the shared nodes (dedicated VMs keep the native runtime).
+docker_gvisor_enabled: true
 
 # --- Registry mirror (control node) ------------------------------------------------------
 registry_mirror_enabled: true
@@ -42,7 +47,8 @@ dockerhub_username: "{{ vault_dockerhub_username | default('') }}"
 dockerhub_token: "{{ vault_dockerhub_token | default('') }}"
 
 # --- WireGuard (Coolify control plane <-> region) -------------------------------------------
-wireguard_enabled: true
+# Not needed when the region is peered with the control plane VPC (control_plane_peering).
+wireguard_enabled: "{{ (control_plane_vpc_cidr | default('') | length) == 0 }}"
 wireguard_port: 51820
 wireguard_address: 10.99.0.1/24
 wireguard_network: 10.99.0.0/24
