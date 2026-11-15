@@ -1,12 +1,11 @@
 # Versions
-# https://hub.docker.com/r/serversideup/php/tags?name=8.4-fpm-nginx-alpine
-ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine
-# https://github.com/minio/mc/releases
-ARG MINIO_VERSION=RELEASE.2025-05-21T01-59-54Z
+# Temporary: serversideup/php v4.5.1 (8.4-fpm-nginx-alpine) rebuilt on the patched PHP 8.4 release
+ARG SERVERSIDEUP_PHP_IMAGE=ghcr.io/coollabsio/serversideup-php:8.4-fpm-nginx-alpine-v4.5.1-hotfix
 # https://github.com/cloudflare/cloudflared/releases
-ARG CLOUDFLARED_VERSION=2025.7.0
+ARG CLOUDFLARED_VERSION=2026.10.3
 # https://www.postgresql.org/support/versioning/
-ARG POSTGRES_VERSION=15
+# Note: We are using version 18 of the postgres client (while still using postgres 15 for the postgres server) as version 15 has been removed from Alpine 3.23+ https://pkgs.alpinelinux.org/packages?name=postgresql*-client&branch=v3.23&repo=&arch=x86_64&origin=&flagged=&maintainer=
+ARG POSTGRES_VERSION=18
 
 # Add user/group
 ARG USER_ID=9999
@@ -15,7 +14,7 @@ ARG GROUP_ID=9999
 # =================================================================
 # Stage 1: Composer dependencies
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION} AS base
+FROM ${SERVERSIDEUP_PHP_IMAGE} AS base
 
 USER root
 
@@ -27,7 +26,8 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 
 WORKDIR /var/www/html
 COPY --chown=www-data:www-data composer.json composer.lock ./
-RUN composer install --no-dev --no-interaction --no-plugins --no-scripts --prefer-dist
+RUN --mount=type=cache,target=/tmp/cache \
+    COMPOSER_CACHE_DIR=/tmp/cache composer install --no-dev --no-interaction --no-plugins --no-scripts --prefer-dist
 
 USER www-data
 
@@ -38,19 +38,21 @@ FROM node:24-alpine AS static-assets
 
 WORKDIR /app
 COPY package*.json vite.config.js postcss.config.cjs ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 COPY . .
 RUN npm run build
 
 # =================================================================
 # Stage 3: Get MinIO client
 # =================================================================
-FROM minio/mc:${MINIO_VERSION} AS minio-client
+# minio/mc is no longer published, reuse the AGPL client that 4.0.0 ships
+FROM ghcr.io/coollabsio/coolify:4.0.0 AS minio-client
 
 # =================================================================
 # Final Stage: Production image
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION}
+FROM ${SERVERSIDEUP_PHP_IMAGE}
 
 ARG USER_ID
 ARG GROUP_ID
@@ -72,8 +74,9 @@ RUN apk add --no-cache gnupg && \
     curl -fSsL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor > /usr/share/keyrings/postgresql.gpg
 
 # Install system dependencies
-RUN apk upgrade
-RUN apk add --no-cache \
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk upgrade && \
+    apk add --no-cache \
     postgresql${POSTGRES_VERSION}-client \
     openssh-client \
     git \

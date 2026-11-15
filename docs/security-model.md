@@ -79,10 +79,15 @@ os comandos e os domínios que ele envia são tratados como hostis.
 
 ## Arquivos do Coolify alterados
 
-Pontos de possível conflito ao fazer merge do upstream (`git fetch upstream && git merge upstream/v4.x`).
-São mudanças pequenas e localizadas. Todo o resto da plataforma está em arquivos novos. A lista é gerada por
-`infra/scripts/upstream-touched-files.sh --write docs/security-model.md`, e o CI falha se um arquivo original
-for alterado sem aparecer aqui.
+Pontos de possível conflito ao fazer merge do upstream (`git fetch upstream v4.0.x && git merge upstream/v4.0.x`;
+o upstream trocou o branch `v4.x` pelos branches `v4.0.x`, `v4.1.x`...). A comparação é feita com o `v4.x` deste
+fork, a base de onde a plataforma partiu. São mudanças pequenas e localizadas. Todo o resto da plataforma está em
+arquivos novos. A lista é gerada por `infra/scripts/upstream-touched-files.sh --write docs/security-model.md`, e o
+CI falha se um arquivo original for alterado sem aparecer aqui.
+
+O `docker/production/Dockerfile` é o mesmo do `v4.0.x` oficial: a imagem `minio/mc` saiu do Docker Hub e o
+`postgresql15-client` saiu do Alpine 3.23, então o Dockerfile da base não constrói mais. Ao sincronizar com o
+`v4.0.x`, ele deixa de aparecer na lista.
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
@@ -92,8 +97,9 @@ for alterado sem aparecer aqui.
 - `app/Models`: `Service.php` (+8/-1)
 - `bootstrap`: `helpers/subscriptions.php` (+1/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
+- `docker`: `production/Dockerfile` (+16/-13)
 - `resources`: `views/components/navbar.blade.php` (+21/-1), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 46 arquivos.
+Total: 47 arquivos.
 <!-- upstream-files:end -->
 

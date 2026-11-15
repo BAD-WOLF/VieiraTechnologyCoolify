@@ -102,10 +102,10 @@ jobs:
 
       # Keeps pulls from the official Coolify conflict-free: changing one of its files must be a
       # conscious decision, recorded in docs/security-model.md.
+      # Against the v4.x branch of this fork, where the platform started (the official repository
+      # replaced its v4.x branch by v4.0.x, v4.1.x...).
       - name: Compare with docs/security-model.md
-        run: |
-          git fetch --no-tags https://github.com/coollabsio/coolify.git v4.x:refs/remotes/upstream/v4.x
-          infra/scripts/upstream-touched-files.sh --check docs/security-model.md upstream/v4.x
+        run: infra/scripts/upstream-touched-files.sh --check docs/security-model.md origin/v4.x
 
   infra:
     name: Infrastructure as code

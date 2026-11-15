@@ -312,7 +312,7 @@ resource "aws_elasticache_replication_group" "redis" {
 }
 
 resource "aws_route53_record" "panel" {
-  count = ! local.cluster && var.route53_zone_id != "" && var.domain != "" ? 1 : 0
+  count = !local.cluster && var.route53_zone_id != "" && var.domain != "" ? 1 : 0
 
   zone_id = var.route53_zone_id
   name    = var.domain

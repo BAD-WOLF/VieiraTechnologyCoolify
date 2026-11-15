@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: "Upstream branch or tag of coollabsio/coolify"
-        default: "v4.x"
+        description: "Upstream branch or tag of coollabsio/coolify (v4.x became v4.0.x, v4.1.x...)"
+        default: "v4.0.x"
 
 permissions:
   contents: write
@@ -34,7 +34,7 @@ jobs:
       - name: Merge upstream
         id: merge
         env:
-          REF: ${{ inputs.upstream_ref || 'v4.x' }}
+          REF: ${{ inputs.upstream_ref || 'v4.0.x' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
