@@ -1,0 +1,93 @@
+groups:
+  - name: nodes
+    rules:
+      - alert: NodeDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+          runbook: docs/region-onboarding.md#node-failure
+      - alert: NodeDiskAlmostFull
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) < 0.10
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+      - alert: NodeMemoryPressure
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Less than 10% memory available on {{ $labels.instance }}"
+      - alert: NodeHighCpu
+        expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "CPU above 85% for 15m on {{ $labels.instance }} (consider adding a node)"
+
+  - name: tenants
+    rules:
+      - record: tenant:cpu_usage_cores:rate5m
+        expr: sum by (tenant_id) (rate(container_cpu_usage_seconds_total{tenant_id!=""}[5m]))
+      - record: tenant:memory_usage_bytes
+        expr: sum by (tenant_id) (container_memory_working_set_bytes{tenant_id!=""})
+      - record: tenant:egress_bytes:rate5m
+        expr: sum by (tenant_id) (rate(container_network_transmit_bytes_total{tenant_id!=""}[5m]))
+      - alert: TenantHighEgress
+        expr: tenant:egress_bytes:rate5m > 100000000
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "High egress for tenant {{ $labels.tenant_id }} (possible abuse)"
+      - alert: TenantContainerRestartLoop
+        expr: increase(container_start_time_seconds{tenant_id!=""}[15m]) > 0 and changes(container_start_time_seconds{tenant_id!=""}[15m]) > 5
+        labels: {severity: info}
+        annotations:
+          summary: "Container {{ $labels.name }} of tenant {{ $labels.tenant_id }} is restarting repeatedly"
+
+  - name: control-plane
+    rules:
+      - alert: ControlPlaneDown
+        expr: up{job="coolify"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The Coolify control plane does not answer the metrics endpoint"
+      - alert: DeploymentQueueBacklog
+        expr: sum(platform_deployments_pending{status="queued"}) > 20
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 20 deployments queued for 15 minutes"
+      - alert: PlatformNodeUnreachable
+        expr: platform_node_reachable == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Coolify can not reach node {{ $labels.node }} ({{ $labels.region }})"
+      - alert: QueueBacklog
+        expr: platform_queue_length > 500
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Horizon queue {{ $labels.queue }} has more than 500 jobs"
+
+  - name: billing
+    rules:
+      - alert: UnpaidUsageInvoices
+        expr: sum(platform_unpaid_invoices) > 0
+        for: 24h
+        labels: {severity: info}
+        annotations:
+          summary: "There are usage invoices open for more than a day"
+
+  - name: synthetic
+    rules:
+      - alert: EndpointDown
+        expr: probe_success == 0
+        for: 3m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.instance }} is not answering"

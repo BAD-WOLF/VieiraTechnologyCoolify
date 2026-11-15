@@ -1,0 +1,3 @@
+- targets: ['10.0.1.10:9100', '10.0.1.11:9100']
+  labels:
+    region: sa-east-1
