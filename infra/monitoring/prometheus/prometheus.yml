@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
   evaluation_interval: 30s
   external_labels:
-    region: sa-east-1   # one Prometheus per region; federate/remote_write to a central store if needed
+    region: ${REGION}   # one Prometheus per region (federate/remote_write to a central store if needed)
 
 rule_files:
   - /etc/prometheus/rules/*.yml
@@ -13,7 +13,8 @@ alerting:
         - targets: ['alertmanager:9093']
 
 scrape_configs:
-  # Execution nodes (private IPs). Keep this list in sync with the inventory, or use file_sd.
+  # Target files are written by infra/ansible/roles/monitoring-stack from the inventory.
+  # Execution nodes (private IPs).
   - job_name: node
     file_sd_configs:
       - files: ['/etc/prometheus/targets/nodes.yml']
@@ -35,6 +36,8 @@ scrape_configs:
         target_label: tenant_plan
       - source_labels: [container_label_coolify_resourceName]
         target_label: resource
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
       - regex: 'container_label_(com_docker_compose_.*|org_opencontainers_.*|traefik_.*|caddy.*)'
         action: labeldrop
 
@@ -45,18 +48,20 @@ scrape_configs:
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/platform_metrics_token
-    static_configs:
-      - targets: ['coolify.example.com']
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/coolify.yml']
 
   # Synthetic checks of public endpoints (control plane, regional LB, status pages).
+  - job_name: edge
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/edge.yml']
+
   - job_name: blackbox_http
     metrics_path: /probe
     params:
       module: [http_2xx]
-    static_configs:
-      - targets:
-          - https://coolify.example.com/api/health
-          - https://status.apps.example.com
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/blackbox.yml']
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

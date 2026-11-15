@@ -1,0 +1,32 @@
+# Managed by Ansible (infra/ansible/roles/edge).
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+
+entryPoints:
+  web:
+    address: ":{{ edge_http_port }}"
+  websecure:
+    address: ":{{ edge_https_port }}"
+  ping:
+    address: ":{{ edge_health_port }}"
+  metrics:
+    address: "{{ private_ip }}:{{ edge_metrics_port }}"
+
+ping:
+  entryPoint: ping
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+
+providers:
+  http:
+    endpoint: "{{ coolify_url }}/api/v1/platform/edge/{{ platform_region }}"
+    pollInterval: "{{ edge_poll_interval }}"
+    pollTimeout: "5s"
+    headers:
+      Authorization: "Bearer {{ platform_edge_token }}"

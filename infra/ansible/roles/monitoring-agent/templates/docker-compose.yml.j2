@@ -1,0 +1,46 @@
+# Managed by Ansible (infra/ansible/roles/monitoring-agent). Listens on the private address only.
+name: platform-agents
+services:
+  node-exporter:
+    image: {{ node_exporter_image }}
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address={{ private_ip }}:9100
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|data/docker/.+)($|/)
+    volumes:
+      - /:/host:ro,rslave
+
+  cadvisor:
+    image: {{ cadvisor_image }}
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --listen_ip={{ private_ip }}
+      - --port={{ cadvisor_port }}
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=tenant_id,tenant_plan,coolify.resourceName,com.docker.compose.service
+      - --disable_metrics=percpu,process,sched,tcp,udp,referenced_memory,hugetlb
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - {{ docker_data_root | default('/var/lib/docker') }}:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  promtail:
+    image: {{ promtail_image }}
+    restart: unless-stopped
+    network_mode: host
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /data/promtail:/var/lib/promtail

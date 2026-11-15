@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Managed by Ansible (infra/ansible/roles/firewall). Tenant containers must not reach the
+# cloud metadata service (host credentials), the private network of the region nor the
+# management ports of the host. Docker keeps the user rules of DOCKER-USER across restarts,
+# and this script is idempotent (platform-firewall.service re-runs it after Docker).
+set -euo pipefail
+
+ensure_chain() {
+  iptables -N "$1" 2>/dev/null || true
+  iptables -F "$1"
+}
+
+ensure_chain PLATFORM-FORWARD
+iptables -A PLATFORM-FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+{% for destination in firewall_blocked_destinations %}
+iptables -A PLATFORM-FORWARD -i docker0 -d {{ destination }} -j DROP
+iptables -A PLATFORM-FORWARD -i br+ -d {{ destination }} -j DROP
+{% endfor %}
+iptables -A PLATFORM-FORWARD -j RETURN
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C DOCKER-USER -j PLATFORM-FORWARD 2>/dev/null || iptables -I DOCKER-USER 1 -j PLATFORM-FORWARD
+
+ensure_chain PLATFORM-INPUT
+iptables -A PLATFORM-INPUT -i docker0 -p tcp -m multiport --dports {{ firewall_management_ports | join(',') }} -j DROP
+iptables -A PLATFORM-INPUT -i br+ -p tcp -m multiport --dports {{ firewall_management_ports | join(',') }} -j DROP
+iptables -A PLATFORM-INPUT -j RETURN
+iptables -C INPUT -j PLATFORM-INPUT 2>/dev/null || iptables -I INPUT 1 -j PLATFORM-INPUT

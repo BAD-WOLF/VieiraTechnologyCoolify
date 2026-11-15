@@ -1,0 +1,50 @@
+- name: Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: [stable]
+    architectures: ["{{ docker_arch }}"]
+    signed_by: https://download.docker.com/linux/ubuntu/gpg
+
+- name: Install Docker Engine
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: true
+
+- name: Install the gVisor runtime
+  ansible.builtin.include_tasks: gvisor.yml
+  when: docker_gvisor_enabled | bool
+
+- name: Docker data root
+  ansible.builtin.file:
+    path: "{{ docker_data_root }}"
+    state: directory
+    mode: "0710"
+
+- name: Trust the regional registry certificate
+  ansible.builtin.copy:
+    src: "{{ docker_registry_ca_file }}"
+    dest: "/etc/docker/certs.d/{{ control_private_ip }}:{{ item }}/ca.crt"
+    mode: "0644"
+  loop: "{{ [registry_mirror_port] + ([registry_private_port] if registry_private_enabled | default(false) else []) }}"
+  when: docker_registry_mirror | length > 0 and docker_registry_ca_file is file
+  notify: Restart docker
+
+- name: Docker daemon configuration
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+  notify: Restart docker
+
+- name: Start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Apply the Docker configuration now
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,43 @@
+# Managed by Ansible (infra/ansible/roles/registry-mirror). Private address only.
+name: platform-registry
+services:
+{% if registry_mirror_enabled | bool %}
+  mirror:
+    image: {{ registry_image }}
+    restart: unless-stopped
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+{% if dockerhub_username | length > 0 %}
+      REGISTRY_PROXY_USERNAME: "{{ dockerhub_username }}"
+      REGISTRY_PROXY_PASSWORD: "{{ dockerhub_token }}"
+{% endif %}
+      REGISTRY_PROXY_TTL: 168h
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - ./certs:/certs:ro
+      - {{ registry_data_dir }}/mirror:/var/lib/registry
+    ports:
+      - "{{ private_ip }}:{{ registry_mirror_port }}:5000"
+{% endif %}
+{% if registry_private_enabled | bool %}
+  private:
+    image: {{ registry_image }}
+    restart: unless-stopped
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: "{{ platform_region }} registry"
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - ./certs:/certs:ro
+      - ./auth:/auth:ro
+      - {{ registry_data_dir }}/private:/var/lib/registry
+    ports:
+      - "{{ private_ip }}:{{ registry_private_port }}:5000"
+{% endif %}

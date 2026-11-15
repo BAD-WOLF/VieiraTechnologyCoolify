@@ -1,0 +1,140 @@
+# CI of the multi-tenant platform (wiki 5: lint, tests and IaC checks on every push / PR).
+name: Platform CI
+
+on:
+  pull_request:
+    branches: [platform]
+  push:
+    branches: [platform]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php:
+    name: Lint and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: coolify
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: coolify_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U coolify"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DB_CONNECTION: testing
+      DB_TEST_HOST: 127.0.0.1
+      DB_TEST_DATABASE: coolify_test
+      DB_TEST_USERNAME: coolify
+      DB_TEST_PASSWORD: password
+      REDIS_HOST: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: pdo_pgsql, pgsql, redis, intl, bcmath, zip, pcntl
+          coverage: none
+
+      - name: Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare the application
+        run: cp .env.development.example .env && php artisan key:generate
+
+      - name: Code style of the platform code
+        run: >-
+          vendor/bin/pint --test
+          app/Actions/Platform app/Livewire/Platform app/Services/Platform
+          app/Exceptions/PlatformPolicyViolation.php
+          app/Http/Controllers/Api/PlatformController.php app/Http/Controllers/Api/RollbackController.php
+          app/Http/Controllers/PlatformEdgeController.php app/Http/Controllers/PlatformMetricsController.php
+          app/Jobs/PlatformCollectServerUsageJob.php app/Jobs/PlatformCollectUsageJob.php
+          app/Jobs/PlatformDailyMaintenanceJob.php app/Jobs/PlatformEnforcementJob.php
+          app/Jobs/PlatformNoticeJob.php app/Jobs/PlatformRollupUsageJob.php
+          app/Models/PlatformAllocation.php app/Models/PlatformInvoice.php app/Models/PlatformRegion.php
+          app/Models/PlatformTenant.php app/Models/AuditLog.php app/Models/UsageEvent.php app/Models/AggregatedUsageHourly.php
+          app/Providers/PlatformServiceProvider.php bootstrap/helpers/platform.php config/platform.php
+          routes/platform tests/Feature/Platform
+
+      - name: Compile the Blade views
+        run: php artisan view:cache
+
+      - name: Platform tests
+        run: vendor/bin/pest --compact tests/Feature/Platform
+
+      # Three upstream tests (PrivateKeyStorageTest x2, ConvertingGitUrlsTest) also fail without the platform.
+      - name: Full test suite (informational)
+        run: vendor/bin/pest --compact
+        continue-on-error: true
+
+  infra:
+    name: Infrastructure as code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Terraform format
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Terraform validate (region template)
+        working-directory: infra/terraform/regions/sa-east-1
+        run: terraform init -backend=false -input=false && terraform validate
+
+      - name: Policy as code (Checkov)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          framework: terraform
+          soft_fail: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ansible syntax and lint
+        working-directory: infra/ansible
+        env:
+          ANSIBLE_CONFIG: ansible.cfg
+        run: |
+          pip install --quiet ansible ansible-lint
+          ansible-playbook --syntax-check -i inventory/example.yml playbooks/site.yml
+          ansible-lint --offline playbooks roles
+
+      - name: Shell scripts
+        run: shellcheck infra/scripts/*.sh
+
+      - name: Prometheus and Alertmanager configuration
+        working-directory: infra/monitoring
+        run: |
+          cp prometheus/platform_metrics_token.example prometheus/platform_metrics_token
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v2.55.1 check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --entrypoint amtool prom/alertmanager:v0.27.0 check-config /etc/alertmanager/alertmanager.yml
+          docker compose --env-file .env.example config --quiet

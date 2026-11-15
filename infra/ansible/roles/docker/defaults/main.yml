@@ -1,0 +1,13 @@
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+docker_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('amd64') }}"
+# Regional pull-through cache of Docker Hub (registry-mirror role on the control node).
+docker_registry_mirror: >-
+  {{ ('https://' ~ control_private_ip ~ ':' ~ registry_mirror_port)
+     if (registry_mirror_enabled | default(false)) and control_private_ip is defined else '' }}
+docker_registry_ca_file: "{{ playbook_dir }}/../.cache/{{ platform_region }}-registry-ca.crt"
+docker_gvisor_platform: systrap

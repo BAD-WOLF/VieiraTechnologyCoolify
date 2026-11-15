@@ -1,0 +1,79 @@
+# Regional registry (wiki 2): pull-through cache of Docker Hub used by every node (registry-mirrors)
+# and, optionally, a private registry (htpasswd + TLS) that receives the images replicated by CI
+# with skopeo (infra/scripts/promote-to-mirror.sh).
+- name: Registry packages
+  ansible.builtin.apt:
+    name: [skopeo, apache2-utils, python3-passlib, python3-bcrypt]
+    state: present
+
+- name: Registry directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - "{{ registry_dir }}"
+    - "{{ registry_dir }}/certs"
+    - "{{ registry_dir }}/ca"
+    - "{{ registry_dir }}/auth"
+    - "{{ registry_data_dir }}/mirror"
+    - "{{ registry_data_dir }}/private"
+
+- name: Certificate authority of the regional registry
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days {{ registry_ca_days }}
+      -keyout ca.key -out ca.crt -subj "/CN={{ platform_region }} platform registry CA"
+    chdir: "{{ registry_dir }}/certs"
+    creates: "{{ registry_dir }}/certs/ca.crt"
+
+- name: Registry certificate (private address)
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      openssl req -newkey rsa:2048 -nodes -keyout registry.key -out registry.csr -subj "/CN={{ private_ip }}"
+      printf 'subjectAltName=IP:%s\nextendedKeyUsage=serverAuth\n' "{{ private_ip }}" > registry.ext
+      openssl x509 -req -in registry.csr -CA ca.crt -CAkey ca.key -CAcreateserial -sha256 \
+        -days {{ registry_cert_days }} -extfile registry.ext -out registry.crt
+      chmod 0640 registry.key ca.key
+    chdir: "{{ registry_dir }}/certs"
+    creates: "{{ registry_dir }}/certs/registry.crt"
+    executable: /bin/bash
+
+- name: CA only directory for clients (skopeo --dest-cert-dir)
+  ansible.builtin.copy:
+    src: "{{ registry_dir }}/certs/ca.crt"
+    dest: "{{ registry_dir }}/ca/ca.crt"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy the CA to the Ansible controller (trusted by the nodes)
+  ansible.builtin.fetch:
+    src: "{{ registry_dir }}/certs/ca.crt"
+    dest: "{{ playbook_dir }}/../.cache/{{ platform_region }}-registry-ca.crt"
+    flat: true
+
+- name: Private registry users
+  community.general.htpasswd:
+    path: "{{ registry_dir }}/auth/htpasswd"
+    name: "{{ item.username }}"
+    password: "{{ item.password }}"
+    crypt_scheme: bcrypt
+    mode: "0640"
+  loop: "{{ registry_users }}"
+  no_log: true
+  when: registry_private_enabled | bool
+
+- name: Registry compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ registry_dir }}/docker-compose.yml"
+    mode: "0640"
+  notify: Restart registries
+
+- name: Start the registries
+  community.docker.docker_compose_v2:
+    project_src: "{{ registry_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true

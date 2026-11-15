@@ -1,0 +1,16 @@
+# Wiki 2: installs Docker and dependencies on the execution nodes, hardens them, starts the
+# monitoring agents and the edge router, then registers each node in Coolify (Multiple Servers)
+# and assigns it to its platform region.
+#
+#   ansible-playbook -i inventory/sa-east-1.yml playbooks/bootstrap-nodes.yml --ask-vault-pass
+- name: Bootstrap Coolify nodes
+  hosts: coolify_nodes
+  become: true
+  serial: "{{ bootstrap_serial | default('100%') }}"
+  roles:
+    - common
+    - docker
+    - firewall
+    - monitoring-agent
+    - edge
+    - coolify-agent

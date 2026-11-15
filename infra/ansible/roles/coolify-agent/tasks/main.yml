@@ -1,0 +1,23 @@
+# Coolify manages its nodes over SSH (there is no resident agent): this role prepares the node,
+# authorizes the control plane key and registers the node through the Coolify API
+# (wiki 2, "Registrar nós no Coolify (Multiple Servers)").
+- name: Coolify directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ coolify_directories }}"
+
+- name: Authorize the Coolify control plane key
+  ansible.posix.authorized_key:
+    user: "{{ coolify_ssh_user }}"
+    key: "{{ coolify_ssh_public_key }}"
+    key_options: "{{ ('from=\"' ~ (coolify_ssh_from | join(',')) ~ '\"') if coolify_ssh_from | length > 0 else omit }}"
+    state: present
+
+- name: Register the node in Coolify
+  ansible.builtin.include_tasks: register.yml
+  args:
+    apply:
+      delegate_to: localhost
+      become: false

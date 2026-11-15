@@ -9,11 +9,11 @@ groups:
           summary: "Node {{ $labels.instance }} is down"
           runbook: docs/region-onboarding.md#node-failure
       - alert: NodeDiskAlmostFull
-        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) < 0.10
+        expr: (node_filesystem_avail_bytes{mountpoint=~"/|/data",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint=~"/|/data",fstype!~"tmpfs|overlay"}) < 0.10
         for: 5m
         labels: {severity: critical}
         annotations:
-          summary: "Disk almost full on {{ $labels.instance }}"
+          summary: "Disk {{ $labels.mountpoint }} almost full on {{ $labels.instance }}"
       - alert: NodeMemoryPressure
         expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.10
         for: 10m

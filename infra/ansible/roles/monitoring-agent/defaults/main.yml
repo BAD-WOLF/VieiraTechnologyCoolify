@@ -1,0 +1,5 @@
+monitoring_agent_dir: /opt/platform-agents
+node_exporter_image: prom/node-exporter:v1.8.2
+cadvisor_image: gcr.io/cadvisor/cadvisor:v0.49.1
+promtail_image: grafana/promtail:3.2.1
+cadvisor_port: 9280

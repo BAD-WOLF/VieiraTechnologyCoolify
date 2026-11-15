@@ -1,0 +1,11 @@
+## Managed by Ansible (infra/ansible/roles/common).
+-w /usr/bin/dockerd -p x -k docker
+-w /usr/bin/containerd -p x -k docker
+-w /etc/docker -p wa -k docker
+-w /var/run/docker.sock -p rwa -k docker
+-w {{ docker_data_root | default('/var/lib/docker') }} -p wa -k docker-data
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d -p wa -k sshd
+-w /root/.ssh -p wa -k root-ssh
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d -p wa -k sudoers

@@ -1,0 +1,73 @@
+- name: List the servers of the control plane
+  ansible.builtin.uri:
+    url: "{{ coolify_url }}/api/v1/servers"
+    headers:
+      Authorization: "Bearer {{ coolify_api_token }}"
+      Accept: application/json
+    return_content: true
+  register: coolify_servers
+  no_log: "{{ coolify_no_log }}"
+
+- name: Find this node
+  ansible.builtin.set_fact:
+    coolify_server: "{{ coolify_servers.json | selectattr('ip', 'equalto', private_ip) | list | first | default({}) }}"
+
+- name: Create the server in Coolify (validation and proxy start run in the background)
+  ansible.builtin.uri:
+    url: "{{ coolify_url }}/api/v1/servers"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ coolify_api_token }}"
+      Accept: application/json
+    body_format: json
+    body:
+      name: "{{ inventory_hostname }}"
+      description: "{{ platform_region }} execution node"
+      ip: "{{ private_ip }}"
+      port: 22
+      user: "{{ coolify_ssh_user }}"
+      private_key_uuid: "{{ coolify_private_key_uuid }}"
+      is_build_server: false
+      instant_validate: true
+      proxy_type: "{{ coolify_proxy_type }}"
+    status_code: [200, 201]
+  register: coolify_created
+  when: coolify_server.uuid is not defined
+  no_log: "{{ coolify_no_log }}"
+
+- name: Remember the server uuid
+  ansible.builtin.set_fact:
+    coolify_server_uuid: "{{ coolify_server.uuid | default(coolify_created.json.uuid | default('')) }}"
+
+- name: Wait until Coolify reaches and validates the node
+  ansible.builtin.uri:
+    url: "{{ coolify_url }}/api/v1/servers/{{ coolify_server_uuid }}"
+    headers:
+      Authorization: "Bearer {{ coolify_api_token }}"
+      Accept: application/json
+    return_content: true
+  register: coolify_status
+  until: >-
+    (coolify_status.json.settings.is_reachable | default(false) | bool)
+    and (coolify_status.json.settings.is_usable | default(false) | bool)
+  retries: "{{ (coolify_validate_timeout | int / 15) | int }}"
+  delay: 15
+  no_log: "{{ coolify_no_log }}"
+
+# After the validation, so the tenant networks can be created on the node right away.
+- name: Assign the node to its platform region and wildcard domain
+  ansible.builtin.uri:
+    url: "{{ coolify_url }}/api/v1/platform/servers/{{ coolify_server_uuid }}/region"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ coolify_api_token }}"
+      Accept: application/json
+    body_format: json
+    body: >-
+      {{ {'region': platform_region, 'region_name': platform_region_name, 'wildcard_domain': platform_apps_wildcard}
+         | combine({'dedicated_team_id': platform_dedicated_team_id | int} if platform_dedicated_team_id | string | length > 0 else {}) }}
+  no_log: "{{ coolify_no_log }}"
+
+- name: Node registered
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} is online in Coolify ({{ coolify_server_uuid }}), region {{ platform_region }}."

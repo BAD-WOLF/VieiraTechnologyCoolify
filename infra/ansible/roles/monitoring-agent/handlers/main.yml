@@ -1,0 +1,4 @@
+- name: Restart monitoring agents
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_agent_dir }}"
+    state: restarted

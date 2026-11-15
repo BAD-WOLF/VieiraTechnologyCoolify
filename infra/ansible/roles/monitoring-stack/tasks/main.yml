@@ -1,0 +1,55 @@
+# Regional observability (wiki 6 and 8) from infra/monitoring, with targets from the inventory.
+- name: Copy the monitoring stack
+  ansible.builtin.copy:
+    src: "{{ monitoring_source }}"
+    dest: "{{ monitoring_dir }}/"
+    mode: preserve
+    directory_mode: "0755"
+  notify: Restart monitoring stack
+
+- name: Stack environment
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ monitoring_dir }}/.env"
+    mode: "0600"
+  notify: Restart monitoring stack
+
+- name: Alert receivers
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml"
+    mode: "0640"
+  notify: Restart monitoring stack
+
+- name: Control plane metrics token (PLATFORM_METRICS_TOKEN)
+  ansible.builtin.copy:
+    content: "{{ platform_metrics_token }}"
+    dest: "{{ monitoring_dir }}/prometheus/platform_metrics_token"
+    owner: "65534"
+    mode: "0400"
+  no_log: true
+
+- name: Scrape targets
+  ansible.builtin.copy:
+    dest: "{{ monitoring_dir }}/prometheus/targets/{{ item.file }}"
+    mode: "0644"
+    content: "{{ [{'targets': item.targets}] | to_nice_yaml }}"
+  loop:
+    - file: nodes.yml
+      targets: "{{ groups['coolify_nodes'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9100') | list }}"
+    - file: cadvisor.yml
+      targets: "{{ groups['coolify_nodes'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':9280') | list }}"
+    - file: edge.yml
+      targets: "{{ groups['coolify_nodes'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '$', ':10083') | list }}"
+    - file: coolify.yml
+      targets: ["{{ coolify_url | urlsplit('netloc') }}"]
+    - file: blackbox.yml
+      targets: "{{ [coolify_url ~ '/api/health'] + blackbox_targets }}"
+  loop_control:
+    label: "{{ item.file }}"
+
+- name: Start Prometheus, Alertmanager, Loki, Grafana and Blackbox
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    state: present
+    pull: missing

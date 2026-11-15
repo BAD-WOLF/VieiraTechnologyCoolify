@@ -1,0 +1,13 @@
+coolify_directories:
+  - /data/coolify/source
+  - /data/coolify/ssh/keys
+  - /data/coolify/ssh/mux
+  - /data/coolify/applications
+  - /data/coolify/databases
+  - /data/coolify/services
+  - /data/coolify/backups
+  - /data/coolify/proxy
+  - /data/coolify/proxy/dynamic
+  - /data/coolify/sentinel
+coolify_proxy_type: traefik
+platform_dedicated_team_id: ""

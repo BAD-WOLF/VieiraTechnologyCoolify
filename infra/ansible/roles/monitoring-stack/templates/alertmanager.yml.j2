@@ -1,0 +1,35 @@
+# Managed by Ansible (infra/ansible/roles/monitoring-stack).
+global:
+  smtp_smarthost: {{ smtp_smarthost | to_json }}
+  smtp_from: {{ smtp_from | to_json }}
+{% if smtp_username | length > 0 %}
+  smtp_auth_username: {{ smtp_username | to_json }}
+  smtp_auth_password: {{ smtp_password | to_json }}
+{% endif %}
+  smtp_require_tls: true
+
+route:
+  receiver: ops-email
+  group_by: [alertname, region]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+{% if alert_slack_webhook_url | length > 0 %}
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: ops-slack
+      continue: true
+{% endif %}
+
+receivers:
+  - name: ops-email
+    email_configs:
+      - to: {{ alert_email_to | to_json }}
+        send_resolved: true
+{% if alert_slack_webhook_url | length > 0 %}
+  - name: ops-slack
+    slack_configs:
+      - api_url: {{ alert_slack_webhook_url | to_json }}
+        send_resolved: true
+        title: '{{ "{{" }} .CommonAnnotations.summary {{ "}}" }}'
+{% endif %}

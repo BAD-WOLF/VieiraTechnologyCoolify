@@ -1,0 +1,27 @@
+# Control traffic of the Coolify control plane (wiki 2: "VPN / WireGuard entre regiões"): the
+# master reaches the private node addresses through this tunnel, SSH only, translated to the
+# address of the control node (the nodes accept the Coolify key from it only).
+- name: Install WireGuard
+  ansible.builtin.apt:
+    name: wireguard
+    state: present
+
+- name: Forward packets
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.d/90-wireguard.conf
+    reload: true
+
+- name: Tunnel configuration
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "/etc/wireguard/{{ wireguard_interface }}.conf"
+    mode: "0600"
+  notify: Restart wireguard
+
+- name: Start the tunnel
+  ansible.builtin.service:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: started
+    enabled: true

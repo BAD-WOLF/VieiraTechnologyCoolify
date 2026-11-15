@@ -1,0 +1,175 @@
+# Onboarding de uma região
+
+Runbook da página 2 da wiki: criar uma região deve ser `terraform apply` + `ansible-playbook` + validação.
+O exemplo usa `sa-east-1` (São Paulo).
+
+## Arquitetura da região
+
+```
+                 *.apps.example.com / edge.sa-east-1.example.com (Route53 latency ou Cloudflare)
+                                         │
+                         Network Load Balancer (TCP 80/443, IP do cliente preservado)
+                                         │
+              ┌──────────────────────────┼──────────────────────────┐
+              ▼                          ▼                          ▼
+   nó 01: edge :10080/:10443   nó 02: edge :10080/:10443   …   (Traefik "edge", configuração
+          │                          │                            vinda do Coolify a cada 5 s)
+          └──────── HTTP pelo Host / HTTPS por SNI (passthrough) ──► coolify-proxy :80/:443 do nó
+                                                                     que roda o host (TLS + ACME)
+
+   nó de controle (sub-rede pública): bastion SSH, WireGuard do control plane, registry mirror,
+   Prometheus/Alertmanager/Loki/Grafana/Blackbox
+```
+
+- O **control plane** (Coolify master) gerencia os nós por SSH (não há agente residente) pelo túnel WireGuard até o nó de controle, que faz NAT apenas para a porta 22 dos nós.
+- O **edge** existe porque um único wildcard DNS/LB precisa chegar a qualquer nó. Cada edge sabe, via `GET /api/v1/platform/edge/sa-east-1`, em que nó(s) roda cada host. O TLS continua no proxy do Coolify de cada nó, e os desafios ACME HTTP-01 passam pelo edge normalmente.
+- Os **containers dos tenants** não alcançam o metadata service, a VPC, o WireGuard nem as portas de gerência do host (role `firewall`). O IMDSv2 com hop limit 1 também impede o uso das credenciais da instância.
+
+## Pré-requisitos
+
+1. Um control plane Coolify rodando a imagem do fork, com `PLATFORM_ENABLED=true` (veja `docs/platform.md`).
+2. No Coolify, como time root:
+   - **Keys & Tokens → Private Keys**: crie ou gere a chave que o Coolify usará nos nós e anote o uuid e a chave pública;
+   - **Keys & Tokens → API tokens**: crie um token com permissões *read* e *write* para o Ansible.
+3. Conta AWS com permissão para VPC, EC2, ELB, S3, IAM, DLM e Route53 (opcional), Terraform ≥ 1.6 e Ansible ≥ 9 (`pip install ansible`).
+4. WireGuard no host do control plane (`wg genkey | tee priv | wg pubkey > pub`).
+
+## 1. Infraestrutura (Terraform)
+
+```bash
+cd infra/terraform/regions/sa-east-1
+cp terraform.tfvars.example terraform.tfvars   # chave SSH, CIDRs de admin, IP do control plane, domínios
+terraform init
+terraform plan -out region.tfplan
+terraform apply region.tfplan
+```
+
+O que é criado:
+
+- **Rede:** VPC 10.20.0.0/16 com sub-redes públicas e privadas em 2 AZs, NAT gateway e endpoint S3.
+- **Instâncias:** nó de controle (`m6i.2xlarge`, EIP, 1 TB) e 2 nós de execução (`m6i.8xlarge`, volume de dados gp3 de 1 TB em `/data`), todos com IMDSv2 obrigatório e discos criptografados.
+- **Load balancer:** NLB (80→10080, 443→10443) com health check em `:10082/ping`.
+- **Security groups:** só o necessário (veja `security.tf`).
+- **Backups:** bucket S3 versionado e criptografado, com lifecycle e replicação opcional para outra região, e snapshots diários dos volumes de dados (DLM, 7 retidos).
+- **DNS (Route53, opcional):** `*.apps_domain` com latency routing e `edge_domain`.
+- **Inventário do Ansible:** `infra/ansible/inventory/sa-east-1.yml`.
+
+Para habilitar bancos públicos dos tenants, use `public_database_access = true`: os nós vão para sub-redes públicas com EIP e a faixa 20000–29999 é aberta.
+Sem Route53, aponte `*.apps.example.com` e `edge.sa-east-1.example.com` (CNAME) para o output `edge_lb_dns_name`.
+O state remoto é configurado com `backend.tf.example`.
+
+## 2. Segredos (Ansible Vault)
+
+```bash
+cd infra/ansible
+cp inventory/group_vars/all/vault.yml.example inventory/group_vars/all/vault.yml
+$EDITOR inventory/group_vars/all/vault.yml      # token da API, uuid/chave pública, tokens edge/metrics, WireGuard, Grafana
+ansible-vault encrypt inventory/group_vars/all/vault.yml
+$EDITOR inventory/group_vars/all/main.yml       # coolify_url, platform_apps_wildcard, alertas
+```
+
+`platform_edge_token` e `platform_metrics_token` têm de ser os mesmos valores de `PLATFORM_EDGE_TOKEN` e
+`PLATFORM_METRICS_TOKEN` no `.env` do control plane.
+
+## 3. Nó de controle e nós de execução (Ansible)
+
+```bash
+ansible-playbook -i inventory/sa-east-1.yml playbooks/site.yml --ask-vault-pass
+# ou em etapas:
+ansible-playbook -i inventory/sa-east-1.yml playbooks/control-node.yml --ask-vault-pass
+ansible-playbook -i inventory/sa-east-1.yml playbooks/bootstrap-nodes.yml --ask-vault-pass
+```
+
+O playbook do controle (`control-node.yml`) roda os roles `common` (pacotes, sysctl, sshd, auditd, journald, montagem de `/data`), `docker`, `firewall`, `wireguard`, `registry-mirror` (cache do Docker Hub com TLS, mais um registry privado opcional) e `monitoring-stack` (o conteúdo de `infra/monitoring` com alvos gerados a partir do inventário).
+
+O `bootstrap-nodes.yml` roda, em cada nó:
+
+- `common`, `docker` (data-root em `/data/docker`, pools de endereço para uma rede por tenant, `no-new-privileges`, `live-restore`, logs limitados, mirror regional e gVisor opcional) e `firewall`;
+- `monitoring-agent` (node_exporter, cAdvisor e Promtail com labels `tenant_id`) e `edge`;
+- `coolify-agent`, que cria os diretórios `/data/coolify`, autoriza a chave do control plane (só a partir do IP do nó de controle), cadastra o nó via `POST /api/v1/servers`, espera o Coolify validá-lo e então atribui região e wildcard via `POST /api/v1/platform/servers/{uuid}/region`.
+
+Na atribuição de região o Coolify também cria as redes `tenant-{id}` dos tenants já provisionados no novo nó.
+
+### Conectar o control plane (WireGuard)
+
+No host do control plane, crie `/etc/wireguard/wg-sa-east-1.conf`:
+
+```ini
+[Interface]
+Address = 10.99.0.2/24
+PrivateKey = <chave privada do control plane>
+
+[Peer]
+PublicKey = <chave pública do nó de controle (wg pubkey < vault_wireguard_private_key)>
+Endpoint = <IP público do nó de controle>:51820
+AllowedIPs = 10.20.0.0/16
+PersistentKeepalive = 25
+```
+
+Depois rode `systemctl enable --now wg-quick@wg-sa-east-1`. Se o control plane estiver numa VPC com peering, desligue `wireguard_enabled` e inclua o CIDR dele em `coolify_ssh_from` e em `control_plane_cidrs`.
+
+### Proxy dos nós (IP real do cliente)
+
+O edge envia `X-Forwarded-For` com o IP do cliente. Para o Traefik dos nós confiar nele, em
+**Servers → <nó> → Proxy → Configuration** acrescente ao `command` do Traefik:
+
+```
+- '--entrypoints.http.forwardedheaders.trustedips=10.20.0.0/16'
+- '--entrypoints.https.proxyprotocol.trustedips=10.20.0.0/16'
+```
+
+Com a segunda linha ativa em todos os nós, ligue `PLATFORM_EDGE_PROXY_PROTOCOL=true` no control plane para preservar o IP também no HTTPS (passthrough).
+
+## 4. Monitoramento
+
+Grafana, Prometheus e Alertmanager escutam apenas no localhost do nó de controle:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 ubuntu@<ip do nó de controle>
+```
+
+Os dashboards *Platform overview* e *Tenant overview* (CPU, memória, egress, reservas e logs por `tenant_id`) são provisionados automaticamente.
+As regras de alerta estão em `infra/monitoring/prometheus/rules/platform.yml` (nós, tenants, control plane, fila, cobrança e sondas).
+
+## 5. Validação (checklist da wiki)
+
+```bash
+# no nó de controle
+PLATFORM_EDGE_TOKEN=... ./region-smoke-test.sh https://cloud.example.com sa-east-1 \
+  <edge_lb_dns_name> "10.20.128.10 10.20.144.10" https://teste.apps.example.com
+```
+
+- [ ] **Smoke deploy:** crie um tenant de teste, faça o deploy de uma aplicação em cada nó e confira o pull pelo mirror (`docker info | grep -A1 Mirrors`) e o health check.
+- [ ] **Failover do LB:** pare o edge de um nó (`docker stop platform-edge-edge-1`); o NLB deve tirá-lo do pool em cerca de 30 s.
+- [ ] **Imagens:** `infra/scripts/promote-to-mirror.sh` do registry central para o regional (registry privado ligado).
+- [ ] **Backup e restore:** faça um backup agendado de um banco de teste para S3 e restaure; restaure um snapshot de volume (DLM) numa instância temporária.
+- [ ] **Segurança:** `nmap` externo (só 80/443 no NLB e 22 no bastion); dentro de um container de tenant, `curl 169.254.169.254`, `curl <ip privado de outro nó>:9100` e `curl <ip do host>:22` precisam falhar.
+- [ ] **WireGuard:** `wg show` no nó de controle com handshake recente, e todos os nós `online` no Coolify.
+
+## Runbooks de emergência
+
+### Falha de nó
+
+1. O alerta `NodeDown` ou `PlatformNodeUnreachable` dispara, e o NLB remove o nó sozinho.
+2. Se o nó não voltar, aumente `node_count` ou substitua a instância com `terraform apply -replace='module.region.aws_instance.node[N]'`.
+3. Restaure o volume de dados a partir do último snapshot (DLM), anexe-o como `/dev/sdf` e ajuste `data_volume_id` se ele mudar.
+4. Rode `ansible-playbook ... bootstrap-nodes.yml --limit <nó>`. O Coolify reconhece o nó pelo IP, e se o IP mudar ele é cadastrado de novo.
+5. Redeploy dos recursos afetados (o console mostra os tenants do nó).
+
+### Região fora do ar
+
+O wildcard com latency routing e `evaluate_target_health` faz o Route53 responder com a próxima região saudável.
+Os dados dos tenants não são replicados entre regiões automaticamente: restaure os backups do bucket replicado (`backup_replication_bucket_arn`).
+
+### Registry indisponível
+
+Sem o mirror, o Docker dos nós volta ao Docker Hub automaticamente (`registry-mirrors` é só cache). Corrija rodando `control-node.yml` de novo ou recriando o nó de controle.
+
+### Atualização do control plane
+
+Crie a tag `platform-vX.Y.Z`. O workflow `platform-release.yml` faz build, scan, assinatura e replicação, e depois o job *deploy* (environment `production`, com aprovação) roda `upgrade-control-plane.sh`, que volta à imagem anterior se `/api/health` não responder em 5 minutos.
+
+## Escala
+
+- **Mais nós:** aumente `node_count` e rode `terraform apply` + `bootstrap-nodes.yml --limit <novos nós>`. O alerta `NodeHighCpu` (> 85% por 15 min) é o gatilho sugerido.
+- **Workers:** o control plane escala o Horizon pelo tamanho das filas (`platform_queue_length`).

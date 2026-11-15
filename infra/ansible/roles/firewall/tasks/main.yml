@@ -1,0 +1,31 @@
+- name: Firewall script
+  ansible.builtin.template:
+    src: platform-firewall.sh.j2
+    dest: /usr/local/sbin/platform-firewall
+    mode: "0750"
+  notify: Apply platform firewall
+
+- name: Firewall service (re-applied whenever Docker restarts)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/platform-firewall.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Platform tenant isolation rules (DOCKER-USER / INPUT)
+      After=docker.service
+      PartOf=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/platform-firewall
+
+      [Install]
+      WantedBy=multi-user.target docker.service
+  notify: Apply platform firewall
+
+- name: Enable the firewall service
+  ansible.builtin.systemd_service:
+    name: platform-firewall
+    enabled: true
+    daemon_reload: true

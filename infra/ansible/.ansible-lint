@@ -1,0 +1,5 @@
+# Role names follow the wiki (e.g. roles/coolify-agent), hyphens included.
+skip_list:
+  - role-name
+exclude_paths:
+  - .cache/

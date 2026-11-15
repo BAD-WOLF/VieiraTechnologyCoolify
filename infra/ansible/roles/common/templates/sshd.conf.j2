@@ -1,0 +1,13 @@
+# Managed by Ansible (infra/ansible/roles/common).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+PermitEmptyPasswords no
+MaxAuthTries 3
+LoginGraceTime 30
+X11Forwarding no
+AllowAgentForwarding no
+{# The control node is the Ansible bastion (ProxyJump needs TCP forwarding). #}
+AllowTcpForwarding {{ 'yes' if inventory_hostname in groups.get('control', []) else 'no' }}
+ClientAliveInterval 300
+ClientAliveCountMax 2

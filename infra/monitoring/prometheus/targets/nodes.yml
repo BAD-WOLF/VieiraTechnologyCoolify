@@ -1,3 +1,2 @@
-- targets: ['10.0.1.10:9100', '10.0.1.11:9100']
-  labels:
-    region: sa-east-1
+# Example. Written by infra/ansible/roles/monitoring-stack from the inventory.
+- targets: ['10.20.128.10:9100', '10.20.144.10:9100']

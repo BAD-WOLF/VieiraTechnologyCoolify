@@ -1,0 +1,64 @@
+# Settings shared by every region. Secrets come from inventory/group_vars/all/vault.yml
+# (ansible-vault encrypt group_vars/all/vault.yml), see vault.yml.example.
+
+# --- Coolify control plane (master) -------------------------------------------------------
+coolify_url: "https://cloud.example.com"
+# API token of the root team (Keys & Tokens > API tokens) with read + write permissions.
+coolify_api_token: "{{ vault_coolify_api_token }}"
+# Private key Coolify uses to reach the nodes (Keys & Tokens > Private Keys): uuid + public part.
+coolify_private_key_uuid: "{{ vault_coolify_private_key_uuid }}"
+coolify_ssh_public_key: "{{ vault_coolify_ssh_public_key }}"
+coolify_ssh_user: root
+# Source addresses allowed to use that key (control node = WireGuard exit, plus peered networks).
+coolify_ssh_from: ["{{ control_private_ip }}"]
+coolify_validate_timeout: 900
+coolify_no_log: true
+
+# --- Platform ----------------------------------------------------------------------------
+platform_region_name: "São Paulo"
+# Wildcard domain of the region nodes: new applications get https://<random>.apps.example.com
+platform_apps_wildcard: "https://apps.example.com"
+platform_edge_token: "{{ vault_platform_edge_token }}"
+platform_metrics_token: "{{ vault_platform_metrics_token }}"
+
+# --- Docker ------------------------------------------------------------------------------
+docker_data_root: /data/docker
+# One network per tenant and node: the default Docker pools only fit ~30 networks.
+# Must not overlap the VPC (vpc_cidr) nor the WireGuard network.
+docker_address_pools:
+  - base: 10.200.0.0/14
+    size: 24
+docker_log_max_size: 10m
+docker_log_max_file: 3
+docker_gvisor_enabled: false
+
+# --- Registry mirror (control node) ------------------------------------------------------
+registry_mirror_enabled: true
+registry_mirror_port: 5000
+registry_private_enabled: false
+registry_private_port: 5443
+registry_users: "{{ vault_registry_users | default([]) }}"
+dockerhub_username: "{{ vault_dockerhub_username | default('') }}"
+dockerhub_token: "{{ vault_dockerhub_token | default('') }}"
+
+# --- WireGuard (Coolify control plane <-> region) -------------------------------------------
+wireguard_enabled: true
+wireguard_port: 51820
+wireguard_address: 10.99.0.1/24
+wireguard_network: 10.99.0.0/24
+wireguard_private_key: "{{ vault_wireguard_private_key | default('') }}"
+wireguard_peers:
+  - name: coolify-control-plane
+    public_key: "{{ vault_wireguard_control_plane_public_key | default('') }}"
+    allowed_ips: 10.99.0.2/32
+
+# --- Monitoring ----------------------------------------------------------------------------
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
+grafana_root_url: "https://grafana.{{ platform_region }}.example.com"
+alert_email_to: ops@example.com
+alert_slack_webhook_url: "{{ vault_alert_slack_webhook_url | default('') }}"
+smtp_smarthost: smtp.example.com:587
+smtp_from: alerts@example.com
+smtp_username: "{{ vault_smtp_username | default('') }}"
+smtp_password: "{{ vault_smtp_password | default('') }}"
+blackbox_targets: []

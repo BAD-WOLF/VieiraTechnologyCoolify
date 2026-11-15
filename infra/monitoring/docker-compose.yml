@@ -11,6 +11,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
       - --web.enable-lifecycle
+      - --enable-feature=expand-external-labels
+    environment:
+      - REGION=${REGION:?set REGION}
     volumes:
       - ./prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -23,16 +26,10 @@ services:
     restart: unless-stopped
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
-      - --config.expand-env=true
-    environment:
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
-      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO}
-      - SMTP_SMARTHOST=${SMTP_SMARTHOST}
-      - SMTP_FROM=${SMTP_FROM}
-      - SMTP_USERNAME=${SMTP_USERNAME}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - --storage.path=/alertmanager
     volumes:
       - ./alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
     ports:
       - "127.0.0.1:9093:9093"
     networks: [monitoring]
@@ -77,5 +74,6 @@ networks:
 
 volumes:
   prometheus-data: {}
+  alertmanager-data: {}
   loki-data: {}
   grafana-data: {}

@@ -1,0 +1,4 @@
+- name: Restart edge
+  community.docker.docker_compose_v2:
+    project_src: "{{ edge_dir }}"
+    state: restarted

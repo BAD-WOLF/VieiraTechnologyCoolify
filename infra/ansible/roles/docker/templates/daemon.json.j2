@@ -1,0 +1,19 @@
+{% set config = {
+  'data-root': docker_data_root,
+  'log-driver': 'json-file',
+  'log-opts': {'max-size': docker_log_max_size, 'max-file': docker_log_max_file | string},
+  'live-restore': true,
+  'no-new-privileges': true,
+  'userland-proxy': false,
+  'icc': false,
+  'default-address-pools': docker_address_pools,
+  'default-ulimits': {'nofile': {'Name': 'nofile', 'Soft': 65536, 'Hard': 65536}},
+  'features': {'buildkit': true}
+} %}
+{% if docker_registry_mirror | length > 0 %}
+{% set config = config | combine({'registry-mirrors': [docker_registry_mirror]}) %}
+{% endif %}
+{% if docker_gvisor_enabled | bool %}
+{% set config = config | combine({'runtimes': {'runsc': {'path': '/usr/bin/runsc', 'runtimeArgs': ['--platform=' ~ docker_gvisor_platform]}}}) %}
+{% endif %}
+{{ config | to_nice_json }}

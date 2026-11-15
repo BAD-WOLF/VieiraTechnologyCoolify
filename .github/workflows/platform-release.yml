@@ -1,0 +1,186 @@
+# Release of the platform image (wiki 5): build multi-arch -> scan (Trivy) -> SBOM -> sign
+# (cosign keyless) -> replicate to the regional registries (skopeo) -> upgrade the control plane
+# with automatic rollback. Tags: platform-vMAJOR.MINOR.PATCH (upstream Coolify tags are ignored).
+name: Platform release
+
+on:
+  push:
+    tags: ["platform-v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to publish (e.g. platform-v1.2.3)"
+        required: true
+      deploy:
+        description: "Upgrade the control plane after publishing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name and version
+        id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "version=${INPUT_VERSION:-$GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build multi-arch image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/production/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  scan:
+    name: Scan and SBOM
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      REF: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+    steps:
+      - name: Block critical vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ${{ env.REF }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REF }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ needs.build.outputs.version }}
+          path: sbom.cdx.json
+          retention-days: 365
+
+  sign:
+    name: Sign
+    needs: [build, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the image (keyless)
+        run: cosign sign --yes "${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}"
+
+  replicate:
+    name: Replicate to the regional registries
+    needs: [build, sign]
+    if: vars.REGION_CONTROL_HOSTS != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH key
+        env:
+          SSH_KEY: ${{ secrets.REGION_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Copy through each region control node (skopeo)
+        env:
+          HOSTS: ${{ vars.REGION_CONTROL_HOSTS }}
+          REF: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SRC_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+          DEST_CREDS: ${{ secrets.REGION_REGISTRY_CREDS }}
+        run: |
+          for host in $HOSTS; do
+            scp -o StrictHostKeyChecking=accept-new infra/scripts/promote-to-mirror.sh "$host:/tmp/promote-to-mirror.sh"
+            ssh -o StrictHostKeyChecking=accept-new "$host" \
+              "SRC_CREDS='$SRC_CREDS' DEST_CREDS='$DEST_CREDS' DEST_CERT_DIR=/opt/registry/ca bash /tmp/promote-to-mirror.sh '$REF' \"\$(hostname -I | awk '{print \$1}'):5443/platform/coolify:$VERSION\"; rm -f /tmp/promote-to-mirror.sh"
+          done
+
+  deploy:
+    name: Upgrade the control plane
+    needs: [build, sign]
+    if: (github.event_name == 'push' && vars.CONTROL_PLANE_HOST != '') || inputs.deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH key
+        env:
+          SSH_KEY: ${{ secrets.CONTROL_PLANE_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Upgrade with automatic rollback
+        env:
+          HOST: ${{ vars.CONTROL_PLANE_HOST }}
+          IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.version }}
+        run: |
+          scp -o StrictHostKeyChecking=accept-new infra/scripts/upgrade-control-plane.sh infra/scripts/wait_for_health.sh "$HOST:/tmp/"
+          ssh -o StrictHostKeyChecking=accept-new "$HOST" "sudo bash /tmp/upgrade-control-plane.sh '$IMAGE'"
+
+      - name: Post-deploy validation
+        if: vars.CONTROL_PLANE_URL != ''
+        run: infra/scripts/wait_for_health.sh "${{ vars.CONTROL_PLANE_URL }}/api/health" 120 5

@@ -1,0 +1,4 @@
+edge_dir: /opt/platform-edge
+edge_image: traefik:v3.3
+edge_metrics_port: 10083
+edge_poll_interval: 5s

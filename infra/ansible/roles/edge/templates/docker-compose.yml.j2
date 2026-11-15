@@ -1,0 +1,17 @@
+# Managed by Ansible (infra/ansible/roles/edge).
+name: platform-edge
+services:
+  edge:
+    image: {{ edge_image }}
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

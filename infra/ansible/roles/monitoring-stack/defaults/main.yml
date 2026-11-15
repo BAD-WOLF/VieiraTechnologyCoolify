@@ -1,0 +1,2 @@
+monitoring_dir: /opt/monitoring
+monitoring_source: "{{ playbook_dir }}/../../monitoring/"

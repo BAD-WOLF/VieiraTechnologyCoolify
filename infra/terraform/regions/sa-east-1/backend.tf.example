@@ -1,0 +1,11 @@
+# Remote state (recommended once the pilot works): cp backend.tf.example backend.tf
+# and create the bucket/table first. `terraform init -migrate-state` moves the local state.
+terraform {
+  backend "s3" {
+    bucket         = "vtc-terraform-state"
+    key            = "regions/sa-east-1/terraform.tfstate"
+    region         = "sa-east-1"
+    dynamodb_table = "vtc-terraform-locks"
+    encrypt        = true
+  }
+}

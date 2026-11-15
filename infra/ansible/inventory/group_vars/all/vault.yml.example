@@ -1,0 +1,17 @@
+# cp vault.yml.example vault.yml && ansible-vault encrypt vault.yml
+vault_coolify_api_token: "1|xxxxxxxx"
+vault_coolify_private_key_uuid: "xxxxxxxxxxxxxxxxxxxxxxxx"
+vault_coolify_ssh_public_key: "ssh-ed25519 AAAA... coolify"
+vault_platform_edge_token: "generate: openssl rand -hex 32"
+vault_platform_metrics_token: "generate: openssl rand -hex 32"
+vault_wireguard_private_key: "generate: wg genkey"
+vault_wireguard_control_plane_public_key: "public key of the Coolify control plane peer"
+vault_grafana_admin_password: "change-me"
+vault_alert_slack_webhook_url: ""
+vault_smtp_username: ""
+vault_smtp_password: ""
+vault_dockerhub_username: ""
+vault_dockerhub_token: ""
+vault_registry_users:
+  - username: ci
+    password: "change-me"

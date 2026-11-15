@@ -1,0 +1,13 @@
+# Region control node: bastion, WireGuard endpoint of the Coolify control plane, registry
+# mirror and the regional observability stack (infra/monitoring).
+- name: Region control node
+  hosts: control
+  become: true
+  roles:
+    - common
+    - docker
+    - firewall
+    - role: wireguard
+      when: wireguard_enabled | bool
+    - registry-mirror
+    - monitoring-stack

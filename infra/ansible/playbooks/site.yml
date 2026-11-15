@@ -1,0 +1,6 @@
+# Whole region: control node first (registry CA, Loki), then the execution nodes.
+- name: Control node
+  ansible.builtin.import_playbook: control-node.yml
+
+- name: Execution nodes
+  ansible.builtin.import_playbook: bootstrap-nodes.yml
