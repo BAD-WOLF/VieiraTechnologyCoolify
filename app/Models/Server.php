@@ -899,19 +899,6 @@ $schema://$host {
         return $this->belongsTo(Team::class);
     }
 
-    public function platformRegion()
-    {
-        return $this->belongsTo(PlatformRegion::class, 'platform_region_id');
-    }
-
-    /**
-     * Shared node of the platform (owned by the operator and assigned to a region).
-     */
-    public function isPlatformNode(): bool
-    {
-        return isPlatform() && (int) $this->team_id === 0 && ! is_null($this->platform_region_id);
-    }
-
     public function isProxyShouldRun()
     {
         // TODO: Do we need "|| $this->proxy->force_stop" here?

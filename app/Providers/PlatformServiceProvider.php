@@ -3,6 +3,10 @@
 namespace App\Providers;
 
 use App\Exceptions\PlatformPolicyViolation;
+use App\Jobs\PlatformCollectUsageJob;
+use App\Jobs\PlatformDailyMaintenanceJob;
+use App\Jobs\PlatformEnforcementJob;
+use App\Jobs\PlatformRollupUsageJob;
 use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Models\ApplicationSetting;
@@ -10,6 +14,7 @@ use App\Models\EnvironmentVariable;
 use App\Models\LocalFileVolume;
 use App\Models\LocalPersistentVolume;
 use App\Models\PersonalAccessToken;
+use App\Models\PlatformRegion;
 use App\Models\PlatformTenant;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
@@ -18,6 +23,7 @@ use App\Models\Server;
 use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
+use App\Models\StandaloneDocker;
 use App\Models\Team;
 use App\Models\TeamInvitation;
 use App\Services\Platform\DestinationPolicy;
@@ -26,9 +32,11 @@ use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantInputGuard;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
@@ -51,6 +59,9 @@ class PlatformServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->registerRoutes();
+        $this->registerRelations();
+        $this->registerSchedule();
+        $this->registerGates();
         $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
         $this->registerInputGuards();
@@ -72,6 +83,48 @@ class PlatformServiceProvider extends ServiceProvider
 
         Route::middleware('api')->prefix('api')->group(base_path('routes/platform/api.php'));
         Route::middleware('web')->group(base_path('routes/platform/web.php'));
+    }
+
+    /**
+     * Platform relations of upstream models, registered here instead of editing the models.
+     */
+    private function registerRelations(): void
+    {
+        Server::resolveRelationUsing('platformRegion', fn (Server $server) => $server->belongsTo(PlatformRegion::class, 'platform_region_id'));
+        Team::resolveRelationUsing('platformTenant', fn (Team $team) => $team->hasOne(PlatformTenant::class));
+        StandaloneDocker::resolveRelationUsing('team', fn (StandaloneDocker $destination) => $destination->belongsTo(Team::class));
+    }
+
+    /**
+     * Metering, rollups, enforcement and billing reconciliation (added to the Coolify schedule).
+     */
+    private function registerSchedule(): void
+    {
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            if (! isPlatform()) {
+                return;
+            }
+            $interval = max(1, min(30, (int) config('platform.metering.interval_minutes', 5)));
+            $schedule->job(new PlatformCollectUsageJob)->cron("*/{$interval} * * * *")->onOneServer();
+            $schedule->job(new PlatformRollupUsageJob)->hourlyAt(7)->onOneServer();
+            $schedule->job(new PlatformEnforcementJob)->everyTenMinutes()->onOneServer();
+            $schedule->job(new PlatformDailyMaintenanceJob)->dailyAt('03:17')->onOneServer();
+        });
+    }
+
+    /**
+     * The terminal server trusts the SSH command sent by the browser, so on shared nodes tenants
+     * only get the terminal when it is explicitly enabled (config platform.tenant_terminal).
+     */
+    private function registerGates(): void
+    {
+        Gate::before(function ($user, string $ability) {
+            if ($ability === 'canAccessTerminal' && isPlatformTenant() && ! config('platform.tenant_terminal')) {
+                return false;
+            }
+
+            return null;
+        });
     }
 
     private function registerWorkloadGuards(): void

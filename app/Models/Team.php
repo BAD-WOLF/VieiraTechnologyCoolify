@@ -224,11 +224,6 @@ class Team extends Model implements SendsDiscord, SendsEmail, SendsPushover, Sen
         return $this->hasOne(Subscription::class);
     }
 
-    public function platformTenant()
-    {
-        return $this->hasOne(PlatformTenant::class);
-    }
-
     public function applications()
     {
         return $this->hasManyThrough(Application::class, Project::class);

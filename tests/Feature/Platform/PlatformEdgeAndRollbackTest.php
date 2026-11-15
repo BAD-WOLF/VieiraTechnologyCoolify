@@ -171,3 +171,28 @@ it('rolls an application back to the previous successful commit', function () {
     app('auth')->forgetGuards();
     $this->postJson('/api/v1/rollback', ['uuid' => $application->uuid], ['Authorization' => 'Bearer '.$strangerToken])->assertNotFound();
 });
+
+it('adds the platform jobs to the schedule only in platform mode', function () {
+    $events = collect(app(\Illuminate\Console\Scheduling\Schedule::class)->events())->map(fn ($event) => $event->description);
+
+    expect($events->join(' '))->toContain('PlatformCollectUsageJob')
+        ->toContain('PlatformRollupUsageJob')
+        ->toContain('PlatformEnforcementJob')
+        ->toContain('PlatformDailyMaintenanceJob');
+});
+
+it('renders policy violations as JSON for API clients and denies the tenant terminal', function () {
+    $violation = new \App\Exceptions\PlatformPolicyViolation(['Privileged containers are not allowed.']);
+    $api = $violation->render(\Illuminate\Http\Request::create('/api/v1/applications', 'POST'));
+    expect($api->getStatusCode())->toBe(422)
+        ->and($api->getData(true)['violations'])->toBe(['Privileged containers are not allowed.'])
+        ->and($violation->render(\Illuminate\Http\Request::create('/project/x')))->toBeFalse();
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+    session(['currentTeam' => $user->teams()->first()]);
+    expect(\Illuminate\Support\Facades\Gate::allows('canAccessTerminal'))->toBeFalse();
+
+    config(['platform.tenant_terminal' => true]);
+    expect(\Illuminate\Support\Facades\Gate::forUser($user)->check('canAccessTerminal'))->toBe($user->isAdmin() || $user->isOwner());
+});

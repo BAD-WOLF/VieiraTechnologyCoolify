@@ -73,19 +73,6 @@ class StandaloneDocker extends BaseModel
         return $this->belongsTo(Server::class);
     }
 
-    /**
-     * Tenant that owns this destination on a shared platform node (null for destinations of the server owner).
-     */
-    public function team()
-    {
-        return $this->belongsTo(Team::class);
-    }
-
-    public function isTenantDestination(): bool
-    {
-        return ! is_null($this->team_id);
-    }
-
     public function services()
     {
         return $this->morphMany(Service::class, 'destination');

@@ -59,13 +59,6 @@ class Handler extends ExceptionHandler
      */
     public function render($request, Throwable $e)
     {
-        if ($e instanceof PlatformPolicyViolation && ($request->is('api/*') || $request->expectsJson())) {
-            return response()->json([
-                'message' => $e->getMessage(),
-                'violations' => $e->violations,
-            ], 422);
-        }
-
         // Handle authorization exceptions for API routes
         if ($e instanceof \Illuminate\Auth\Access\AuthorizationException) {
             if ($request->is('api/*') || $request->expectsJson()) {
