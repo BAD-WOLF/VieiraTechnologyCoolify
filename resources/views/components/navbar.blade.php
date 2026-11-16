@@ -80,7 +80,9 @@
     <div class="flex pt-6 pb-4 pl-2">
         <div class="flex flex-col w-full">
             <div class="text-2xl font-bold tracking-wide dark:text-white">Coolify</div>
-            <x-version />
+            @unless (isPlatformTenant())
+                <x-version />
+            @endunless
         </div>
         <div>
             <!-- Search button that triggers global search modal -->
@@ -377,6 +379,7 @@
                             Onboarding
                         </a>
                     </li> --}}
+                    @unless (isPlatform())
                     <li>
                         <a title="Sponsor us" class="menu-item" href="https://coolify.io/sponsorships"
                             target="_blank">
@@ -391,6 +394,7 @@
                             Sponsor us
                         </a>
                     </li>
+                    @endunless
                 @endif
                 @if (!isSubscribed() && isCloud() && auth()->user()->teams()->get()->count() > 1)
                     <livewire:navbar-delete-team />

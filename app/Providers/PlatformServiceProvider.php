@@ -12,7 +12,9 @@ use App\Jobs\PlatformDailyMaintenanceJob;
 use App\Jobs\PlatformEnforcementJob;
 use App\Jobs\PlatformRollupUsageJob;
 use App\Livewire\Platform\PlatformFeedback;
+use App\Livewire\Platform\PlatformHelp;
 use App\Models\Application;
+use App\Models\ApplicationDeploymentQueue;
 use App\Models\ApplicationPreview;
 use App\Models\ApplicationSetting;
 use App\Models\EnvironmentVariable;
@@ -55,12 +57,14 @@ use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
+use Psr\Http\Message\RequestInterface;
 
 /**
  * Wires the multi-tenant platform rules into the models, so they apply to every entry point
@@ -251,7 +255,8 @@ class PlatformServiceProvider extends ServiceProvider
     }
 
     /**
-     * Platform name instead of "Coolify" in the dashboard and in e-mail subjects.
+     * Platform name instead of "Coolify" wherever a customer reads it: the dashboard, page titles,
+     * notifications of the dashboard, e-mail subjects, chat notifications and deployment logs.
      */
     private function registerBranding(): void
     {
@@ -259,9 +264,26 @@ class PlatformServiceProvider extends ServiceProvider
         Event::listen(MessageSending::class, function (MessageSending $event) {
             $subject = $event->message->getSubject();
             if (PlatformBranding::enabled() && filled($subject)) {
-                $event->message->subject(PlatformBranding::text($subject));
+                $event->message->subject((string) PlatformBranding::text($subject));
             }
         });
+        // After Livewire's own dehydration, which serializes the events of the request.
+        \Livewire\on('dehydrate', function ($component, $context) {
+            if (PlatformBranding::enabled() && ! empty($context->effects['dispatches'] ?? null)) {
+                $context->effects['dispatches'] = PlatformBranding::dispatches($context->effects['dispatches']);
+            }
+        });
+        Http::globalRequestMiddleware(fn (RequestInterface $request) => PlatformBranding::request($request));
+        // Coolify writes one message with its name into the deployment logs (saved quietly, so
+        // they are read through the platform name).
+        ApplicationDeploymentQueue::retrieved(function (ApplicationDeploymentQueue $deployment) {
+            $logs = $deployment->getAttributes()['logs'] ?? null;
+            if (is_string($logs) && str_contains($logs, "Coolify's UI") && PlatformBranding::enabled()) {
+                $deployment->setRawAttributes(array_merge($deployment->getAttributes(), ['logs' => PlatformBranding::deploymentLogs($logs)]), true);
+            }
+        });
+        // Customer feedback goes to the operator, never to the Coolify team.
+        Livewire::component('help', PlatformHelp::class);
     }
 
     private function registerWorkloadGuards(): void

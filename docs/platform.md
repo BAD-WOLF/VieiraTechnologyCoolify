@@ -310,7 +310,7 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 | Permissões e shell | Painel em instâncias próprias; chave SSH restrita por `from=` e rede privada; 2FA obrigatório e tokens restritos por origem para o operador; terminal desligado para clientes. |
 | Plugins e hooks | Evento Laravel, stream no Redis e webhooks (acima). |
 | Atualizações do upstream | Sincronização semanal por pull request e checagem no CI da lista de arquivos originais alterados (`infra/scripts/upstream-touched-files.sh`), em vez de patches soltos. |
-| Painel unificado e marca | O seletor de times do Coolify separa os clientes; o nome Hostrema substitui o Coolify em tempo de compilação das telas, sem editar os arquivos originais. |
+| Painel unificado e marca | O seletor de times do Coolify separa os clientes; o nome e o logo da plataforma substituem os do Coolify nas telas, e-mails e notificações (veja "Marca"). |
 
 ## Console do operador
 
@@ -324,7 +324,16 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Marca (white-label) e página pública
 
-Com a plataforma ligada, o painel mostra o nome da plataforma (Hostrema) no lugar de "Coolify", inclusive nos títulos e nos assuntos de e-mail. A troca acontece quando os templates são compilados, sem editar as telas originais. Nome, descrição, logo e os links de termos e privacidade ficam em Configurações → Geral. Quando eles mudam, cada instância recompila as telas sozinha no acesso seguinte.
+Com a plataforma ligada, o cliente não vê o nome nem o logo do Coolify:
+
+- **Telas.** O nome da plataforma (Hostrema) entra no lugar de "Coolify" quando os templates são compilados, sem editar as telas originais, inclusive nos títulos dados em tempo de execução, nas dicas dos campos e nos exemplos de domínio (`app.example.com`). Links para a documentação do Coolify passam a apontar para a URL de documentação configurada, quando existe.
+- **Logo e favicon.** O logo configurado ou, sem ele, uma marca com a inicial do nome da plataforma (`/platform/brand/logo.svg`).
+- **Mensagens.** As notificações do painel, os assuntos e o rodapé dos e-mails, as notificações por Discord, Slack, Telegram e Pushover e a mensagem do Coolify nos logs de deploy usam o nome da plataforma.
+- **Fora do alcance do cliente.** A versão do Coolify, o changelog do Coolify e o link de patrocínio somem para os clientes. O formulário "Feedback" vai para o e-mail de suporte da plataforma (ou para o dono do time da plataforma), com o cliente como resposta; no Coolify ele ia para a equipe do Coolify.
+
+Ficam como estão os identificadores técnicos (labels `coolify.*` dos containers, variáveis `COOLIFY_*`, `/data/coolify`, a rede `coolify`): são interfaces internas, e mudá-las quebraria os deploys e as atualizações do upstream. O arquivo `LICENSE` (Apache 2.0) e os avisos de copyright do código também ficam: a licença exige que sejam mantidos, e ela não dá direito de usar a marca "Coolify", por isso a marca sai das telas.
+
+Nome, descrição, logo, documentação e os links de termos e privacidade ficam em Configurações → Geral. Quando eles mudam, cada instância recompila as telas sozinha no acesso seguinte.
 
 A página pública `/pricing` lista planos, cotas e preços, com os links de cadastro, termos de uso e privacidade.
 

@@ -244,6 +244,10 @@ class PlatformConfig
                 config(['app.locale' => $locale]);
                 app()->setLocale($locale);
             }
+            // E-mails sign with the application name ("© Coolify", "invited to ... on Coolify").
+            if (PlatformBranding::enabled() && ! is_null(PlatformBranding::name())) {
+                config(['app.name' => PlatformBranding::name()]);
+            }
             if (! app()->runningUnitTests()) {
                 self::refreshBrandedViews();
             }
@@ -468,9 +472,7 @@ class PlatformConfig
      */
     private static function refreshBrandedViews(): void
     {
-        $signature = md5(json_encode([
-            config('platform.name'), config('platform.branding.enabled'), config('platform.branding.description'), config('platform.branding.favicon_url'),
-        ]) ?: '');
+        $signature = PlatformBranding::signature();
         $directory = (string) config('view.compiled');
         if ($directory === '' || ! is_dir($directory)) {
             return;

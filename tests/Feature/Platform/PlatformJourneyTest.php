@@ -22,6 +22,7 @@ use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\ServiceTemplates;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
@@ -331,6 +332,8 @@ it('opens every page of a customer without server errors', function () {
     ]));
     $service = Service::query()->latest('id')->firstOrFail();
 
+    // Compiled now, with the platform name.
+    Artisan::call('view:clear');
     $failures = journeySweep([
         'project_uuid' => $world['project']->uuid,
         'environment_uuid' => $world['environment']->uuid,
@@ -338,9 +341,11 @@ it('opens every page of a customer without server errors', function () {
         'database_uuid' => $database->uuid,
         'service_uuid' => $service->uuid,
         'stack_service_uuid' => $service->applications()->first()?->uuid,
-    ]);
+    ], $coolify);
+    Artisan::call('view:clear');
 
-    expect($failures)->toBe([]);
+    expect($failures)->toBe([])
+        ->and($coolify)->toBe([]);
 });
 
 it('opens every page of the operator without server errors', function () {
@@ -416,9 +421,10 @@ function journeyDescribe(\Illuminate\Testing\TestResponse $response): string
  * @param  array<string, ?string>  $parameters
  * @return list<string>
  */
-function journeySweep(array $parameters): array
+function journeySweep(array $parameters, ?array &$coolify = null): array
 {
     $failures = [];
+    $coolify = [];
     $skip = ['logout', 'verify.verify', 'password.reset', 'auth.link', 'auth.redirect', 'auth.callback', 'download.backup', 'feedback', 'upgrade'];
     foreach (Route::getRoutes() as $route) {
         $name = $route->getName();
@@ -437,8 +443,37 @@ function journeySweep(array $parameters): array
         $response = journeyGet(route($name, $values));
         if ($response->status() >= 500) {
             $failures[] = "{$name}: ".journeyDescribe($response);
+        } elseif ($response->status() === 200 && str_contains((string) $response->headers->get('Content-Type'), 'html')) {
+            foreach (journeyCoolifyMentions((string) $response->getContent()) as $mention) {
+                $coolify[] = "{$name}: {$mention}";
+            }
         }
     }
 
     return $failures;
+}
+
+/**
+ * Where a page shows the Coolify name or logo to the person reading it: text, page title,
+ * tooltips and placeholders, images. Scripts, styles and Livewire/Alpine state are not read.
+ *
+ * @return array<int, string>
+ */
+function journeyCoolifyMentions(string $html): array
+{
+    $html = (string) preg_replace('#<(script|style)\b[^>]*>.*?</\1>#si', ' ', $html);
+    $html = (string) preg_replace('/\s(?:wire:[\w.-]+|x-[\w.:-]+|@[\w.:-]+|:[\w.-]+)="[^"]*"/', ' ', $html);
+    $mentions = [];
+    $text = html_entity_decode(strip_tags($html));
+    if (preg_match_all('/[^\n]{0,40}\bCoolify\b[^\n]{0,40}/u', $text, $matches)) {
+        $mentions = array_merge($mentions, array_map('trim', $matches[0]));
+    }
+    if (preg_match_all('/\s(?:title|alt|placeholder|aria-label|content|helper)="([^"]*\bCoolify\b[^"]*)"/', $html, $matches)) {
+        $mentions = array_merge($mentions, $matches[1]);
+    }
+    if (preg_match_all('/[\w\/.-]*coolify-logo[\w.-]*/', $html, $matches)) {
+        $mentions = array_merge($mentions, $matches[0]);
+    }
+
+    return array_values(array_unique($mentions));
 }

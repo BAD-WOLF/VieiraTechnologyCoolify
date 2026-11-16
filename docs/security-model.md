@@ -105,6 +105,9 @@ Mudanças em arquivos originais que não são só ganchos:
   administrador da instância vai para o painel, como nas outras telas de configuração).
 - `bootstrap/helpers/subscriptions.php`: antes do primeiro pagamento o cliente abre o painel (início), que
   mostra como ativar o plano; criar e publicar continua bloqueado pelo status do plano.
+- `resources/views/components/navbar.blade.php` e `resources/views/livewire/settings-dropdown.blade.php`: a
+  versão, o changelog e o link de patrocínio do Coolify não aparecem para os clientes (o resto da marca é
+  trocado sem editar as telas, veja `PlatformBranding`).
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
@@ -114,8 +117,8 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Models`: `Service.php` (+8/-1)
 - `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+2/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
-- `resources`: `views/components/navbar.blade.php` (+21/-1), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
+- `resources`: `views/components/navbar.blade.php` (+26/-2), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 49 arquivos.
+Total: 50 arquivos.
 <!-- upstream-files:end -->
 
