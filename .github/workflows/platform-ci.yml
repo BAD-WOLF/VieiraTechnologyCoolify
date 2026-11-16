@@ -70,7 +70,7 @@ jobs:
           vendor/bin/pint --test
           app/Actions/Platform app/Livewire/Platform app/Services/Platform
           app/Console/Commands/PlatformInstall.php app/Http/Controllers/PlatformOpenApiController.php
-          app/Exceptions/PlatformPolicyViolation.php
+          app/Exceptions/PlatformPolicyViolation.php app/Exceptions/TenantInputRejected.php
           app/Http/Controllers/Api/PlatformController.php app/Http/Controllers/Api/RollbackController.php
           app/Http/Controllers/PlatformEdgeController.php app/Http/Controllers/PlatformMetricsController.php
           app/Jobs/PlatformCollectServerUsageJob.php app/Jobs/PlatformCollectUsageJob.php

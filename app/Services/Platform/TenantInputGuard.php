@@ -2,6 +2,7 @@
 
 namespace App\Services\Platform;
 
+use App\Exceptions\TenantInputRejected;
 use App\Models\Application;
 use App\Models\ApplicationSetting;
 use App\Models\EnvironmentVariable;
@@ -35,6 +36,12 @@ use Illuminate\Validation\ValidationException;
 class TenantInputGuard
 {
     public const PATTERN_IMAGE = '/^[A-Za-z0-9][A-Za-z0-9._\-\/:@]{0,254}$/';
+
+    /**
+     * Images of compose services, which may use compose variables ("ghcr.io/org/app:${TAG:-1.2}"):
+     * they are only written to the compose file, never to a shell command.
+     */
+    public const PATTERN_SERVICE_IMAGE = '/^(?=.{1,255}$)(?=[A-Za-z0-9$])(?:[A-Za-z0-9._\-\/:@]|\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-?+][A-Za-z0-9._\-\/:@]*)?\})+$/';
 
     public const PATTERN_TAG = '/^[A-Za-z0-9_][A-Za-z0-9._\-]{0,127}$/';
 
@@ -77,7 +84,7 @@ class TenantInputGuard
             }
         }
         if (count($errors) > 0) {
-            throw ValidationException::withMessages($errors);
+            throw TenantInputRejected::withMessages($errors);
         }
     }
 
@@ -98,7 +105,7 @@ class TenantInputGuard
             $model instanceof StandaloneDragonfly => self::databaseRules(['dragonfly_password' => 'secret']),
             $model instanceof StandaloneClickhouse => self::databaseRules(['clickhouse_admin_user' => 'identifier', 'clickhouse_admin_password' => 'secret']),
             $model instanceof ServiceApplication, $model instanceof ServiceDatabase => [
-                'image' => self::regex(self::PATTERN_IMAGE, 'Invalid image name.'),
+                'image' => self::regex(self::PATTERN_SERVICE_IMAGE, 'Invalid image name.'),
                 'public_port' => fn ($value) => self::publicPort($value),
             ],
             $model instanceof EnvironmentVariable => [
@@ -138,8 +145,8 @@ class TenantInputGuard
         $buildCommand = self::regex(self::PATTERN_BUILD_COMMAND, 'Commands can not contain single quotes, backticks or control characters.');
 
         return [
-            'git_repository' => fn ($value) => self::rule($value, new ValidGitRepositoryUrl),
-            'git_branch' => fn ($value) => self::rule($value, new ValidGitBranch),
+            'git_repository' => fn ($value) => self::gitRepository((string) $value),
+            'git_branch' => fn ($value) => self::rule($value, new ValidGitBranch, 'branch'),
             'git_commit_sha' => self::regex(self::PATTERN_COMMIT, 'Invalid commit SHA.'),
             'base_directory' => fn ($value) => PathPolicy::isSafeInnerPath((string) $value) ? null : 'Invalid base directory.',
             'publish_directory' => fn ($value) => PathPolicy::isSafeInnerPath((string) $value) ? null : 'Invalid publish directory.',
@@ -225,11 +232,24 @@ class TenantInputGuard
         return fn ($value) => preg_match($pattern, (string) $value) ? null : $message;
     }
 
-    private static function rule(mixed $value, object $rule): ?string
+    private static function rule(mixed $value, object $rule, string $attribute = 'value'): ?string
     {
-        $validator = Validator::make(['value' => $value], ['value' => [$rule]]);
+        $validator = Validator::make(['value' => $value], ['value' => [$rule]], [], ['value' => $attribute]);
 
         return $validator->fails() ? $validator->errors()->first('value') : null;
+    }
+
+    /**
+     * Applications of a GitHub or GitLab source keep "owner/repository" (GitLab groups may nest);
+     * the other sources keep the URL used to clone.
+     */
+    public static function gitRepository(string $value): ?string
+    {
+        if (preg_match('#^[A-Za-z0-9][A-Za-z0-9_.\-]*(/[A-Za-z0-9][A-Za-z0-9_.\-]*)+$#', $value)) {
+            return null;
+        }
+
+        return self::rule($value, new ValidGitRepositoryUrl, 'repository');
     }
 
     public static function publicPort(mixed $value): ?string

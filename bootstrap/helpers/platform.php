@@ -59,6 +59,11 @@ function platformTenant(Team|int|null $team = null): ?PlatformTenant
 
 /**
  * Resolve the team that owns a resource-like model (applications, databases, services and their children).
+ *
+ * Parents are looked up by plain column queries, never loaded as models: guards call this while a
+ * model is being saved, and loading a parent fires its own events (StandaloneRedis creates its
+ * REDIS_USERNAME variable when it is retrieved, which would save a variable inside the guard of a
+ * variable, endlessly).
  */
 function platformTeamOf(mixed $model): ?Team
 {
@@ -68,36 +73,55 @@ function platformTeamOf(mixed $model): ?Team
     if ($model instanceof Team) {
         return $model;
     }
-    if ($model instanceof ServiceApplication || $model instanceof ServiceDatabase) {
-        return platformTeamOf($model->service ?? Service::find($model->service_id));
-    }
-    if ($model instanceof ApplicationSetting || $model instanceof ApplicationPreview) {
-        return platformTeamOf($model->application ?? Application::find($model->application_id));
-    }
-    if ($model instanceof LocalFileVolume || $model instanceof LocalPersistentVolume) {
-        if (blank($model->resource_type) || blank($model->resource_id) || ! class_exists($model->resource_type)) {
+
+    $environmentOf = function (string $class, mixed $id): ?int {
+        if (blank($id) || ! class_exists($class) || ! is_subclass_of($class, Model::class)) {
             return null;
         }
+        if ($class === ServiceApplication::class || $class === ServiceDatabase::class) {
+            $serviceId = $class::query()->whereKey($id)->value('service_id');
 
-        return platformTeamOf($model->resource_type::find($model->resource_id));
-    }
-    if ($model instanceof EnvironmentVariable) {
-        if (blank($model->resourceable_type) || blank($model->resourceable_id) || ! class_exists($model->resourceable_type)) {
-            return null;
+            return $serviceId ? Service::query()->whereKey($serviceId)->value('environment_id') : null;
         }
+        if ($class === ApplicationSetting::class || $class === ApplicationPreview::class) {
+            $applicationId = $class::query()->whereKey($id)->value('application_id');
 
-        return platformTeamOf($model->resourceable_type::find($model->resourceable_id));
-    }
-    if ($model instanceof ScheduledTask) {
-        return platformTeamOf($model->application_id ? Application::find($model->application_id) : Service::find($model->service_id));
-    }
-    if ($model instanceof ScheduledDatabaseBackup || $model instanceof S3Storage) {
+            return $applicationId ? Application::query()->whereKey($applicationId)->value('environment_id') : null;
+        }
+        static $withEnvironment = [];
+        $withEnvironment[$class] ??= \Illuminate\Support\Facades\Schema::hasColumn((new $class)->getTable(), 'environment_id');
+
+        return $withEnvironment[$class] ? $class::query()->whereKey($id)->value('environment_id') : null;
+    };
+
+    $environmentId = match (true) {
+        $model instanceof ServiceApplication, $model instanceof ServiceDatabase => $model->relationLoaded('service') && $model->service
+            ? $model->service->environment_id
+            : Service::query()->whereKey($model->service_id)->value('environment_id'),
+        $model instanceof ApplicationSetting, $model instanceof ApplicationPreview => $model->relationLoaded('application') && $model->application
+            ? $model->application->environment_id
+            : Application::query()->whereKey($model->application_id)->value('environment_id'),
+        $model instanceof LocalFileVolume, $model instanceof LocalPersistentVolume => $environmentOf((string) $model->resource_type, $model->resource_id),
+        $model instanceof EnvironmentVariable => $environmentOf((string) $model->resourceable_type, $model->resourceable_id),
+        $model instanceof ScheduledTask => $model->application_id
+            ? Application::query()->whereKey($model->application_id)->value('environment_id')
+            : Service::query()->whereKey($model->service_id)->value('environment_id'),
+        $model instanceof ScheduledDatabaseBackup, $model instanceof S3Storage => false,
+        $model instanceof Model && isset($model->environment_id) => $model->environment_id,
+        default => null,
+    };
+
+    if ($environmentId === false) {
         return $model->team_id !== null ? Team::find($model->team_id) : null;
     }
-    if ($model instanceof Model && isset($model->environment_id)) {
-        $environment = Environment::with('project')->find($model->environment_id);
+    if (filled($environmentId)) {
+        $teamId = Environment::query()->join('projects', 'projects.id', '=', 'environments.project_id')
+            ->where('environments.id', $environmentId)->value('projects.team_id');
 
-        return $environment?->project?->team_id !== null ? Team::find($environment->project->team_id) : null;
+        return $teamId !== null ? Team::find($teamId) : null;
+    }
+    if ($model instanceof EnvironmentVariable || $model instanceof LocalFileVolume || $model instanceof LocalPersistentVolume) {
+        return null;
     }
     if (method_exists($model, 'team')) {
         $team = $model->team();

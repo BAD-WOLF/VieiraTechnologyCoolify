@@ -229,6 +229,24 @@ portas, imagens, caminhos, domínios (sem domínio reservado ou de outro tenant)
 plano (bancos, docker compose, volumes, previews, bancos públicos e log drains) e o destino do recurso
 (só destinos do próprio tenant).
 
+### Serviços de um clique
+
+Os clientes veem os templates que a plataforma consegue rodar isolados (`ServiceTemplates`), já ajustados
+para o nó compartilhado, sem mudar o que o template faz:
+
+- diretórios do host (`/jupyter:/home/jovyan/work`, `${FOUNDRY_DATA:-/data/foundryvtt}`) passam para o
+  diretório do recurso, então cada stack tem os seus dados;
+- binds de `/etc/localtime`, `/etc/timezone` e `/dev/(u)random` saem (o container já tem os dele);
+- stacks com endereço web deixam as outras portas só na rede do cliente, em vez de publicá-las no nó
+  (o SSH do Gitea, o SMTP do Mailpit e o AMQP do RabbitMQ continuam acessíveis pelos outros recursos do cliente).
+
+Não aparecem os que precisam do socket do Docker (Portainer, Dozzle, Homarr, Supabase, Authentik, Windmill,
+Jenkins, Pterodactyl...), de capabilities extras ou rede do host (WireGuard, Pi-hole, NetBird, Cloudflared,
+AnythingLLM, Changedetection), de modo privilegiado (Glances) ou só de portas TCP públicas (Minecraft): 28 dos
+265 templates desta versão. O mesmo teste que cria e valida para deploy cada template oferecido
+(`PlatformJourneyTest`) roda a cada sincronização do upstream. Um compose escrito pelo cliente passa pelas
+mesmas regras antes de qualquer coisa ser criada, e a recusa aparece com os motivos.
+
 ## Limites por cliente no nó (wiki 4)
 
 Além do limite de cada container, o cliente inteiro tem um teto em cada nó. Todos os containers dele rodam no slice `tenant-<id>.slice` do systemd (`PLATFORM_TENANT_SLICES=true`), e o script `hostrema-tenant-limits` (role `tenant-limits` do Ansible) aplica as cotas do plano:

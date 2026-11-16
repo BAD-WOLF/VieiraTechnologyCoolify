@@ -12,12 +12,18 @@ use Illuminate\Http\Request;
 class PlatformPolicyViolation extends NonReportableException
 {
     /**
+     * Short heading of the refusal ("Plan limit reached"...).
+     */
+    public string $title;
+
+    /**
      * @param  array<int, string>  $violations
      */
     public function __construct(public array $violations = [], string $prefix = 'Blocked by platform policy')
     {
         $violations = array_values(array_unique(array_filter($violations)));
         $this->violations = $violations;
+        $this->title = $prefix;
         $message = $prefix.(count($violations) > 0 ? ': '.implode(' | ', $violations) : '.');
         parent::__construct($message);
     }

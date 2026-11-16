@@ -26,7 +26,7 @@ class SettingsOauth extends Component
     public function mount()
     {
         if (! isInstanceAdmin()) {
-            return redirect()->route('home');
+            return redirect()->route('dashboard');
         }
         $this->oauth_settings_map = OauthSetting::all()->sortBy('provider')->reduce(function ($carry, $setting) {
             $carry[$setting->provider] = $setting;

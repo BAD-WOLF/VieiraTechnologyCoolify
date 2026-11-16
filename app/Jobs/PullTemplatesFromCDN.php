@@ -25,7 +25,8 @@ class PullTemplatesFromCDN implements ShouldBeEncrypted, ShouldQueue
     public function handle(): void
     {
         try {
-            if (isDev()) {
+            // The platform ships the templates it tested with each release (see ServiceTemplates).
+            if (isDev() || isPlatform()) {
                 return;
             }
             $response = Http::retry(3, 1000)->get(config('constants.services.official'));

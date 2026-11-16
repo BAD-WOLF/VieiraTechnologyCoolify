@@ -5,6 +5,8 @@ namespace App\Services\Platform;
 use App\Exceptions\PlatformPolicyViolation;
 use App\Models\Application;
 use App\Models\ApplicationPreview;
+use App\Models\EnvironmentVariable;
+use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\Team;
 
@@ -14,6 +16,12 @@ use App\Models\Team;
  */
 class DomainPolicy
 {
+    /**
+     * Variables Coolify turns into the domains of some one-click services (the MinIO console and
+     * API, the Logto endpoints): they are domains of the tenant like any FQDN.
+     */
+    public const SERVICE_DOMAIN_VARIABLES = ['MINIO_BROWSER_REDIRECT_URL', 'MINIO_SERVER_URL', 'LOGTO_ENDPOINT', 'LOGTO_ADMIN_ENDPOINT'];
+
     /**
      * @return array<int, string>
      */
@@ -97,8 +105,29 @@ class DomainPolicy
         foreach ($serviceApplications as $serviceApplication) {
             $hosts = array_merge($hosts, self::hostsFromFqdnList($serviceApplication->fqdn));
         }
+        $serviceIds = Service::query()->whereHas('environment.project', fn ($query) => $query->where('team_id', $teamId))->pluck('id');
+        foreach (self::serviceDomainVariables($serviceIds->all()) as $variable) {
+            $hosts = array_merge($hosts, self::hostsFromFqdnList((string) $variable->value));
+        }
 
         return array_values(array_unique($hosts));
+    }
+
+    /**
+     * @param  array<int, int>|null  $serviceIds  null for every service
+     * @return \Illuminate\Support\Collection<int, EnvironmentVariable>
+     */
+    private static function serviceDomainVariables(?array $serviceIds = null): \Illuminate\Support\Collection
+    {
+        if (is_array($serviceIds) && count($serviceIds) === 0) {
+            return collect();
+        }
+
+        return EnvironmentVariable::query()
+            ->where('resourceable_type', Service::class)
+            ->when(is_array($serviceIds), fn ($query) => $query->whereIn('resourceable_id', $serviceIds))
+            ->whereIn('key', self::SERVICE_DOMAIN_VARIABLES)
+            ->get(['id', 'key', 'value', 'resourceable_id', 'resourceable_type']);
     }
 
     /**
@@ -213,6 +242,18 @@ class DomainPolicy
         foreach ($serviceApplications as $serviceApplication) {
             if (in_array($host, self::hostsFromFqdnList($serviceApplication->fqdn), true)) {
                 return (int) data_get($serviceApplication, 'service.environment.project.team_id');
+            }
+        }
+        // Encrypted values: the few variables that hold domains are compared one by one.
+        foreach (self::serviceDomainVariables() as $variable) {
+            if (in_array($host, self::hostsFromFqdnList((string) $variable->value), true)) {
+                $teamId = Service::query()
+                    ->whereKey($variable->resourceable_id)
+                    ->join('environments', 'environments.id', '=', 'services.environment_id')
+                    ->join('projects', 'projects.id', '=', 'environments.project_id')
+                    ->value('projects.team_id');
+
+                return is_null($teamId) ? null : (int) $teamId;
             }
         }
 

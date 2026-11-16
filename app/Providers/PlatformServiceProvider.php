@@ -11,6 +11,7 @@ use App\Jobs\PlatformCollectUsageJob;
 use App\Jobs\PlatformDailyMaintenanceJob;
 use App\Jobs\PlatformEnforcementJob;
 use App\Jobs\PlatformRollupUsageJob;
+use App\Livewire\Platform\PlatformFeedback;
 use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Models\ApplicationSetting;
@@ -38,6 +39,7 @@ use App\Services\Platform\PlatformBranding;
 use App\Services\Platform\PlatformConfig;
 use App\Services\Platform\PlatformEvents;
 use App\Services\Platform\PlatformGate;
+use App\Services\Platform\ServiceTemplates;
 use App\Services\Platform\TenantInputGuard;
 use App\Services\Platform\TenantLimits;
 use Illuminate\Auth\Events\Failed;
@@ -58,6 +60,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 
 /**
  * Wires the multi-tenant platform rules into the models, so they apply to every entry point
@@ -78,6 +81,9 @@ class PlatformServiceProvider extends ServiceProvider
     public function register(): void
     {
         PlatformConfig::flush();
+        // Platform refusals raised inside Livewire components become notifications instead of
+        // error pages or messages hidden in an error bag (hooks are wired when Livewire boots).
+        Livewire::componentHook(PlatformFeedback::class);
         // APP_PREVIOUS_KEYS: values encrypted with an older APP_KEY keep working during a rotation.
         if (blank(config('app.previous_keys')) && filled(config('platform.encryption.previous_keys'))) {
             config(['app.previous_keys' => config('platform.encryption.previous_keys')]);
@@ -116,6 +122,7 @@ class PlatformServiceProvider extends ServiceProvider
         });
         $this->loadJsonTranslationsFrom(lang_path('platform'));
         $this->registerWorkloadGuards();
+        $this->registerComposeGuard();
         $this->registerInputGuards();
         $this->registerDomainGuards();
         $this->registerFeatureGuards();
@@ -274,6 +281,24 @@ class PlatformServiceProvider extends ServiceProvider
         }
     }
 
+    /**
+     * A compose stack is checked before Coolify creates anything from it, so a stack the platform
+     * can not run is refused as a whole, with the reasons, and leaves nothing half created behind.
+     */
+    private function registerComposeGuard(): void
+    {
+        Service::saving(function (Service $service) {
+            if (! isPlatform() || blank($service->docker_compose_raw) || ($service->exists && ! $service->isDirty('docker_compose_raw'))) {
+                return;
+            }
+            $team = platformTeamOf($service);
+            if (is_null($team) || ! isPlatformTenant($team)) {
+                return;
+            }
+            ServiceTemplates::assertDeployable((string) $service->docker_compose_raw, $service->uuid);
+        });
+    }
+
     private function registerInputGuards(): void
     {
         $models = array_merge(self::workloadModels(), [
@@ -303,7 +328,10 @@ class PlatformServiceProvider extends ServiceProvider
 
     private function registerDomainGuards(): void
     {
-        $guard = function (Model $model, array $fields) {
+        /**
+         * @param  callable(bool): array<int, string>  $hostsOf  hosts of the new (false) or saved (true) values
+         */
+        $guard = function (Model $model, array $fields, callable $hostsOf) {
             if (! isPlatform() || ($model->exists && ! $model->isDirty($fields))) {
                 return;
             }
@@ -311,20 +339,14 @@ class PlatformServiceProvider extends ServiceProvider
             if (is_null($team) || ! isPlatformTenant($team)) {
                 return;
             }
-            $hosts = array_values(array_unique(array_merge(
-                DomainPolicy::hostsFromFqdnList((string) $model->getAttribute('fqdn')),
-                in_array('docker_compose_domains', $fields, true) ? DomainPolicy::hostsFromComposeDomains($model->getAttribute('docker_compose_domains')) : [],
-            )));
+            $hosts = array_values(array_unique($hostsOf(false)));
             if (count($hosts) === 0) {
                 return;
             }
             DomainPolicy::assertAvailable($hosts, $team->id);
             $limit = (int) PlatformTenant::forTeam($team)->quota('custom_domains');
             if ($limit > 0) {
-                $previous = array_merge(
-                    DomainPolicy::hostsFromFqdnList((string) $model->getOriginal('fqdn')),
-                    in_array('docker_compose_domains', $fields, true) ? DomainPolicy::hostsFromComposeDomains($model->getOriginal('docker_compose_domains')) : [],
-                );
+                $previous = $model->exists ? $hostsOf(true) : [];
                 $all = array_unique(array_merge(array_diff(DomainPolicy::hostsOwnedBy($team), $previous), $hosts));
                 $custom = count(array_filter($all, fn ($host) => DomainPolicy::isCustomHost($host)));
                 if ($custom > $limit) {
@@ -332,10 +354,21 @@ class PlatformServiceProvider extends ServiceProvider
                 }
             }
         };
+        $fqdnHosts = fn (Model $model, bool $withComposeDomains) => fn (bool $original) => array_merge(
+            DomainPolicy::hostsFromFqdnList((string) ($original ? $model->getOriginal('fqdn') : $model->getAttribute('fqdn'))),
+            $withComposeDomains ? DomainPolicy::hostsFromComposeDomains($original ? $model->getOriginal('docker_compose_domains') : $model->getAttribute('docker_compose_domains')) : [],
+        );
 
-        Application::saving(fn (Application $application) => $guard($application, ['fqdn', 'docker_compose_domains']));
-        ApplicationPreview::saving(fn (ApplicationPreview $preview) => $guard($preview, ['fqdn', 'docker_compose_domains']));
-        ServiceApplication::saving(fn (ServiceApplication $application) => $guard($application, ['fqdn']));
+        Application::saving(fn (Application $application) => $guard($application, ['fqdn', 'docker_compose_domains'], $fqdnHosts($application, true)));
+        ApplicationPreview::saving(fn (ApplicationPreview $preview) => $guard($preview, ['fqdn', 'docker_compose_domains'], $fqdnHosts($preview, true)));
+        ServiceApplication::saving(fn (ServiceApplication $application) => $guard($application, ['fqdn'], $fqdnHosts($application, false)));
+        // Coolify generates the MinIO and Logto domains into variables of the service.
+        EnvironmentVariable::saving(function (EnvironmentVariable $variable) use ($guard) {
+            if ($variable->resourceable_type !== Service::class || ! in_array($variable->key, DomainPolicy::SERVICE_DOMAIN_VARIABLES, true)) {
+                return;
+            }
+            $guard($variable, ['key', 'value'], fn (bool $original) => DomainPolicy::hostsFromFqdnList((string) ($original ? $variable->getOriginal('value') : $variable->value)));
+        });
     }
 
     private function registerFeatureGuards(): void

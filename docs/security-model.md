@@ -85,26 +85,35 @@ fork, a base de onde a plataforma partiu. São mudanças pequenas e localizadas.
 arquivos novos. A lista é gerada por `infra/scripts/upstream-touched-files.sh --write docs/security-model.md`, e o
 CI falha se um arquivo original for alterado sem aparecer aqui.
 
-O `docker/production/Dockerfile` é o mesmo do `v4.0.x` oficial: a imagem `minio/mc` saiu do Docker Hub e o
-`postgresql15-client` saiu do Alpine 3.23, então o Dockerfile da base não constrói mais. Ao sincronizar com o
-`v4.0.x`, ele deixa de aparecer na lista. A base padrão desse Dockerfile é uma imagem privada do Coolify
-(`ghcr.io/coollabsio/serversideup-php`); o release (`platform-release.yml`) e o ambiente local (`infra/local`)
-passam `SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine-v4.5.1`, a última versão 4 pública: a
-versão 5 mudou o s6 e o container não sobe as migrations nem as filas. Essa tag fixa não recebe mais
-correções do PHP; troque quando o Coolify oficial passar para a versão 5. Para construir à mão, use
-`docker build --build-arg SERVERSIDEUP_PHP_IMAGE=serversideup/php:8.4-fpm-nginx-alpine-v4.5.1 -f docker/production/Dockerfile .`.
+A imagem da plataforma sai do `docker/platform/Dockerfile` (arquivo novo); o `docker/production/Dockerfile`
+oficial fica intocado. A base dele é uma recompilação privada da versão 4 do `serversideup/php`
+(`ghcr.io/coollabsio/serversideup-php`), e as tags públicas da versão 4 não recebem mais correções. O
+Dockerfile da plataforma usa o `serversideup/php` 5 público e reaproveita a configuração do
+`docker/production`: registra os serviços S6 do Coolify em `user-bundles.d` (onde o S6 Overlay 3.2.3.2 da
+versão 5 procura), deixa o PHP-FPM só em `127.0.0.1` (na versão 5 ele escuta em todas as interfaces) e
+mantém o OPcache conferindo a data dos arquivos. O `platform-base-image.yml` abre toda semana um pull
+request com a versão 5.x mais nova, com o CI e o ambiente local rodando nele, e um teste confere que tudo o
+que o Dockerfile oficial copia para a imagem também vai para a da plataforma.
+
+Mudanças em arquivos originais que não são só ganchos:
+
+- `bootstrap/helpers/shared.php`: `get_service_templates()` entrega aos clientes o catálogo da plataforma
+  (`ServiceTemplates`), o mesmo na tela, na criação e na API.
+- `app/Jobs/PullTemplatesFromCDN.php`: a plataforma não baixa templates do CDN do Coolify; eles chegam com a
+  sincronização do upstream e passam pelos testes antes de ir para produção.
+- `app/Livewire/SettingsOauth.php`: correção de um bug do upstream (a rota `home` não existe; quem não é
+  administrador da instância vai para o painel, como nas outras telas de configuração).
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
 - `app/Http`: `Controllers/Api/ApplicationsController.php` (+7/-3), `Controllers/Api/DatabasesController.php` (+7/-4), `Controllers/Api/DeployController.php` (+13/-2), `Controllers/Api/ServersController.php` (+19/-0), `Controllers/Api/ServicesController.php` (+13/-7)
-- `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `StripeProcessJob.php` (+9/-0)
-- `app/Livewire`: `Boarding/Index.php` (+3/-0), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1)
+- `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
+- `app/Livewire`: `Boarding/Index.php` (+3/-0), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `SettingsOauth.php` (+1/-1)
 - `app/Models`: `Service.php` (+8/-1)
-- `bootstrap`: `helpers/subscriptions.php` (+1/-0)
+- `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+1/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
-- `docker`: `production/Dockerfile` (+16/-13)
 - `resources`: `views/components/navbar.blade.php` (+21/-1), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 47 arquivos.
+Total: 49 arquivos.
 <!-- upstream-files:end -->
 

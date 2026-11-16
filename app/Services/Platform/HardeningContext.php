@@ -89,6 +89,32 @@ class HardeningContext
     }
 
     /**
+     * Context for a compose file that is not parsed yet (a one-click template or what a tenant
+     * typed): its relative binds resolve inside a service directory, like after parsing.
+     */
+    public static function forUnparsedCompose(?string $resourceUuid = null): self
+    {
+        $resourceUuid = filled($resourceUuid) ? (string) $resourceUuid : 'unparsed-compose';
+        $directory = service_configuration_dir()."/{$resourceUuid}";
+
+        return new self(
+            teamId: 0,
+            plan: '',
+            resourceUuid: $resourceUuid,
+            resourceKind: 'service',
+            baseDirectory: $directory,
+            bindRoots: [$directory],
+            allowedNetworks: [],
+            allowedHosts: [],
+            maxCpus: 1,
+            maxMemoryMb: 1024,
+            defaultCpus: 0.5,
+            defaultMemoryMb: 512,
+            pidsLimit: 256,
+        );
+    }
+
+    /**
      * Enterprise VM reserved to the tenant (the VM is the isolation boundary there).
      */
     private static function isDedicatedNode(Model $resource, ?int $serverId): bool

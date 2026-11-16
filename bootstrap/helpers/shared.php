@@ -478,7 +478,7 @@ function get_service_templates(bool $force = false): Collection
     } else {
         $services = File::get(base_path('templates/'.config('constants.services.file_name')));
 
-        return collect(json_decode($services))->sortKeys();
+        return \App\Services\Platform\ServiceTemplates::forCurrentUser(collect(json_decode($services))->sortKeys());
     }
 }
 
