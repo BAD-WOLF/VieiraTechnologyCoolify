@@ -1,4 +1,4 @@
-import { Page, expect, test } from '@playwright/test';
+import { BrowserContext, Page, expect, test } from '@playwright/test';
 import { expectBranded, screenshot, verificationLink } from './support';
 
 /**
@@ -11,15 +11,17 @@ const password = 'Cliente-E2e-2026!';
 
 test.describe.configure({ mode: 'serial' });
 
+let context: BrowserContext;
 let page: Page;
 let newResource = '';
 
 test.beforeAll(async ({ browser }, testInfo) => {
-    page = await browser.newPage({ baseURL: testInfo.project.use.baseURL, locale: 'pt-BR' });
+    context = await browser.newContext({ baseURL: testInfo.project.use.baseURL, locale: 'pt-BR' });
+    page = await context.newPage();
 });
 
 test.afterAll(async () => {
-    await page?.close();
+    await context?.close();
 });
 
 test('a customer signs up, confirms the e-mail and pays with only name and CPF', async ({ request }) => {
@@ -100,12 +102,14 @@ test('the customer deploys and creates resources', async () => {
 
         await page.getByRole('button', { name: 'Deploy' }).first().click();
         await expect(page.getByText('Running', { exact: true }).first()).toBeVisible({ timeout: 8 * 60_000 });
+        await screenshot(page, 'deployed');
 
-        const app = await page.context().newPage();
+        const app = await context.newPage();
         await expect(async () => {
             await app.goto(domain);
             await expect(app.getByText('Welcome to nginx!')).toBeVisible({ timeout: 5_000 });
         }).toPass({ timeout: 2 * 60_000 });
+        await screenshot(app, 'application-at-its-domain');
         await app.close();
     });
 
