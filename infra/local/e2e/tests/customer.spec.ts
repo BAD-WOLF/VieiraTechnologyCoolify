@@ -116,7 +116,7 @@ test('the customer deploys and creates resources', async () => {
     await test.step('creates a PostgreSQL database', async () => {
         await page.goto(newResource);
         await page.getByText('PostgreSQL', { exact: true }).first().click();
-        await page.getByText('PostgreSQL 17 (default)').click();
+        await page.getByText('PostgreSQL 17 (default)', { exact: true }).click();
         await page.waitForURL(/\/database\//, { timeout: 60_000 });
         await expectBranded(page);
     });
