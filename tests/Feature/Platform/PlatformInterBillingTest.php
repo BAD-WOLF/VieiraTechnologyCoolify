@@ -496,7 +496,8 @@ it('confirms the payment on the page and leads to the dashboard', function () {
 it('lets a customer without an active plan open the dashboard, which shows how to activate it', function () {
     $tenant = pixTenant();
 
-    $this->withoutVite()->get('/')->assertOk()->assertSee('Your plan is not active yet');
+    $this->withoutVite()->get('/')->assertOk()->assertSee('Your plan is not active yet')
+        ->assertSee('Your applications, databases and services.')->assertDontSee('self-hosted');
     $this->get('/projects')->assertRedirect(route('subscription.index'));
 
     InterBilling::markPaid(InterBilling::createInvoice($tenant, PlatformInvoice::TYPE_SUBSCRIPTION, 'pro', 'monthly', now(), now()->addMonth(), [InterBilling::planLine('pro', 'monthly', 14990)]), 14990, 'PIX');

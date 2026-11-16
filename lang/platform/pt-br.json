@@ -519,6 +519,7 @@
     "Your account is active again": "Sua conta está ativa novamente",
     "Your applications keep running. If the invoice stays unpaid the containers will be stopped.": "Suas aplicações continuam rodando. Se a fatura continuar sem pagamento, os containers serão parados.",
     "Your applications run in an isolated network with the resources of your plan. No server setup needed.": "Suas aplicações rodam em uma rede isolada com os recursos do seu plano. Não é preciso configurar servidor.",
+    "Your applications, databases and services.": "Suas aplicações, bancos de dados e serviços.",
     "Your containers were stopped because an invoice is overdue for too long. Pay the open invoice to restore them.": "Seus containers foram parados porque uma fatura está vencida há muito tempo. Pague a fatura em aberto para restaurá-los.",
     "Your data and volumes are kept. Everything is started again automatically after the payment.": "Seus dados e volumes são mantidos. Tudo é iniciado novamente de forma automática após o pagamento.",
     "Your last payment failed. Update your payment method to avoid interruptions.": "Seu último pagamento falhou. Atualize a forma de pagamento para evitar interrupções.",
