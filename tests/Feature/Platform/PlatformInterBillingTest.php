@@ -33,6 +33,7 @@ const INTER = 'https://cdpj-sandbox.partners.uatinter.co';
 beforeEach(function () {
     Queue::fake();
     $GLOBALS['interFaked'] = false;
+    $GLOBALS['interPixFaked'] = false;
     PlatformSetting::flushMemo();
     config([
         'constants.coolify.self_hosted' => false,
@@ -340,4 +341,183 @@ it('reconciles the raw usage with the hourly rollups', function () {
     expect($mismatches)->toHaveCount(1)
         ->and((float) \App\Models\AggregatedUsageHourly::query()->where('team_id', $tenant->team_id)->sum('value'))->toBe(600.0)
         ->and(\App\Models\AuditLog::query()->where('action', 'platform.reconciliation.mismatch')->exists())->toBeTrue();
+});
+
+/**
+ * Inter Pix API: due charges ("cobv") and the webhook of the key.
+ */
+function interPixFake(array $charge = []): void
+{
+    $GLOBALS['interPixCharge'] = $charge;
+    if ($GLOBALS['interPixFaked'] ?? false) {
+        return;
+    }
+    $GLOBALS['interPixFaked'] = true;
+    $GLOBALS['interFaked'] = true;
+    Http::fake([
+        INTER.'/oauth/v2/token' => fn (Request $request) => Http::response(['access_token' => str_contains((string) $request['scope'], 'cobv') ? 'pix-token' : 'boleto-token', 'expires_in' => 3600]),
+        INTER.'/pix/v2/webhook/*' => Http::response(null, 204),
+        INTER.'/pix/v2/cobv/*' => fn (Request $request) => Http::response(array_replace_recursive([
+            'txid' => basename(parse_url($request->url(), PHP_URL_PATH)),
+            'status' => 'ATIVA',
+            'pixCopiaECola' => '00020101021226930014br.gov.bcb.pix2571spi-qrcode.bancointer.com.br/spi/pj/v2/cobv',
+        ], $GLOBALS['interPixCharge'])),
+        INTER.'/cobranca/v3/cobrancas' => Http::response(['codigoSolicitacao' => 'cod-1']),
+        INTER.'/cobranca/v3/cobrancas/webhook' => Http::response(null, 204),
+        INTER.'/cobranca/v3/cobrancas/*' => Http::response([
+            'cobranca' => ['codigoSolicitacao' => 'cod-1', 'situacao' => 'A_RECEBER'],
+            'boleto' => ['linhaDigitavel' => '07790001161234567890123456789012345678901234', 'nossoNumero' => '123'],
+            'pix' => ['txid' => 'tx1', 'pixCopiaECola' => '00020101021226990014br.gov.bcb.pix2577pix-qrcode.inter.co'],
+        ]),
+    ]);
+}
+
+function pixTenant(): PlatformTenant
+{
+    config(['platform.inter.pix_key' => '11222333000181']);
+    $tenant = interTenant();
+    $tenant->update(['billing_profile' => ['name' => 'Maria Silva', 'document' => '52998224725', 'email' => 'maria@example.com']]);
+
+    return $tenant->fresh();
+}
+
+it('charges by Pix with only name and CPF when the operator set a Pix key', function () {
+    interPixFake();
+    $tenant = pixTenant();
+    expect(BillingProfile::isComplete($tenant))->toBeTrue()
+        ->and(BillingProfile::methodOf($tenant))->toBe('pix');
+
+    $invoice = InterBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
+
+    expect(InterBilling::isPix($invoice))->toBeTrue()
+        ->and(strlen($invoice->provider_reference))->toBe(32)
+        ->and($invoice->provider_reference)->toStartWith((string) $invoice->number)
+        ->and(data_get($invoice->payment_details, 'pix_copia_e_cola'))->toStartWith('000201')
+        ->and($invoice->provider_status)->toBe('ATIVA');
+    Http::assertSent(fn (Request $request) => $request->method() === 'PUT'
+        && $request->url() === INTER.'/pix/v2/cobv/'.$invoice->provider_reference
+        && $request['devedor'] === ['cpf' => '52998224725', 'nome' => 'Maria Silva']
+        && $request['valor']['original'] === '149.90'
+        && $request['chave'] === '11222333000181'
+        && $request['calendario']['dataDeVencimento'] === $invoice->due_date->toDateString()
+        && $request->hasHeader('Authorization', 'Bearer pix-token'));
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/cobranca/v3/'));
+    Queue::assertPushed(PlatformNoticeJob::class);
+
+    // Pix webhook of the key: the charge is read back before the plan is activated.
+    $this->postJson('/api/v1/billing/webhooks/inter/webhooktoken1234567890abcdef/pix', ['pix' => [['txid' => $invoice->provider_reference, 'endToEndId' => 'E1', 'valor' => '1.00']]])
+        ->assertOk()->assertJson(['received' => 1]);
+    interPixFake(['status' => 'CONCLUIDA', 'pix' => [['endToEndId' => 'E1', 'txid' => $invoice->provider_reference, 'valor' => '149.90', 'horario' => '2026-11-16T10:00:00.000Z']]]);
+    (new PlatformInterSyncInvoiceJob($invoice->id))->handle();
+
+    expect($invoice->fresh()->status)->toBe(PlatformInvoice::STATUS_PAID)
+        ->and($invoice->fresh()->amount_paid_cents)->toBe(14990)
+        ->and($invoice->fresh()->payment_method)->toBe('PIX')
+        ->and($tenant->fresh()->plan)->toBe('pro')
+        ->and($tenant->fresh()->status)->toBe(PlatformTenant::STATUS_ACTIVE);
+});
+
+it('asks for the address only from customers who pay with boleto', function () {
+    interPixFake();
+    $tenant = pixTenant();
+    $tenant->update(['billing_profile' => null]);
+
+    Livewire::test(Pricing::class)
+        ->call('subscribe', 'pro')
+        ->assertSet('editingProfile', true)
+        ->assertSet('profile.payment_method', 'pix')
+        ->assertDontSee('ZIP code (CEP)')
+        ->set('profile.name', 'Empresa X Ltda')
+        ->set('profile.document', '11.222.333/0001-81')
+        ->set('profile.email', 'financeiro@example.com')
+        ->set('profile.payment_method', 'boleto')
+        ->assertSee('ZIP code (CEP)')
+        ->call('saveProfileAndSubscribe')
+        ->assertHasErrors(['profile.zip', 'profile.street', 'profile.city', 'profile.state'])
+        ->set('profile.payment_method', 'pix')
+        ->call('saveProfileAndSubscribe')
+        ->assertHasNoErrors()
+        ->assertSet('editingProfile', false)
+        ->assertSee('Payment pending')
+        ->assertSee('Back to home')
+        ->assertDontSee('Download boleto (PDF)');
+
+    $invoice = PlatformInvoice::query()->where('team_id', $tenant->team_id)->firstOrFail();
+    expect(InterBilling::isPix($invoice))->toBeTrue()
+        ->and(data_get($tenant->fresh()->billing_profile, 'zip'))->toBe('');
+    Http::assertSent(fn (Request $request) => $request->method() === 'PUT' && str_contains($request->url(), '/pix/v2/cobv/') && $request['devedor'] === ['cnpj' => '11222333000181', 'nome' => 'Empresa X Ltda']);
+});
+
+it('switches an open Pix charge to a boleto once the address is given', function () {
+    interPixFake();
+    $tenant = pixTenant();
+    $pix = InterBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
+
+    Livewire::test(Pricing::class)
+        ->assertSee('Prefer a boleto?')
+        ->call('payWith', 'boleto')
+        ->assertSet('editingProfile', true)
+        ->assertSet('profile.payment_method', 'boleto')
+        ->set('profile.zip', '01310-100')
+        ->set('profile.street', 'Av. Paulista')
+        ->set('profile.city', 'São Paulo')
+        ->set('profile.state', 'SP')
+        ->call('saveProfileAndSubscribe')
+        ->assertHasNoErrors();
+
+    $invoice = $pix->fresh();
+    expect(InterBilling::isBoleto($invoice))->toBeTrue()
+        ->and($invoice->provider_reference)->toBe('cod-1')
+        ->and($invoice->status)->toBe(PlatformInvoice::STATUS_OPEN);
+    Http::assertSent(fn (Request $request) => $request->method() === 'PATCH' && $request->url() === INTER.'/pix/v2/cobv/'.$pix->provider_reference
+        && $request['status'] === 'REMOVIDA_PELO_USUARIO_RECEBEDOR');
+    Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === INTER.'/cobranca/v3/cobrancas'
+        && $request['pagador']['cep'] === '01310100' && $request->hasHeader('Authorization', 'Bearer boleto-token'));
+
+    InterBilling::sync($invoice);
+    Livewire::test(Pricing::class)->assertSee('Download boleto (PDF)')->assertSee('Pay with Pix instead');
+});
+
+it('confirms the payment on the page and leads to the dashboard', function () {
+    interPixFake();
+    $tenant = pixTenant();
+    $invoice = InterBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
+
+    $page = Livewire::test(Pricing::class)->assertSee('Payment pending')->assertSet('watchedInvoice', $invoice->uuid);
+
+    interPixFake(['status' => 'CONCLUIDA', 'pix' => [['endToEndId' => 'E2', 'txid' => $invoice->provider_reference, 'valor' => '149.90', 'horario' => '2026-11-16T10:00:00.000Z']]]);
+    $page->call('checkPayment', $invoice->uuid)
+        ->assertDontSee('Payment pending')
+        ->assertSee('Payment confirmed')
+        ->assertSee('Go to the dashboard');
+    expect($tenant->fresh()->plan)->toBe('pro');
+});
+
+it('lets a customer without an active plan open the dashboard, which shows how to activate it', function () {
+    $tenant = pixTenant();
+
+    $this->withoutVite()->get('/')->assertOk()->assertSee('Your plan is not active yet');
+    $this->get('/projects')->assertRedirect(route('subscription.index'));
+
+    InterBilling::markPaid(InterBilling::createInvoice($tenant, PlatformInvoice::TYPE_SUBSCRIPTION, 'pro', 'monthly', now(), now()->addMonth(), [InterBilling::planLine('pro', 'monthly', 14990)]), 14990, 'PIX');
+    \Illuminate\Support\Facades\Cache::forget('team:'.auth()->id());
+    $this->get('/')->assertDontSee('Your plan is not active yet');
+});
+
+it('registers the boleto and the Pix webhooks, each with the token of its API', function () {
+    interPixFake();
+    config(['platform.inter.pix_key' => 'financeiro@hostrema.com.br']);
+    $root = User::factory()->create();
+    $root->teams()->attach(0, ['role' => 'owner']);
+    $this->actingAs($root);
+    session(['currentTeam' => Team::find(0)]);
+
+    Livewire::test(AdminBilling::class)->call('connect')->assertSet('resultOk', true);
+
+    $url = 'https://painel.hostrema.com.br/api/v1/billing/webhooks/inter/webhooktoken1234567890abcdef';
+    Http::assertSent(fn (Request $request) => $request->method() === 'PUT' && $request->url() === INTER.'/pix/v2/webhook/financeiro%40hostrema.com.br'
+        && $request['webhookUrl'] === $url && $request->hasHeader('Authorization', 'Bearer pix-token'));
+    Http::assertSent(fn (Request $request) => $request->method() === 'PUT' && $request->url() === INTER.'/cobranca/v3/cobrancas/webhook'
+        && $request['webhookUrl'] === $url && $request->hasHeader('Authorization', 'Bearer boleto-token'));
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/oauth/v2/token') && $request['scope'] === InterClient::PIX_SCOPES);
 });

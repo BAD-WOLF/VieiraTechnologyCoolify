@@ -1,4 +1,19 @@
 <div class="flex flex-col w-full gap-6 pb-10">
+    @if ($paidInvoice)
+        <div class="flex flex-col gap-3 p-4 border rounded-sm border-success/60">
+            <h3>{{ __('Payment confirmed') }}</h3>
+            <div class="text-sm dark:text-neutral-300">
+                {{ __('Invoice :number (:amount) is paid and your :plan plan is active. Thank you!', [
+                    'number' => $paidInvoice->number,
+                    'amount' => $paidInvoice->formattedAmount(),
+                    'plan' => \App\Services\Platform\PlanCatalog::get($paidInvoice->plan)['name'] ?? $paidInvoice->plan,
+                ]) }}
+            </div>
+            <div>
+                <a href="{{ route('dashboard') }}" class="button">{{ __('Go to the dashboard') }}</a>
+            </div>
+        </div>
+    @endif
     @if ($inter && $pendingInvoice)
         @include('livewire.platform.partials.invoice-payment', ['invoice' => $pendingInvoice, 'qr' => $qr, 'cancellable' => $pendingInvoice->type === 'subscription'])
     @endif

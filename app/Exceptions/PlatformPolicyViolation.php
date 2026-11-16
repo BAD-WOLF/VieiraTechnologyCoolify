@@ -21,8 +21,10 @@ class PlatformPolicyViolation extends NonReportableException
      */
     public function __construct(public array $violations = [], string $prefix = 'Blocked by platform policy')
     {
-        $violations = array_values(array_unique(array_filter($violations)));
+        // Shown to the customer (pages, notifications, API): fixed texts are translated here.
+        $violations = array_values(array_unique(array_filter(array_map(fn ($violation) => is_string($violation) ? __($violation) : $violation, $violations))));
         $this->violations = $violations;
+        $prefix = __($prefix);
         $this->title = $prefix;
         $message = $prefix.(count($violations) > 0 ? ': '.implode(' | ', $violations) : '.');
         parent::__construct($message);

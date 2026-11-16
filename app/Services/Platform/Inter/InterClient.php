@@ -8,18 +8,25 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 /**
- * Banco Inter API client (OAuth 2.0 client credentials + mTLS), "Cobrança" v3: boleto + Pix
- * ("Bolepix"). https://developers.inter.co/references/cobranca-bolepix
+ * Banco Inter API client (OAuth 2.0 client credentials + mTLS):
+ * - "Cobrança" v3, boleto + Pix ("Bolepix"): https://developers.inter.co/references/cobranca-bolepix
+ * - Pix (standard API of the Banco Central), charges with a due date ("cobv") and their webhook:
+ *   https://developers.inter.co/references/pix
+ * Each API has its own scopes and token, so an application with only one of them still works.
  */
 class InterClient
 {
     public const SCOPES = 'boleto-cobranca.read boleto-cobranca.write';
 
+    public const PIX_SCOPES = 'cobv.write cobv.read webhook.write webhook.read pix.read';
+
     private const CHARGES = '/cobranca/v3/cobrancas';
 
-    public function token(bool $fresh = false): string
+    private const DUE_CHARGES = '/pix/v2/cobv';
+
+    public function token(bool $fresh = false, string $scopes = self::SCOPES): string
     {
-        $cacheKey = 'platform:inter:token:'.sha1(InterSettings::environment().'|'.InterSettings::value('client_id').'|'.self::SCOPES);
+        $cacheKey = self::tokenCacheKey($scopes);
         if (! $fresh && is_string($cached = Cache::get($cacheKey)) && $cached !== '') {
             return $cached;
         }
@@ -31,7 +38,7 @@ class InterClient
                 'client_id' => InterSettings::value('client_id'),
                 'client_secret' => InterSettings::value('client_secret'),
                 'grant_type' => 'client_credentials',
-                'scope' => self::SCOPES,
+                'scope' => $scopes,
             ]);
         if ($response->failed() || blank($response->json('access_token'))) {
             throw InterException::fromResponse('Banco Inter authentication', $response);
@@ -40,6 +47,18 @@ class InterClient
         Cache::put($cacheKey, $token, max(60, (int) $response->json('expires_in', 3600) - 120));
 
         return $token;
+    }
+
+    public static function tokenCacheKey(string $scopes = self::SCOPES): string
+    {
+        return 'platform:inter:token:'.sha1(InterSettings::environment().'|'.InterSettings::value('client_id').'|'.$scopes);
+    }
+
+    public static function forgetTokens(): void
+    {
+        foreach ([self::SCOPES, self::PIX_SCOPES] as $scopes) {
+            Cache::forget(self::tokenCacheKey($scopes));
+        }
     }
 
     /**
@@ -115,12 +134,49 @@ class InterClient
     }
 
     /**
+     * Creates the Pix charge with a due date "txid" (26 to 35 letters and digits).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public function createDueCharge(string $txid, array $payload): array
+    {
+        $charge = (array) $this->request('PUT', self::DUE_CHARGES.'/'.rawurlencode($txid), $payload, scopes: self::PIX_SCOPES)->json();
+        if (blank($charge['pixCopiaECola'] ?? null)) {
+            throw new InterException('Banco Inter did not return the Pix code (pixCopiaECola).');
+        }
+
+        return $charge;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function dueCharge(string $txid): array
+    {
+        return (array) $this->request('GET', self::DUE_CHARGES.'/'.rawurlencode($txid), scopes: self::PIX_SCOPES)->json();
+    }
+
+    public function cancelDueCharge(string $txid): void
+    {
+        $this->request('PATCH', self::DUE_CHARGES.'/'.rawurlencode($txid), ['status' => 'REMOVIDA_PELO_USUARIO_RECEBEDOR'], scopes: self::PIX_SCOPES);
+    }
+
+    /**
+     * Pix notifications of a key go to "{url}/pix" (standard of the Banco Central).
+     */
+    public function registerPixWebhook(string $pixKey, string $url): void
+    {
+        $this->request('PUT', '/pix/v2/webhook/'.rawurlencode($pixKey), ['webhookUrl' => $url], scopes: self::PIX_SCOPES);
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
-    public function request(string $method, string $path, array $payload = [], bool $retried = false): Response
+    public function request(string $method, string $path, array $payload = [], bool $retried = false, string $scopes = self::SCOPES): Response
     {
         $url = InterSettings::baseUrl().$path;
-        $request = $this->pending();
+        $request = $this->pending($scopes);
         $response = match ($method) {
             'GET' => $request->get($url, $payload),
             'POST' => $request->post($url, $payload),
@@ -130,9 +186,9 @@ class InterClient
             default => throw new \InvalidArgumentException("Unsupported method {$method}"),
         };
         if ($response->status() === 401 && ! $retried) {
-            $this->token(true);
+            $this->token(true, $scopes);
 
-            return $this->request($method, $path, $payload, true);
+            return $this->request($method, $path, $payload, true, $scopes);
         }
         if ($response->failed()) {
             throw InterException::fromResponse("Banco Inter {$method} {$path}", $response);
@@ -141,12 +197,12 @@ class InterClient
         return $response;
     }
 
-    private function pending(): PendingRequest
+    private function pending(string $scopes): PendingRequest
     {
         $request = Http::acceptJson()
             ->asJson()
             ->withOptions($this->tlsOptions())
-            ->withToken($this->token())
+            ->withToken($this->token(false, $scopes))
             ->timeout((int) config('platform.inter.timeout', 30))
             ->retry(2, 500, fn ($exception) => $exception instanceof \Illuminate\Http\Client\ConnectionException, throw: false);
         $account = InterSettings::value('conta_corrente');

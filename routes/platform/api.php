@@ -26,6 +26,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/v1/billing/webhooks/stripe', [StripeWebhook::class, 'events']);
 Route::post('/v1/billing/webhooks/inter/{token}', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
+// Pix notifications go to the registered URL followed by "/pix" (standard of the Banco Central).
+Route::post('/v1/billing/webhooks/inter/{token}/pix', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
 Route::get('/v1/platform/metrics', PlatformMetricsController::class);
 Route::get('/v1/platform/openapi.json', PlatformOpenApiController::class)->name('platform.openapi');
 Route::get('/v1/platform/edge/{region}', PlatformEdgeController::class)->where('region', '[a-z0-9-]+');

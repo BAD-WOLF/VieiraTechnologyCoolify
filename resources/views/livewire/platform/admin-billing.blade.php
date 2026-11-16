@@ -20,7 +20,7 @@
                 </span>
             </h3>
             <div class="text-xs dark:text-neutral-400">
-                {{ __('Inter Empresas > Soluções para sua empresa > Nova integração: enable "API Cobrança (Boleto e Pix)" with the scopes boleto-cobranca.read and boleto-cobranca.write, then paste the Client ID, Client Secret, certificate (.crt) and key (.key) of the downloaded zip here.') }}
+                {{ __('Inter Empresas > Soluções para sua empresa > Nova integração: enable "API Pix" (cobv.write, cobv.read, webhook.write, webhook.read, pix.read) and "API Cobrança (Boleto e Pix)" (boleto-cobranca.read, boleto-cobranca.write), then paste the Client ID, Client Secret, certificate (.crt) and key (.key) of the downloaded zip here.') }}
             </div>
         </div>
         <div class="grid grid-cols-1 gap-2 lg:grid-cols-2">
@@ -29,6 +29,8 @@
                 <option value="sandbox">{{ __('Sandbox (tests)') }}</option>
             </x-forms.select>
             <x-forms.input id="contaCorrente" label="{{ __('Checking account (only if the application has more than one)') }}" />
+            <x-forms.input id="pixKey" label="{{ __('Pix key of the account') }}"
+                helper="{{ __('With a Pix key, invoices are Pix charges and customers only give name, CPF/CNPJ and e-mail; the address is asked only from those who choose boleto. Without it, every invoice is a boleto with Pix and the address is required.') }}" />
             <x-forms.input id="clientId" label="Client ID" />
             <x-forms.input id="clientSecret" type="password" label="Client Secret"
                 placeholder="{{ $hasSecret ? __('Stored - leave empty to keep') : '' }}" />
@@ -92,7 +94,7 @@
                         <button class="underline dark:text-white" wire:click="markPaid('{{ $invoice->uuid }}')" wire:confirm="{{ __('Mark this invoice as paid (received outside the Inter charge)?') }}">{{ __('Mark as paid') }}</button>
                         <button class="underline dark:text-white" wire:click="cancelInvoice('{{ $invoice->uuid }}')" wire:confirm="{{ __('Cancel this invoice at the bank?') }}">{{ __('Cancel') }}</button>
                         @if ($sandbox && $invoice->provider_reference)
-                            <button class="underline dark:text-white" wire:click="simulatePayment('{{ $invoice->uuid }}', 'PIX')">{{ __('Simulate Pix payment') }}</button>
+                            <button class="underline dark:text-white" wire:click="simulatePayment('{{ $invoice->uuid }}')">{{ __('Simulate payment') }}</button>
                         @endif
                     @endif
                     @if (in_array($invoice->status, ['open', 'void']) && is_null($invoice->paid_at))

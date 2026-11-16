@@ -81,7 +81,7 @@ class PlatformGate
         $tenant = self::assertTenantActive($team);
         $limit = (int) $tenant->quota('resources');
         if ($limit > 0 && self::resourceCount($team) >= $limit) {
-            throw PlatformPolicyViolation::single("Your plan allows {$limit} resources. Delete a resource or upgrade your plan.", 'Plan limit reached');
+            throw PlatformPolicyViolation::single(__('Your plan allows :limit resources. Delete a resource or upgrade your plan.', ['limit' => $limit]), 'Plan limit reached');
         }
         $isDatabase = in_array($resource::class, self::databaseModels(), true);
         if ($isDatabase && ! $tenant->hasFeature('databases')) {
@@ -114,7 +114,7 @@ class PlatformGate
                     ->where('created_at', '>=', now()->subDay())
                     ->count();
                 if ($deployments > $limit) {
-                    throw PlatformPolicyViolation::single("Your plan allows {$limit} deployments per day.", 'Plan limit reached');
+                    throw PlatformPolicyViolation::single(__('Your plan allows :limit deployments per day.', ['limit' => $limit]), 'Plan limit reached');
                 }
             }
         }

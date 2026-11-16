@@ -119,6 +119,10 @@ class Pricing extends Component
             ->whereIn('type', [PlatformInvoice::TYPE_SUBSCRIPTION, PlatformInvoice::TYPE_UPGRADE])
             ->latest('id')
             ->first() : null;
+        if ($pending) {
+            $this->watchedInvoice = $pending->uuid;
+        }
+        $paid = $pending ? null : $this->paidWatchedInvoice();
 
         return view('livewire.platform.pricing', [
             'plans' => $plans,
@@ -127,6 +131,7 @@ class Pricing extends Component
             'salesUrl' => config('platform.sales_url') ?: (config('platform.support_email') ? 'mailto:'.config('platform.support_email') : null),
             'inter' => $inter,
             'pendingInvoice' => $pending,
+            'paidInvoice' => $paid,
             'qr' => self::pixQrSvg(data_get($pending?->payment_details, 'pix_copia_e_cola')),
             'states' => BillingProfile::STATES,
         ]);

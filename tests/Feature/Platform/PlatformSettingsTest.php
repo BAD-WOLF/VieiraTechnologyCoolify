@@ -466,3 +466,25 @@ it('copies everything the official image copies, so upstream additions are not l
     expect($official)->not->toBeEmpty()
         ->and(array_diff_assoc($official, copiedByDockerfile('docker/platform/Dockerfile')))->toBe([]);
 });
+
+it('has a Portuguese translation for every text of the platform screens', function () {
+    $translations = json_decode((string) file_get_contents(lang_path('platform/pt-br.json')), true);
+    $files = collect([
+        resource_path('views/livewire/platform'), app_path('Livewire/Platform'), app_path('Services/Platform'), app_path('Actions/Platform'),
+    ])->flatMap(fn (string $directory) => \Illuminate\Support\Facades\File::allFiles($directory))
+        ->map(fn ($file) => $file->getPathname())
+        ->push(resource_path('views/components/platform-banner.blade.php'), app_path('Exceptions/PlatformPolicyViolation.php'), app_path('Models/PlatformTenant.php'));
+
+    $missing = [];
+    foreach ($files as $file) {
+        preg_match_all("/__\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", (string) file_get_contents($file), $matches);
+        foreach ($matches[1] as $text) {
+            $text = stripslashes($text);
+            if (! array_key_exists($text, $translations)) {
+                $missing[] = str_replace(base_path().'/', '', $file).': '.$text;
+            }
+        }
+    }
+
+    expect($missing)->toBe([]);
+});

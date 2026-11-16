@@ -1,7 +1,12 @@
 @php
     $platformTenantForBanner = isPlatformTenant() ? platformTenant() : null;
 @endphp
-@if ($platformTenantForBanner && $platformTenantForBanner->hasPlan())
+@if ($platformTenantForBanner && ! $platformTenantForBanner->hasPlan() && ! request()->routeIs('subscription.*'))
+    <div class="flex flex-wrap items-center gap-2 px-4 py-2 mb-4 text-sm border rounded-sm border-warning dark:text-white">
+        {{ __('Your plan is not active yet. Choose a plan and pay the first invoice to start deploying.') }}
+        <a class="underline" href="{{ route('subscription.index') }}">{{ __('Plans and payment') }}</a>
+    </div>
+@elseif ($platformTenantForBanner && $platformTenantForBanner->hasPlan())
     @if ($platformTenantForBanner->blockReason())
         <div class="px-4 py-2 mb-4 text-sm border rounded-sm border-error dark:text-white">
             {{ $platformTenantForBanner->blockReason() }}

@@ -19,7 +19,7 @@ class PlatformFeedback extends ComponentHook
     public function exception($e, $stopPropagation): void
     {
         if ($e instanceof PlatformPolicyViolation) {
-            $this->component->dispatch('error', $e->title, implode(' ', $e->violations) ?: $e->getMessage());
+            $this->component->dispatch('error', $e->title, implode(' ', $e->violations) ?: $e->title);
             $stopPropagation();
 
             return;

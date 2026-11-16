@@ -70,6 +70,7 @@ function allowedPathsForUnsubscribedAccounts()
         'force-password-reset',
         'livewire/update',
         'admin',
+        ...platformPathsForUnsubscribedAccounts(),
     ];
 }
 function allowedPathsForBoardingAccounts()

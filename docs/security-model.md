@@ -103,6 +103,8 @@ Mudanças em arquivos originais que não são só ganchos:
   sincronização do upstream e passam pelos testes antes de ir para produção.
 - `app/Livewire/SettingsOauth.php`: correção de um bug do upstream (a rota `home` não existe; quem não é
   administrador da instância vai para o painel, como nas outras telas de configuração).
+- `bootstrap/helpers/subscriptions.php`: antes do primeiro pagamento o cliente abre o painel (início), que
+  mostra como ativar o plano; criar e publicar continua bloqueado pelo status do plano.
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
@@ -110,7 +112,7 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
 - `app/Livewire`: `Boarding/Index.php` (+3/-0), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `SettingsOauth.php` (+1/-1)
 - `app/Models`: `Service.php` (+8/-1)
-- `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+1/-0)
+- `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+2/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
 - `resources`: `views/components/navbar.blade.php` (+21/-1), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
 

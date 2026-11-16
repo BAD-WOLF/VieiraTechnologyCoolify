@@ -4,11 +4,12 @@ namespace App\Livewire\Platform;
 
 use App\Models\PlatformInvoice;
 use App\Models\PlatformSetting;
+use App\Services\Platform\BillingProfile;
+use App\Services\Platform\Inter\InterClient;
 use App\Services\Platform\Inter\InterSettings;
 use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PlatformConfig;
-use Illuminate\Support\Facades\Cache;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
@@ -36,6 +37,8 @@ class AdminBilling extends Component
 
     public string $contaCorrente = '';
 
+    public string $pixKey = '';
+
     /** @var array<string, array<string, string>> */
     public array $prices = [];
 
@@ -51,6 +54,7 @@ class AdminBilling extends Component
         $this->environment = InterSettings::environment();
         $this->clientId = (string) InterSettings::value('client_id');
         $this->contaCorrente = (string) InterSettings::value('conta_corrente');
+        $this->pixKey = (string) InterSettings::pixKey();
         foreach (array_keys(PlanCatalog::all()) as $plan) {
             foreach ([PlanCatalog::INTERVAL_MONTHLY, PlanCatalog::INTERVAL_YEARLY] as $interval) {
                 $cents = InterBilling::priceCents($plan, $interval);
@@ -71,6 +75,7 @@ class AdminBilling extends Component
             'certificateFile' => ['nullable', 'file', 'max:64'],
             'privateKeyFile' => ['nullable', 'file', 'max:64'],
             'contaCorrente' => ['nullable', 'string', 'max:30'],
+            'pixKey' => ['nullable', 'string', 'max:77'],
             'prices.*.*' => ['nullable', 'string', 'max:20'],
         ]);
         $certificate = $this->certificateFile ? (string) file_get_contents($this->certificateFile->getRealPath()) : trim($this->certificate);
@@ -89,6 +94,7 @@ class AdminBilling extends Component
         InterSettings::store('environment', $this->environment);
         InterSettings::store('client_id', trim($this->clientId) ?: null);
         InterSettings::store('conta_corrente', trim($this->contaCorrente) ?: null);
+        InterSettings::store('pix_key', trim($this->pixKey) ?: null);
         if (trim($this->clientSecret) !== '') {
             InterSettings::store('client_secret', trim($this->clientSecret));
         }
@@ -113,7 +119,7 @@ class AdminBilling extends Component
             }
         }
         $this->reset('clientSecret', 'certificate', 'privateKey', 'certificateFile', 'privateKeyFile');
-        Cache::forget('platform:inter:token:'.sha1(InterSettings::environment().'|'.InterSettings::value('client_id').'|'.\App\Services\Platform\Inter\InterClient::SCOPES));
+        InterClient::forgetTokens();
         audit_log('platform.inter.settings_saved', null, ['environment' => $this->environment], 0);
 
         if (InterSettings::isConfigured()) {
@@ -124,18 +130,30 @@ class AdminBilling extends Component
     }
 
     /**
-     * Gets a token and registers the webhook: if it works, payments are ready.
+     * Registers the webhooks (each API with its own token): if it works, payments are ready.
      */
     public function connect(): void
     {
         $this->guard();
         try {
-            InterBilling::client()->token(true);
-            $url = InterBilling::registerWebhook();
-            $this->report(true, __('Connected to Banco Inter (:env). Webhook registered: :url', [
+            InterClient::forgetTokens();
+            $result = InterBilling::registerWebhooks();
+            $labels = [BillingProfile::PIX => 'Pix', BillingProfile::BOLETO => __('Boleto')];
+            $failures = collect($result['errors'])->map(fn (string $error, string $method) => ($labels[$method] ?? $method).': '.$error)->values()->all();
+            if ($result['registered'] === []) {
+                $this->report(false, implode(' ', $failures));
+
+                return;
+            }
+            $message = __('Connected to Banco Inter (:env). Webhook registered for :methods: :url', [
                 'env' => InterSettings::environment(),
-                'url' => preg_replace('#/[^/]+$#', '/•••', $url),
-            ]));
+                'methods' => collect($result['registered'])->map(fn (string $method) => $labels[$method] ?? $method)->implode(', '),
+                'url' => preg_replace('#/[^/]+$#', '/•••', $result['url']),
+            ]);
+            if ($failures !== []) {
+                $message .= ' '.__('Not available: :errors', ['errors' => implode(' ', $failures)]);
+            }
+            $this->report($failures === [], $message);
         } catch (\Throwable $e) {
             $this->report(false, $e->getMessage());
         }
@@ -175,13 +193,11 @@ class AdminBilling extends Component
         }
     }
 
-    public function simulatePayment(string $uuid, string $method = 'PIX'): void
+    public function simulatePayment(string $uuid): void
     {
         $this->guard();
         try {
-            $invoice = $this->invoice($uuid);
-            InterBilling::client()->simulatePayment((string) $invoice->provider_reference, $method);
-            InterBilling::sync($invoice);
+            InterBilling::simulatePayment($this->invoice($uuid));
             $this->report(true, __('Payment simulated in the sandbox.'));
         } catch (\Throwable $e) {
             $this->report(false, $e->getMessage());

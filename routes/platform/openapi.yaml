@@ -278,7 +278,17 @@ paths:
   /v1/billing/webhooks/inter/{token}:
     post:
       tags: [Internal]
-      summary: Banco Inter charge notifications (the status is always read back from the Inter API)
+      summary: Banco Inter boleto charge notifications (the status is always read back from the Inter API)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "Accepted" }
+        "404": { description: "Wrong token" }
+  /v1/billing/webhooks/inter/{token}/pix:
+    post:
+      tags: [Internal]
+      summary: Pix notifications of the account key (the charge is always read back from the Inter API)
       security: []
       parameters:
         - { name: token, in: path, required: true, schema: { type: string } }

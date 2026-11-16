@@ -350,7 +350,7 @@ class PlatformServiceProvider extends ServiceProvider
                 $all = array_unique(array_merge(array_diff(DomainPolicy::hostsOwnedBy($team), $previous), $hosts));
                 $custom = count(array_filter($all, fn ($host) => DomainPolicy::isCustomHost($host)));
                 if ($custom > $limit) {
-                    throw PlatformPolicyViolation::single("Your plan allows {$limit} custom domains.", 'Plan limit reached');
+                    throw PlatformPolicyViolation::single(__('Your plan allows :limit custom domains.', ['limit' => $limit]), 'Plan limit reached');
                 }
             }
         };

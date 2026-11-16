@@ -45,6 +45,17 @@ function isPlatformTenant(Team|int|null $team = null): bool
     return (int) $teamId !== 0;
 }
 
+/**
+ * Pages a platform customer opens before the plan is active: the dashboard, home of the panel,
+ * which shows how to activate the plan (creating and deploying stay blocked by the plan status).
+ *
+ * @return array<int, string>
+ */
+function platformPathsForUnsubscribedAccounts(): array
+{
+    return isPlatformTenant() && ! isSubscriptionActive() ? ['/'] : [];
+}
+
 function platformTenant(Team|int|null $team = null): ?PlatformTenant
 {
     if (is_null($team)) {

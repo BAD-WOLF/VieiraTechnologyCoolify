@@ -9,8 +9,9 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 /**
- * Banco Inter webhook of the charges (boleto + Pix). The URL carries a secret token; the payload
- * only tells which charges changed, their status is always read again from the Inter API.
+ * Banco Inter webhooks of the boleto charges and of the Pix key ("{url}/pix"). The URL carries a
+ * secret token; the payload only tells which charges changed, their status is always read again
+ * from the Inter API.
  */
 class PlatformInterWebhookController extends Controller
 {

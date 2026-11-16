@@ -26,9 +26,15 @@ trait ManagesInterInvoices
 
     public bool $editingProfile = false;
 
+    /**
+     * Last unpaid invoice shown on the page: when it gets paid, the page says so.
+     */
+    public ?string $watchedInvoice = null;
+
     protected function loadProfile(PlatformTenant $tenant): void
     {
         $this->profile = BillingProfile::of($tenant);
+        $this->profile['payment_method'] = (string) BillingProfile::methodOf($tenant);
         if (blank($this->profile['email'] ?? null)) {
             $this->profile['email'] = (string) auth()->user()?->email;
         }
@@ -40,18 +46,51 @@ trait ManagesInterInvoices
         if (! $this->canManageBilling()) {
             return;
         }
-        $this->validate(BillingProfile::rules('profile.'));
+        $this->validate(BillingProfile::rules('profile.', $this->profile['payment_method'] ?? null));
         $tenant = platformTenant();
         BillingProfile::save($tenant, $this->profile);
-        PlatformInvoice::query()->where('team_id', $tenant->team_id)->where('status', PlatformInvoice::STATUS_OPEN)
-            ->whereNull('provider_reference')->get()
-            ->each(function (PlatformInvoice $invoice) {
-                $metadata = (array) $invoice->metadata;
-                unset($metadata['issue_attempts']);
-                $invoice->forceFill(['metadata' => $metadata])->save();
+        $tenant = $tenant->fresh();
+        $method = BillingProfile::methodOf($tenant);
+        PlatformInvoice::query()->where('team_id', $tenant->team_id)->where('status', PlatformInvoice::STATUS_OPEN)->get()
+            ->each(function (PlatformInvoice $invoice) use ($method) {
+                if (blank($invoice->provider_reference)) {
+                    $metadata = (array) $invoice->metadata;
+                    unset($metadata['issue_attempts']);
+                    $invoice->forceFill(['metadata' => $metadata])->save();
+
+                    return;
+                }
+                // A charge of the other method is replaced, so the customer pays the way just chosen.
+                $issuedAs = InterBilling::isPix($invoice) ? BillingProfile::PIX : (InterBilling::isBoleto($invoice) ? BillingProfile::BOLETO : null);
+                if (! is_null($method) && ! is_null($issuedAs) && $issuedAs !== $method) {
+                    InterBilling::reissue($invoice);
+                }
             });
         $this->editingProfile = false;
         $this->dispatch('success', __('Billing details saved.'));
+    }
+
+    /**
+     * Pay an open invoice with the other method: boleto asks for the address first.
+     */
+    public function payWith(string $method): void
+    {
+        if (! $this->canManageBilling() || ! in_array($method, BillingProfile::methods(), true)) {
+            return;
+        }
+        try {
+            $tenant = platformTenant();
+            $this->loadProfile($tenant);
+            $this->profile['payment_method'] = $method;
+            if (validator($this->profile, BillingProfile::rules('', $method))->fails()) {
+                $this->editingProfile = true;
+
+                return;
+            }
+            $this->saveProfile();
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
     }
 
     public function refreshInvoice(string $uuid): void
@@ -67,11 +106,44 @@ trait ManagesInterInvoices
         }
     }
 
+    /**
+     * Polled while an invoice waits for payment. The webhook usually confirms it first; the bank
+     * is asked at most every 20 seconds (every 5 while a boleto is still being registered).
+     */
+    public function checkPayment(string $uuid): void
+    {
+        try {
+            $invoice = $this->teamInvoice($uuid);
+            if ($invoice->status !== PlatformInvoice::STATUS_OPEN || $invoice->provider !== InterBilling::PROVIDER || blank($invoice->provider_reference)) {
+                return;
+            }
+            $seconds = InterBilling::hasPaymentData($invoice) ? 20 : 5;
+            if (RateLimiter::attempt('platform-invoice-check:'.$invoice->id, 1, fn () => true, $seconds)) {
+                InterBilling::sync($invoice);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    /**
+     * The watched invoice, once paid.
+     */
+    protected function paidWatchedInvoice(): ?PlatformInvoice
+    {
+        if (blank($this->watchedInvoice)) {
+            return null;
+        }
+
+        return PlatformInvoice::query()->where('uuid', $this->watchedInvoice)->where('team_id', currentTeam()?->id)
+            ->where('status', PlatformInvoice::STATUS_PAID)->first();
+    }
+
     public function downloadBoleto(string $uuid)
     {
         try {
             $invoice = $this->teamInvoice($uuid);
-            if ($invoice->provider !== InterBilling::PROVIDER || blank($invoice->provider_reference)) {
+            if ($invoice->provider !== InterBilling::PROVIDER || ! InterBilling::isBoleto($invoice)) {
                 $this->dispatch('error', __('The boleto is not available yet.'));
 
                 return null;
@@ -106,8 +178,7 @@ trait ManagesInterInvoices
             if (InterBilling::isManualInvoice($invoice)) {
                 InterBilling::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), 'user');
             } elseif (filled($invoice->provider_reference) && InterSettings::isSandbox()) {
-                InterBilling::client()->simulatePayment((string) $invoice->provider_reference, 'PIX');
-                InterBilling::sync($invoice);
+                InterBilling::simulatePayment($invoice);
             } else {
                 $this->dispatch('error', __('Payments can only be simulated with the manual provider or the Inter sandbox.'));
 

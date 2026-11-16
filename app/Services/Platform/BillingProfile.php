@@ -7,20 +7,68 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 /**
- * Payer details of a tenant (required by the bank to register a boleto), stored encrypted in
- * platform_tenants.billing_profile.
+ * Payer details of a tenant, stored encrypted in platform_tenants.billing_profile.
+ *
+ * Pix needs only the name and the CPF/CNPJ. The address is asked only from customers who pay with
+ * boleto, because the bank registers a boleto only with the payer's address.
  */
 class BillingProfile
 {
     public const STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
 
-    public const FIELDS = ['name', 'document', 'email', 'phone', 'zip', 'street', 'number', 'complement', 'district', 'city', 'state'];
+    public const FIELDS = ['name', 'document', 'email', 'phone', 'payment_method', 'zip', 'street', 'number', 'complement', 'district', 'city', 'state'];
+
+    public const ADDRESS_FIELDS = ['zip', 'street', 'number', 'complement', 'district', 'city', 'state'];
+
+    public const PIX = 'pix';
+
+    public const BOLETO = 'boleto';
+
+    /**
+     * Payment methods the customer can choose: Pix needs the Pix key of the operator, the boleto
+     * comes with the Inter charges API.
+     *
+     * @return array<int, string>
+     */
+    public static function methods(): array
+    {
+        if (! InterBilling::enabled() || InterBilling::isManual()) {
+            return [];
+        }
+
+        return filled(Inter\InterSettings::pixKey()) ? [self::PIX, self::BOLETO] : [self::BOLETO];
+    }
+
+    /**
+     * How the tenant's invoices are charged: what the customer chose, when available.
+     */
+    public static function method(?string $chosen): ?string
+    {
+        $methods = self::methods();
+        if ($methods === []) {
+            return null;
+        }
+
+        return in_array($chosen, $methods, true) ? $chosen : $methods[0];
+    }
+
+    public static function methodOf(PlatformTenant $tenant): ?string
+    {
+        return self::method(data_get($tenant->billing_profile, 'payment_method'));
+    }
+
+    public static function needsAddress(?string $chosen): bool
+    {
+        return self::method($chosen) === self::BOLETO;
+    }
 
     /**
      * @return array<string, array<int, mixed>>
      */
-    public static function rules(string $prefix = ''): array
+    public static function rules(string $prefix = '', ?string $method = null): array
     {
+        $address = self::needsAddress($method);
+
         return [
             $prefix.'name' => ['required', 'string', 'max:100'],
             $prefix.'document' => ['required', 'string', 'max:20', function (string $attribute, mixed $value, \Closure $fail) {
@@ -30,13 +78,14 @@ class BillingProfile
             }],
             $prefix.'email' => ['required', 'email', 'max:100'],
             $prefix.'phone' => ['nullable', 'string', 'max:20'],
-            $prefix.'zip' => ['required', 'regex:/^\d{5}-?\d{3}$/'],
-            $prefix.'street' => ['required', 'string', 'max:90'],
+            $prefix.'payment_method' => ['nullable', Rule::in([self::PIX, self::BOLETO])],
+            $prefix.'zip' => [$address ? 'required' : 'nullable', 'regex:/^\d{5}-?\d{3}$/'],
+            $prefix.'street' => [$address ? 'required' : 'nullable', 'string', 'max:90'],
             $prefix.'number' => ['nullable', 'string', 'max:10'],
             $prefix.'complement' => ['nullable', 'string', 'max:30'],
             $prefix.'district' => ['nullable', 'string', 'max:60'],
-            $prefix.'city' => ['required', 'string', 'max:60'],
-            $prefix.'state' => ['required', Rule::in(self::STATES)],
+            $prefix.'city' => [$address ? 'required' : 'nullable', 'string', 'max:60'],
+            $prefix.'state' => [$address ? 'required' : 'nullable', Rule::in(self::STATES)],
         ];
     }
 
@@ -52,7 +101,9 @@ class BillingProfile
 
     public static function isComplete(PlatformTenant $tenant): bool
     {
-        return validator(self::of($tenant), self::rules())->passes();
+        $profile = self::of($tenant);
+
+        return validator($profile, self::rules('', $profile['payment_method']))->passes();
     }
 
     /**
@@ -64,6 +115,13 @@ class BillingProfile
         $profile['document'] = self::digits($profile['document']);
         $profile['zip'] = self::digits($profile['zip']);
         $profile['state'] = strtoupper($profile['state']);
+        $profile['payment_method'] = self::method($profile['payment_method']) ?? '';
+        if (! self::needsAddress($profile['payment_method']) && blank($profile['street'])) {
+            // An address typed halfway is useless: kept only for boleto payers.
+            foreach (self::ADDRESS_FIELDS as $field) {
+                $profile[$field] = '';
+            }
+        }
         $tenant->update(['billing_profile' => $profile]);
         audit_log('platform.billing_profile.updated', $tenant, ['fields' => array_keys(array_filter($profile))], $tenant->team_id);
     }
@@ -100,6 +158,22 @@ class BillingProfile
         }
 
         return array_filter($payer, fn (string $value) => $value !== '');
+    }
+
+    /**
+     * Debtor ("devedor") of a Pix charge: only the document and the name.
+     *
+     * @return array<string, string>
+     */
+    public static function debtor(PlatformTenant $tenant): array
+    {
+        $profile = self::of($tenant);
+        $document = self::digits($profile['document']);
+
+        return [
+            strlen($document) === 14 ? 'cnpj' : 'cpf' => $document,
+            'nome' => Str::limit($profile['name'], 200, ''),
+        ];
     }
 
     public static function digits(?string $value): string

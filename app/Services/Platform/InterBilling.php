@@ -16,7 +16,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
- * Subscriptions charged through Banco Inter (boleto + Pix).
+ * Subscriptions charged through Banco Inter: a Pix charge with a due date (when the operator set
+ * the Pix key of the account) or, for customers who choose it, a boleto with Pix ("Bolepix").
  *
  * - Checkout: an invoice for the first period is issued as an Inter charge; the plan starts when it is paid.
  * - Renewal: at the end of each period an invoice with the next period and the usage overage of the
@@ -31,9 +32,19 @@ class InterBilling
 {
     public const PROVIDER = 'inter';
 
-    public const PAID_STATUSES = ['RECEBIDO', 'MARCADO_RECEBIDO'];
+    /**
+     * Status of a Bolepix charge (situacao) or of a Pix charge (status) once it is paid.
+     */
+    public const PAID_STATUSES = ['RECEBIDO', 'MARCADO_RECEBIDO', 'CONCLUIDA'];
 
-    public const VOID_STATUSES = ['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO'];
+    public const VOID_STATUSES = ['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'REMOVIDA_PELO_USUARIO_RECEBEDOR', 'REMOVIDA_PELO_PSP'];
+
+    /**
+     * How an invoice was issued at the bank (metadata "rail").
+     */
+    public const RAIL_PIX = 'pix';
+
+    public const RAIL_BOLEPIX = 'bolepix';
 
     private const MAX_ISSUE_ATTEMPTS = 5;
 
@@ -265,6 +276,9 @@ class InterBilling
             return self::issueManually($invoice);
         }
         $tenant = PlatformTenant::forTeam($invoice->team_id);
+        if (BillingProfile::methodOf($tenant) === BillingProfile::PIX) {
+            return self::issuePix($invoice, $tenant);
+        }
         $billing = (array) config('platform.billing', []);
         $payload = [
             'seuNumero' => $invoice->number,
@@ -295,6 +309,7 @@ class InterBilling
             throw $e;
         }
         $metadata['references'] = array_values(array_unique([...(array) ($metadata['references'] ?? []), $code]));
+        $metadata['rail'] = self::RAIL_BOLEPIX;
         unset($metadata['issue_error'], $metadata['issue_attempts']);
         $invoice->forceFill([
             'provider' => self::PROVIDER,
@@ -308,6 +323,99 @@ class InterBilling
         PlatformInterSyncInvoiceJob::dispatch($invoice->id)->delay(now()->addSeconds(5));
 
         return $invoice;
+    }
+
+    /**
+     * Pix charge with a due date ("cobv"): the QR code comes back at once, the payment is
+     * confirmed by the Pix webhook of the key and by the reconciliation.
+     */
+    private static function issuePix(PlatformInvoice $invoice, PlatformTenant $tenant): PlatformInvoice
+    {
+        $billing = (array) config('platform.billing', []);
+        $txid = self::newTxid($invoice);
+        $value = ['original' => number_format($invoice->amount_cents / 100, 2, '.', '')];
+        if (($fine = (float) ($billing['fine_percent'] ?? 0)) > 0) {
+            // Modalidade 2: percentage of the value.
+            $value['multa'] = ['modalidade' => '2', 'valorPerc' => number_format($fine, 2, '.', '')];
+        }
+        if (($interest = (float) ($billing['interest_percent_month'] ?? 0)) > 0) {
+            // Modalidade 3: percentage per month, calendar days.
+            $value['juros'] = ['modalidade' => '3', 'valorPerc' => number_format($interest, 2, '.', '')];
+        }
+        $payload = [
+            'calendario' => [
+                'dataDeVencimento' => $invoice->due_date->toDateString(),
+                'validadeAposVencimento' => max(0, min(60, (int) ($billing['cancel_after_days'] ?? 30))),
+            ],
+            'devedor' => BillingProfile::debtor($tenant),
+            'valor' => $value,
+            'chave' => (string) InterSettings::pixKey(),
+            'solicitacaoPagador' => Str::limit(config('platform.name').' - '.self::describe($invoice).' - '.$invoice->number, 140, ''),
+        ];
+
+        $metadata = (array) $invoice->metadata;
+        try {
+            $charge = self::client()->createDueCharge($txid, $payload);
+        } catch (\Throwable $e) {
+            $metadata['issue_attempts'] = (int) ($metadata['issue_attempts'] ?? 0) + 1;
+            $metadata['issue_error'] = Str::limit($e->getMessage(), 500);
+            $invoice->forceFill(['metadata' => $metadata])->save();
+            audit_log('platform.invoice.issue_failed', $invoice, ['error' => $metadata['issue_error']], $invoice->team_id, 'system');
+            throw $e;
+        }
+        $metadata['references'] = array_values(array_unique([...(array) ($metadata['references'] ?? []), $txid]));
+        $metadata['rail'] = self::RAIL_PIX;
+        unset($metadata['issue_error'], $metadata['issue_attempts']);
+        $invoice->forceFill([
+            'provider' => self::PROVIDER,
+            'provider_reference' => $txid,
+            'provider_status' => (string) ($charge['status'] ?? 'ATIVA'),
+            'status' => PlatformInvoice::STATUS_OPEN,
+            'payment_details' => ['txid' => $txid, 'pix_copia_e_cola' => (string) $charge['pixCopiaECola']],
+            'metadata' => $metadata,
+            'synced_at' => now(),
+        ])->save();
+        audit_log('platform.invoice.issued', $invoice, ['reference' => $txid, 'rail' => self::RAIL_PIX], $invoice->team_id, 'system');
+        self::notifyIssued($invoice);
+
+        return $invoice;
+    }
+
+    /**
+     * Identifier of a Pix charge: 26 to 35 letters and digits, new for every charge of the invoice.
+     */
+    private static function newTxid(PlatformInvoice $invoice): string
+    {
+        $prefix = (string) preg_replace('/[^A-Za-z0-9]/', '', (string) $invoice->number);
+
+        return substr($prefix.Str::random(32), 0, 32);
+    }
+
+    public static function isPix(PlatformInvoice $invoice): bool
+    {
+        return data_get($invoice->metadata, 'rail') === self::RAIL_PIX;
+    }
+
+    public static function isBoleto(PlatformInvoice $invoice): bool
+    {
+        return filled($invoice->provider_reference) && ! self::isPix($invoice) && ! self::isManualInvoice($invoice);
+    }
+
+    /**
+     * Cancels the charge of an invoice at the bank (the invoice itself is left as it is).
+     */
+    private static function cancelAtBank(PlatformInvoice $invoice): void
+    {
+        if (blank($invoice->provider_reference) || in_array($invoice->provider_status, self::VOID_STATUSES, true)) {
+            return;
+        }
+        try {
+            self::isPix($invoice)
+                ? self::client()->cancelDueCharge($invoice->provider_reference)
+                : self::client()->cancelCharge($invoice->provider_reference);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**
@@ -345,6 +453,9 @@ class InterBilling
         if (blank($invoice->provider_reference)) {
             return $invoice;
         }
+        if (self::isPix($invoice)) {
+            return self::syncPix($invoice);
+        }
         $data = self::client()->charge($invoice->provider_reference);
         $charge = (array) data_get($data, 'cobranca', []);
         $status = (string) data_get($charge, 'situacao', '');
@@ -380,6 +491,34 @@ class InterBilling
         }
         if ($status === 'ATRASADO') {
             self::flagOverdue($invoice->fresh());
+        }
+
+        return $invoice->fresh();
+    }
+
+    private static function syncPix(PlatformInvoice $invoice): PlatformInvoice
+    {
+        $charge = self::client()->dueCharge($invoice->provider_reference);
+        $status = (string) ($charge['status'] ?? '');
+        $invoice->forceFill([
+            'provider_status' => $status !== '' ? $status : $invoice->provider_status,
+            'payment_details' => array_merge((array) $invoice->payment_details, array_filter([
+                'txid' => $invoice->provider_reference,
+                'pix_copia_e_cola' => $charge['pixCopiaECola'] ?? null,
+            ], fn ($value) => filled($value))),
+            'synced_at' => now(),
+        ])->save();
+
+        if (in_array($status, self::PAID_STATUSES, true)) {
+            $payments = array_values(array_filter((array) ($charge['pix'] ?? []), 'is_array'));
+            $received = array_sum(array_map(fn (array $pix) => (int) self::toCents($pix['valor'] ?? null), $payments));
+            self::markPaid($invoice, $received > 0 ? $received : $invoice->amount_cents, 'PIX', self::parseDate($payments[0]['horario'] ?? null));
+        } elseif (in_array($status, self::VOID_STATUSES, true) && $invoice->status === PlatformInvoice::STATUS_OPEN) {
+            $invoice->forceFill([
+                'status' => PlatformInvoice::STATUS_VOID,
+                'metadata' => array_merge((array) $invoice->metadata, ['void_reason' => $status]),
+            ])->save();
+            audit_log('platform.invoice.void', $invoice, ['status' => $status], $invoice->team_id, 'system');
         }
 
         return $invoice->fresh();
@@ -673,8 +812,22 @@ class InterBilling
      */
     public static function handleWebhook(array $payload): int
     {
-        $items = array_is_list($payload) ? $payload : (array) ($payload['cobrancas'] ?? [$payload]);
         $count = 0;
+        // Pix of the key (standard of the Banco Central): {"pix": [{"txid": ..., "endToEndId": ...}]}.
+        if (! array_is_list($payload) && is_array($payload['pix'] ?? null)) {
+            foreach ($payload['pix'] as $pix) {
+                $txid = (string) data_get($pix, 'txid', '');
+                $invoice = $txid === '' ? null : PlatformInvoice::query()->where('provider', self::PROVIDER)->where('provider_reference', $txid)->first();
+                if ($invoice) {
+                    PlatformInterSyncInvoiceJob::dispatch($invoice->id);
+                    $count++;
+                }
+            }
+            PlatformSetting::put('inter.last_webhook_at', now()->toIso8601String());
+
+            return $count;
+        }
+        $items = array_is_list($payload) ? $payload : (array) ($payload['cobrancas'] ?? [$payload]);
         foreach ($items as $item) {
             $code = (string) data_get($item, 'codigoSolicitacao', '');
             $number = (string) data_get($item, 'seuNumero', '');
@@ -703,15 +856,9 @@ class InterBilling
         if ($invoice->status === PlatformInvoice::STATUS_PAID) {
             return $invoice;
         }
-        if (filled($invoice->provider_reference) && ! in_array($invoice->provider_status, self::VOID_STATUSES, true)) {
-            try {
-                self::client()->cancelCharge($invoice->provider_reference);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
+        self::cancelAtBank($invoice);
         $metadata = (array) $invoice->metadata;
-        unset($metadata['void_reason'], $metadata['issue_attempts'], $metadata['issue_error'], $metadata['notified_at']);
+        unset($metadata['void_reason'], $metadata['issue_attempts'], $metadata['issue_error'], $metadata['notified_at'], $metadata['rail']);
         $invoice->forceFill([
             'status' => PlatformInvoice::STATUS_OPEN,
             'provider_reference' => null,
@@ -729,13 +876,7 @@ class InterBilling
         if ($invoice->status !== PlatformInvoice::STATUS_OPEN) {
             return;
         }
-        if (filled($invoice->provider_reference)) {
-            try {
-                self::client()->cancelCharge($invoice->provider_reference);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
+        self::cancelAtBank($invoice);
         $invoice->forceFill([
             'status' => PlatformInvoice::STATUS_VOID,
             'metadata' => array_merge((array) $invoice->metadata, ['void_reason' => 'superseded']),
@@ -754,15 +895,51 @@ class InterBilling
             ->each(fn (PlatformInvoice $invoice) => self::cancelInvoice($invoice, 'system'));
     }
 
-    public static function registerWebhook(): string
+    /**
+     * Registers the webhook of the boleto charges and, with a Pix key, the Pix webhook of the key.
+     *
+     * @return array{url: string, registered: array<int, string>, errors: array<string, string>}
+     */
+    public static function registerWebhooks(): array
     {
         $url = InterSettings::webhookUrl();
-        self::client()->registerWebhook($url);
-        PlatformSetting::put('inter.webhook_registered_at', now()->toIso8601String());
-        PlatformSetting::put('inter.webhook_registered_url', $url);
-        audit_log('platform.inter.webhook_registered', null, ['url' => preg_replace('#/[^/]+$#', '/***', $url)], 0);
+        $registered = [];
+        $errors = [];
+        foreach (BillingProfile::methods() as $method) {
+            try {
+                $method === BillingProfile::PIX
+                    ? self::client()->registerPixWebhook((string) InterSettings::pixKey(), $url)
+                    : self::client()->registerWebhook($url);
+                $registered[] = $method;
+            } catch (\Throwable $e) {
+                $errors[$method] = $e->getMessage();
+            }
+        }
+        if ($registered !== []) {
+            PlatformSetting::put('inter.webhook_registered_at', now()->toIso8601String());
+            PlatformSetting::put('inter.webhook_registered_url', $url);
+            audit_log('platform.inter.webhook_registered', null, ['url' => preg_replace('#/[^/]+$#', '/***', $url), 'methods' => $registered], 0);
+        }
 
-        return $url;
+        return ['url' => $url, 'registered' => $registered, 'errors' => $errors];
+    }
+
+    /**
+     * Sandbox only: the boleto charges are paid through the sandbox API; Pix charges have no
+     * payment endpoint there, so their confirmation is recorded directly.
+     */
+    public static function simulatePayment(PlatformInvoice $invoice, string $actorType = 'user'): void
+    {
+        if (! InterSettings::isSandbox() || blank($invoice->provider_reference)) {
+            throw new \RuntimeException(__('Payments can only be simulated with the manual provider or the Inter sandbox.'));
+        }
+        if (self::isPix($invoice)) {
+            self::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), $actorType);
+
+            return;
+        }
+        self::client()->simulatePayment((string) $invoice->provider_reference, 'PIX');
+        self::sync($invoice);
     }
 
     public static function describe(PlatformInvoice $invoice): string

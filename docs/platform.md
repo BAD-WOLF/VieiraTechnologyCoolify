@@ -41,11 +41,12 @@ Versões anteriores tinham um erro: com a plataforma instalada, o Coolify não c
 ### Criar a integração no Banco Inter
 
 1. No Internet Banking do Inter Empresas, vá em **Soluções para sua empresa → Nova integração** (ou "Integrações → Nova aplicação").
-2. Marque a **API Cobrança (Boleto e Pix)** com as permissões de leitura e escrita (escopos `boleto-cobranca.read` e `boleto-cobranca.write`).
+2. Marque a **API Pix** (escopos `cobv.write`, `cobv.read`, `webhook.write`, `webhook.read` e `pix.read`) e a **API Cobrança (Boleto e Pix)** (escopos `boleto-cobranca.read` e `boleto-cobranca.write`).
 3. Baixe o arquivo zip: ele traz o certificado (`.crt`) e a chave (`.key`). O Client ID e o Client Secret aparecem na tela da integração.
-4. O certificado vale 1 ano. Antes de vencer, gere outro e cole no console.
+4. No console, informe também a **chave Pix da conta** (CNPJ, e-mail, telefone ou chave aleatória cadastrada no Inter).
+5. O certificado vale 1 ano. Antes de vencer, gere outro e cole no console.
 
-Para testar sem dinheiro real, crie a integração no sandbox do Inter, escolha **Sandbox (testes)** no console e use **Simular pagamento Pix** na lista de faturas.
+Para testar sem dinheiro real, crie a integração no sandbox do Inter, escolha **Sandbox (testes)** no console e use **Simular pagamento** na lista de faturas.
 
 ## Testar em localhost (Docker)
 
@@ -172,15 +173,15 @@ Para o `platform-release.yml` atualizar o cluster, coloque em `CONTROL_PLANE_HOS
 
 ## Cobrança com Banco Inter
 
-Cada fatura vira uma cobrança "Bolepix" no Inter (boleto com QR code Pix) pela API Cobrança v3, com OAuth2 e certificado mTLS. O cliente vê o QR code, o Pix copia e cola, a linha digitável e o PDF do boleto na própria página de planos e em *Plano e uso*.
+Com a chave Pix configurada, cada fatura vira uma cobrança Pix com vencimento (API Pix do Inter, `cobv`, com multa e juros): o cliente informa só nome, CPF/CNPJ e e-mail e paga pelo QR code ou pelo Pix copia e cola. Quem prefere boleto escolhe isso nos dados de cobrança (ou em "Prefere pagar com boleto?" na fatura), informa o endereço, que o banco exige para registrar o boleto, e recebe uma cobrança "Bolepix" (boleto com QR code Pix, API Cobrança v3). Sem chave Pix, toda fatura é Bolepix e o endereço é obrigatório. As duas APIs usam OAuth2 com certificado mTLS, cada uma com o seu token. A página de pagamento se atualiza sozinha quando o Pix é confirmado, mostra o link para voltar ao início e, depois do pagamento, o botão para o painel. Antes do primeiro pagamento o cliente já abre o painel, que mostra como ativar o plano; criar e publicar recursos só fica liberado com o plano ativo.
 
 - **Assinatura.** A primeira fatura cobre o primeiro período (mensal ou anual). O plano começa quando ela é paga.
 - **Renovação.** No fim de cada período sai uma fatura com o próximo período e o uso excedente do período que fechou, com o prazo de pagamento definido em Configurações → Cobrança (padrão: 5 dias). O cliente continua usando durante o prazo.
 - **Atraso.** Fatura vencida deixa o tenant em atraso: aviso por e-mail, deploys suspensos após 7 dias, containers parados após 30 dias (com backup antes). Ao pagar, tudo volta sozinho. O cliente pode gerar uma nova cobrança se o boleto expirar.
 - **Mudanças de plano.** Upgrade é cobrado proporcionalmente ao resto do período e vale quando é pago. Downgrade e troca de mensal/anual valem na próxima renovação. O cancelamento encerra a assinatura no fim do período.
-- **Confirmação.** O Inter avisa o webhook `https://<painel>/api/v1/billing/webhooks/inter/<token secreto>`, registrado automaticamente pelo console. O aviso só diz qual cobrança mudou: o status é sempre consultado de novo na API do Inter. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
+- **Confirmação.** O Inter avisa o webhook `https://<painel>/api/v1/billing/webhooks/inter/<token secreto>` (boletos) e o mesmo endereço seguido de `/pix` (Pix da chave), os dois registrados pelo console. O aviso só diz qual cobrança mudou: o status é sempre consultado de novo na API do Inter. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
 - **Operador.** Em /admin/platform → Cobrança é possível consultar uma fatura no banco, marcar como paga (pagamento recebido por fora), cancelar, emitir de novo e, no sandbox, simular o pagamento.
-- **Dados do pagador.** Nome, CPF/CNPJ (validado), e-mail e endereço são exigidos pelo banco para registrar o boleto. Ficam criptografados no banco de dados, assim como as credenciais do Inter.
+- **Dados do pagador.** Nome, CPF/CNPJ (validado) e e-mail; o endereço só para quem paga com boleto. Ficam criptografados no banco de dados, assim como as credenciais do Inter.
 
 Não há SDK oficial do Inter para PHP. A integração usa um cliente próprio (`app/Services/Platform/Inter/`) com o cliente HTTP do Laravel, sem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial.
 

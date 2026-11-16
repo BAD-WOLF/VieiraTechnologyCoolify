@@ -341,6 +341,10 @@ return [
         'private_key' => env('INTER_PRIVATE_KEY'),
         // Only needed when the Inter application is linked to more than one checking account.
         'conta_corrente' => env('INTER_CONTA_CORRENTE'),
+        // Pix key of the account. With it, invoices are Pix charges with a due date and the
+        // customer gives only name, CPF/CNPJ and e-mail; without it every invoice is a boleto with
+        // Pix ("Bolepix"), which the bank only registers with the payer's address.
+        'pix_key' => env('INTER_PIX_KEY'),
         // Secret part of the webhook URL (generated and stored automatically when empty).
         'webhook_token' => env('INTER_WEBHOOK_TOKEN'),
         'timeout' => (int) env('INTER_TIMEOUT', 30),

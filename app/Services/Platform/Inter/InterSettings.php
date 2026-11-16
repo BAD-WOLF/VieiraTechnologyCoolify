@@ -16,7 +16,7 @@ class InterSettings
 
     public const SANDBOX_URL = 'https://cdpj-sandbox.partners.uatinter.co';
 
-    public const KEYS = ['environment', 'client_id', 'client_secret', 'certificate', 'private_key', 'conta_corrente', 'webhook_token'];
+    public const KEYS = ['environment', 'client_id', 'client_secret', 'certificate', 'private_key', 'conta_corrente', 'pix_key', 'webhook_token'];
 
     public static function value(string $key): ?string
     {
@@ -111,6 +111,16 @@ class InterSettings
         }
 
         return $path;
+    }
+
+    /**
+     * Pix key of the account (CNPJ, e-mail, phone or random key) that receives the Pix charges.
+     */
+    public static function pixKey(): ?string
+    {
+        $key = trim((string) self::value('pix_key'));
+
+        return $key !== '' ? $key : null;
     }
 
     public static function webhookToken(): string
