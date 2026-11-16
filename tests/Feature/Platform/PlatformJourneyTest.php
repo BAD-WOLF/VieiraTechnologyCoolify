@@ -474,6 +474,16 @@ function journeyCoolifyMentions(string $html): array
     if (preg_match_all('/[\w\/.-]*coolify-logo[\w.-]*/', $html, $matches)) {
         $mentions = array_merge($mentions, $matches[0]);
     }
+    // Links and examples pointing to the Coolify sites.
+    if (preg_match_all('#\s(?:href|src)="(https?://(?:[\w-]+\.)*(?:coolify\.io|coollabs\.io)[^"]*|https?://github\.com/coollabsio[^"]*)"#', $html, $matches)) {
+        $mentions = array_merge($mentions, $matches[1]);
+    }
+    if (preg_match_all('/[^\n"]{0,30}coolify\.io[^\n"]{0,30}/u', $text, $matches)) {
+        $mentions = array_merge($mentions, array_map('trim', $matches[0]));
+    }
+    if (preg_match_all('/\splaceholder="([^"]*(?:coolify\.io|Coolify)[^"]*)"/', $html, $matches)) {
+        $mentions = array_merge($mentions, $matches[1]);
+    }
 
     return array_values(array_unique($mentions));
 }

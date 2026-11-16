@@ -144,3 +144,32 @@ it('sends the feedback of a customer to the operator, never to the Coolify team'
         ->and($sent[0]->getHtmlBody())->toContain('maria@example.com')->toContain('Meu deploy está parado');
     Http::assertNothingSent();
 });
+
+it('compiles every view with the platform name into valid PHP', function (?string $docs) {
+    config(['platform.branding.docs_url' => $docs]);
+    $broken = [];
+    $links = [];
+    foreach (\Illuminate\Support\Facades\File::allFiles(resource_path('views')) as $file) {
+        if (! str_ends_with($file->getFilename(), '.blade.php')) {
+            continue;
+        }
+        $compiled = Blade::compileString((string) file_get_contents($file->getPathname()));
+        try {
+            token_get_all($compiled, TOKEN_PARSE);
+        } catch (\ParseError $error) {
+            $broken[] = $file->getRelativePathname().': '.$error->getMessage();
+        }
+        if (preg_match_all('#href=\\\\?["\']https?://(?:[\w-]+\.)*(?:coolify\.io|coollabs\.io)[^"\'\\\\]*#', $compiled, $matches)) {
+            foreach ($matches[0] as $link) {
+                if (is_null($docs) || ! str_contains($link, $docs)) {
+                    $links[] = $file->getRelativePathname().': '.$link;
+                }
+            }
+        }
+    }
+
+    expect($broken)->toBe([])->and($links)->toBe([]);
+})->with([
+    'without documentation' => [null],
+    'with documentation' => ['https://ajuda.hostrema.com.br'],
+]);

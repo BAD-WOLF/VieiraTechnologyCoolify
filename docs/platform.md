@@ -326,7 +326,7 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 Com a plataforma ligada, o cliente não vê o nome nem o logo do Coolify:
 
-- **Telas.** O nome da plataforma (Hostrema) entra no lugar de "Coolify" quando os templates são compilados, sem editar as telas originais, inclusive nos títulos dados em tempo de execução, nas dicas dos campos e nos exemplos de domínio (`app.example.com`). Links para a documentação do Coolify passam a apontar para a URL de documentação configurada, quando existe.
+- **Telas.** O nome da plataforma (Hostrema) entra no lugar de "Coolify" quando os templates são compilados, sem editar as telas originais, inclusive nos títulos dados em tempo de execução, nas dicas dos campos e nos exemplos (`app.example.com`). Links para a documentação do Coolify apontam para a URL de documentação configurada; sem ela, e nos demais links para sites do Coolify, fica só o texto. Um teste compila todas as telas assim e confere que o PHP gerado é válido.
 - **Logo e favicon.** O logo configurado ou, sem ele, uma marca com a inicial do nome da plataforma (`/platform/brand/logo.svg`).
 - **Mensagens.** As notificações do painel, os assuntos e o rodapé dos e-mails, as notificações por Discord, Slack, Telegram e Pushover e a mensagem do Coolify nos logs de deploy usam o nome da plataforma.
 - **Fora do alcance do cliente.** A versão do Coolify, o changelog do Coolify e o link de patrocínio somem para os clientes. O formulário "Feedback" vai para o e-mail de suporte da plataforma (ou para o dono do time da plataforma), com o cliente como resposta; no Coolify ele ia para a equipe do Coolify.

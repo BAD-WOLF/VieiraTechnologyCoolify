@@ -20,7 +20,7 @@ class PlatformBranding
     /**
      * Bump when the template rewrites change, so the compiled views are discarded.
      */
-    public const VERSION = 2;
+    public const VERSION = 3;
 
     public const LOGO_PATH = '/platform/brand/logo.svg';
 
@@ -90,15 +90,49 @@ class PlatformBranding
         );
         // Page titles given by components at runtime (Livewire #[Title]).
         $template = (string) preg_replace('/\{\{\s*\$title\s*\?\?\s*/', '{{ \\App\\Services\\Platform\\PlatformBranding::text($title ?? null) ?? ', $template);
-        // Documentation of the platform, when it has one.
-        $docs = rtrim(trim((string) config('platform.branding.docs_url')), '/');
-        if ($docs !== '' && ! preg_match('/[\'"<>\s]/', $docs)) {
-            $template = (string) preg_replace('#https://coolify\.io/docs(?:/[^\s"\'<>)`]*)?#', $docs, $template);
-        }
-        // Example domains in the field helpers.
-        $template = str_replace(['app.coolify.io', 'cloud.coolify.io'], ['app.example.com', 'cloud.example.com'], $template);
+        $template = self::links($template);
+        // Examples in placeholders and field helpers.
+        $template = str_replace(
+            ['placeholder="https://coolify.io"', "'placeholder' => 'https://coolify.io'", 'app.coolify.io', 'cloud.coolify.io', 'coollabsio/coolify-example', 'https://coolify.yourdomain.com'],
+            ['placeholder="https://app.example.com"', "'placeholder' => 'https://app.example.com'", 'app.example.com', 'cloud.example.com', 'organization/repository', 'https://painel.example.com'],
+            $template,
+        );
 
         return self::text($template);
+    }
+
+    /**
+     * Links to the Coolify sites: the documentation goes to the platform documentation when it
+     * has one; the other links become plain text. Inside component attributes Blade has already
+     * escaped the quotes (href=\'...\'), hence the optional backslashes.
+     */
+    private static function links(string $template): string
+    {
+        $docs = rtrim(trim((string) config('platform.branding.docs_url')), '/');
+        if (preg_match('/[\'"<>\s`\\\\]/', $docs)) {
+            $docs = '';
+        }
+        // "For example application deployments, checkout Coolify Examples." (a Coolify repository).
+        $template = (string) preg_replace('#\s*For example application deployments, checkout\s*<a\b[^>]*coolify-examples[^>]*>.*?</a>\.#s', '', $template);
+        $template = (string) preg_replace_callback(
+            '#<a\b([^>]*?)\bhref=(\\\\?["\'])(https?://(?:[\w-]+\.)*(?:coolify\.io|coollabs\.io)[^"\'\\\\]*|https?://github\.com/coollabsio[^"\'\\\\]*)\2([^>]*)>(.*?)</a>#s',
+            function (array $match) use ($docs): string {
+                if ($docs !== '' && preg_match('#^https://coolify\.io/docs\b#', $match[3])) {
+                    return '<a'.$match[1].'href='.$match[2].$docs.$match[2].$match[4].'>'.$match[5].'</a>';
+                }
+
+                return $match[5];
+            },
+            $template,
+        );
+        // Addresses written as text, e.g. "(https://coolify.io/docs/...)".
+        $template = (string) preg_replace_callback(
+            '#(\s*\()?https://coolify\.io/docs(?:/[^\s"\'<>)`\\\\]*)?(\))?#',
+            fn (array $match) => $docs !== '' ? ($match[1] ?? '').$docs.($match[2] ?? '') : '',
+            $template,
+        );
+
+        return $template;
     }
 
     public static function text(?string $value): ?string
