@@ -1,29 +1,30 @@
 # Brings the local test environment (infra/local) up on a clean machine, the way the owner runs it
 # before deploying: build, start, platform:install --local, then checks the dashboard, the local
-# node, its proxy and the demo customer.
+# node, its proxy and the demo customer, and runs the browser journeys of a new customer (sign-up,
+# payment, deploys at http://<name>.localhost) and of the owner (infra/local/e2e).
 name: Platform local environment
 
 on:
   push:
     branches: [platform]
-    paths:
-      - infra/local/**
-      - docker/platform/**
-      - docker/production/**
-      - app/Console/Commands/PlatformInstall.php
-      - app/Services/Platform/PlatformConfig.php
-      - database/migrations/**
-      - .github/workflows/platform-local-env.yml
+    paths-ignore:
+      - docs/**
+      - "**/*.md"
+      - tests/**
+      - .github/workflows/platform-ci.yml
+      - .github/workflows/platform-release.yml
+      - .github/workflows/platform-upstream-sync.yml
+      - .github/workflows/platform-base-image.yml
   pull_request:
     branches: [platform]
-    paths:
-      - infra/local/**
-      - docker/platform/**
-      - docker/production/**
-      - app/Console/Commands/PlatformInstall.php
-      - app/Services/Platform/PlatformConfig.php
-      - database/migrations/**
-      - .github/workflows/platform-local-env.yml
+    paths-ignore:
+      - docs/**
+      - "**/*.md"
+      - tests/**
+      - .github/workflows/platform-ci.yml
+      - .github/workflows/platform-release.yml
+      - .github/workflows/platform-upstream-sync.yml
+      - .github/workflows/platform-base-image.yml
   workflow_dispatch:
 
 permissions:
@@ -69,6 +70,32 @@ jobs:
 
       - name: Running the preparation again changes nothing
         run: ./hostrema-local.sh setup
+
+      - name: Browser journeys (customer and owner)
+        working-directory: infra/local/e2e
+        env:
+          HOSTREMA_URL: http://localhost:8000
+          MAILPIT_URL: http://localhost:8025
+          E2E_NODE: "1"
+        run: |
+          set -a
+          . ../.env
+          set +a
+          export E2E_OWNER_EMAIL="$HOSTREMA_OWNER_EMAIL" E2E_OWNER_PASSWORD="$HOSTREMA_OWNER_PASSWORD"
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: Browser report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            infra/local/e2e/playwright-report
+            infra/local/e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Logs
         if: failure()

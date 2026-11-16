@@ -15,7 +15,7 @@
             </div>
         @endif
         <div class="flex gap-2">
-            <h1>Subscriptions</h1>
+            <h1>{{ isPlatform() ? __('Plans') : 'Subscriptions' }}</h1>
         </div>
         @if ($loading)
             <div class="flex gap-2" wire:init="getStripeStatus">

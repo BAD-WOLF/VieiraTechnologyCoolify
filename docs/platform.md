@@ -83,6 +83,17 @@ Um roteiro de teste:
 3. Faça o deploy de uma aplicação. O domínio gerado é `http://<algo>.localhost`.
 4. Como owner, mude preços e limites em **Configurações** e veja o efeito em `/pricing` e nas cotas do cliente.
 
+O mesmo roteiro roda sozinho num navegador (Playwright), e o CI roda a cada mudança do painel:
+
+```bash
+cd infra/local/e2e
+npm ci && npx playwright install chromium
+set -a; . ../.env; set +a
+E2E_NODE=1 E2E_OWNER_EMAIL="$HOSTREMA_OWNER_EMAIL" E2E_OWNER_PASSWORD="$HOSTREMA_OWNER_PASSWORD" npx playwright test
+```
+
+Ele cadastra um cliente, confirma o e-mail pelo Mailpit, abre o painel antes de pagar, escolhe o plano informando só nome e CPF, simula o pagamento, cria o primeiro projeto, adiciona um repositório público do GitHub, faz o deploy de uma imagem Docker e abre o site em `http://<nome>.localhost`, cria um PostgreSQL e um serviço de um clique, e abre as abas do console do owner. Em cada tela confere que o nome Coolify não aparece. O relatório (com capturas de tela) fica em `infra/local/e2e/playwright-report`.
+
 Para testar o Banco Inter de verdade, escolha **Banco Inter** em Configurações → Cobrança e use credenciais do sandbox. O webhook do Inter não alcança o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
 
 | Comando | Para quê |

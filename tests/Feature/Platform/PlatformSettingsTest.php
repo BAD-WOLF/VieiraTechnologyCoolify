@@ -476,6 +476,13 @@ it('has a Portuguese translation for every text of the platform screens', functi
         ->push(resource_path('views/components/platform-banner.blade.php'), app_path('Exceptions/PlatformPolicyViolation.php'), app_path('Models/PlatformTenant.php'));
 
     $missing = [];
+    // Plan descriptions are translated where they are shown.
+    foreach ((array) config('platform.plans') as $id => $plan) {
+        $description = (string) data_get($plan, 'description');
+        if ($description !== '' && ! array_key_exists($description, $translations)) {
+            $missing[] = "config/platform.php: plans.{$id}.description";
+        }
+    }
     foreach ($files as $file) {
         preg_match_all("/__\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", (string) file_get_contents($file), $matches);
         foreach ($matches[1] as $text) {
