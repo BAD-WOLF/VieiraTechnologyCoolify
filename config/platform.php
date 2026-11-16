@@ -20,6 +20,9 @@ return [
 
     'name' => env('PLATFORM_NAME', 'Hostrema'),
 
+    // Release running (tag platform-vX.Y.Z, written into the image by the release workflow).
+    'version' => env('PLATFORM_VERSION', 'dev'),
+
     // Language of the platform pages (operator console > Settings can change it).
     'locale' => env('APP_LOCALE', 'pt-br'),
 

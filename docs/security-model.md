@@ -99,26 +99,38 @@ Mudanças em arquivos originais que não são só ganchos:
 
 - `bootstrap/helpers/shared.php`: `get_service_templates()` entrega aos clientes o catálogo da plataforma
   (`ServiceTemplates`), o mesmo na tela, na criação e na API.
-- `app/Jobs/PullTemplatesFromCDN.php`: a plataforma não baixa templates do CDN do Coolify; eles chegam com a
-  sincronização do upstream e passam pelos testes antes de ir para produção.
+- `app/Jobs/PullTemplatesFromCDN.php` e `app/Console/Commands/Init.php`: a plataforma não baixa templates do CDN
+  do Coolify, nem pelo agendador nem na inicialização do container; eles chegam com a sincronização do upstream e
+  passam pelos testes antes de ir para produção.
+- `app/Jobs/PullChangelog.php`: a plataforma não baixa o changelog do Coolify (as novidades da plataforma saem
+  nas releases dela).
+- `app/Livewire/Settings/Updates.php`: correção de um bug do upstream (a tela de atualizações não conferia se
+  quem abre é administrador da instância, como as outras telas de configuração fazem, e qualquer usuário
+  mudava a configuração de atualização da instância). Na plataforma a tela leva às configurações gerais, e
+  `resources/views/components/settings/sidebar.blade.php` esconde o item: a plataforma é atualizada pelas
+  releases dela, nunca pelo atualizador do Coolify.
+- `app/Models/PrivateKey.php`, `app/Http/Controllers/Api/SecurityController.php`, `app/Livewire/Boarding/Index.php`
+  e `app/Livewire/SettingsBackup.php`: as descrições que o sistema cria ("Created by Coolify") usam o nome da
+  aplicação (`config('app.name')`, "Coolify" no upstream e o nome da plataforma aqui).
 - `app/Livewire/SettingsOauth.php`: correção de um bug do upstream (a rota `home` não existe; quem não é
   administrador da instância vai para o painel, como nas outras telas de configuração).
 - `bootstrap/helpers/subscriptions.php`: antes do primeiro pagamento o cliente abre o painel (início), que
   mostra como ativar o plano; criar e publicar continua bloqueado pelo status do plano.
-- `resources/views/components/navbar.blade.php` e `resources/views/livewire/settings-dropdown.blade.php`: a
-  versão, o changelog e o link de patrocínio do Coolify não aparecem para os clientes (o resto da marca é
-  trocado sem editar as telas, veja `PlatformBranding`).
+- `resources/views/components/navbar.blade.php` e `resources/views/livewire/settings-dropdown.blade.php`: o
+  changelog e o link de patrocínio do Coolify não aparecem na plataforma, e no lugar da versão do Coolify o
+  operador vê a da plataforma (o resto da marca é trocado sem editar as telas, veja `PlatformBranding`).
 
 <!-- upstream-files:start -->
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
-- `app/Http`: `Controllers/Api/ApplicationsController.php` (+7/-3), `Controllers/Api/DatabasesController.php` (+7/-4), `Controllers/Api/DeployController.php` (+13/-2), `Controllers/Api/ServersController.php` (+19/-0), `Controllers/Api/ServicesController.php` (+13/-7)
-- `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
-- `app/Livewire`: `Boarding/Index.php` (+3/-0), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `SettingsOauth.php` (+1/-1)
-- `app/Models`: `Service.php` (+8/-1)
+- `app/Console`: `Commands/Init.php` (+3/-0)
+- `app/Http`: `Controllers/Api/ApplicationsController.php` (+7/-3), `Controllers/Api/DatabasesController.php` (+7/-4), `Controllers/Api/DeployController.php` (+13/-2), `Controllers/Api/SecurityController.php` (+1/-1), `Controllers/Api/ServersController.php` (+19/-0), `Controllers/Api/ServicesController.php` (+13/-7)
+- `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullChangelog.php` (+3/-0), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
+- `app/Livewire`: `Boarding/Index.php` (+4/-1), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `Settings/Updates.php` (+6/-0), `SettingsBackup.php` (+1/-1), `SettingsOauth.php` (+1/-1)
+- `app/Models`: `PrivateKey.php` (+1/-1), `Service.php` (+8/-1)
 - `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+2/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
-- `resources`: `views/components/navbar.blade.php` (+26/-2), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+6/-2), `views/livewire/subscription/show.blade.php` (+10/-4)
+- `resources`: `views/components/navbar.blade.php` (+28/-2), `views/components/settings/sidebar.blade.php` (+4/-2), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+4/-0), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+7/-3), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 50 arquivos.
+Total: 57 arquivos.
 <!-- upstream-files:end -->
 

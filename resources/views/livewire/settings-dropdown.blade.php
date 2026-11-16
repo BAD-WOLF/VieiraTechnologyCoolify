@@ -109,7 +109,7 @@
             </svg>
 
             <!-- Unread Count Badge -->
-            @if ($unreadCount > 0 && ! isPlatformTenant())
+            @if ($unreadCount > 0 && ! isPlatform())
                 <span
                     class="absolute -top-1 -right-1 bg-error text-white text-xs rounded-full w-4.5 h-4.5 flex items-center justify-center">
                     {{ $unreadCount > 9 ? '9+' : $unreadCount }}
@@ -126,7 +126,7 @@
                 class="p-1 bg-white border rounded-sm shadow-lg dark:bg-coolgray-200 dark:border-coolgray-300 border-neutral-300">
                 <div class="flex flex-col gap-1">
                     <!-- What's New Section -->
-                    @if ($unreadCount > 0 && ! isPlatformTenant())
+                    @if ($unreadCount > 0 && ! isPlatform())
                         <button wire:click="openWhatsNewModal" @click="dropdownOpen = false"
                             class="px-1 dropdown-item-no-padding flex items-center justify-between">
                             <div class="flex items-center gap-2">
@@ -141,7 +141,7 @@
                                 {{ $unreadCount > 9 ? '9+' : $unreadCount }}
                             </span>
                         </button>
-                    @elseif (! isPlatformTenant())
+                    @elseif (! isPlatform())
                         <button wire:click="openWhatsNewModal" @click="dropdownOpen = false"
                             class="px-1 dropdown-item-no-padding flex items-center gap-2">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,7 +153,7 @@
                     @endif
 
                     <!-- Divider -->
-                    @unless (isPlatformTenant())
+                    @unless (isPlatform())
                         <div class="border-b dark:border-coolgray-500 border-neutral-300"></div>
                     @endunless
 
@@ -232,7 +232,7 @@
     </div>
 
     <!-- What's New Modal -->
-    @if ($showWhatsNewModal && ! isPlatformTenant())
+    @if ($showWhatsNewModal && ! isPlatform())
         <div class="fixed inset-0 z-50 flex items-center justify-center py-6 px-4"
             @keydown.escape.window="$wire.closeWhatsNewModal()">
             <!-- Background overlay -->

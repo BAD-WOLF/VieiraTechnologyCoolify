@@ -26,6 +26,9 @@ class PullChangelog implements ShouldBeEncrypted, ShouldQueue
 
     public function handle(): void
     {
+        if (isPlatform()) {
+            return;
+        }
         try {
             // Fetch from CDN instead of GitHub API to avoid rate limits
             $cdnUrl = config('constants.coolify.releases_url');

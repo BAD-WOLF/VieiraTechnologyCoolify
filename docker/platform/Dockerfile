@@ -162,6 +162,10 @@ RUN mkdir -p /etc/nginx/conf.d && \
 COPY --from=minio-client /usr/bin/mc /usr/bin/mc
 RUN chmod +x /usr/bin/mc
 
+# Release shown to the operator (the release workflow passes the tag).
+ARG PLATFORM_VERSION=dev
+ENV PLATFORM_VERSION=${PLATFORM_VERSION}
+
 LABEL org.opencontainers.image.title="Hostrema" \
     org.opencontainers.image.description="Multi-tenant PaaS built on Coolify" \
     org.opencontainers.image.base.name="docker.io/serversideup/php:${SERVERSIDEUP_PHP_VERSION}"

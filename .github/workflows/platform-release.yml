@@ -60,6 +60,8 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          build-args: |
+            PLATFORM_VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}

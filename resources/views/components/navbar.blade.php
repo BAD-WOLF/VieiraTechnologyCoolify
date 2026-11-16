@@ -80,9 +80,11 @@
     <div class="flex pt-6 pb-4 pl-2">
         <div class="flex flex-col w-full">
             <div class="text-2xl font-bold tracking-wide dark:text-white">Coolify</div>
-            @unless (isPlatformTenant())
+            @if (! isPlatform())
                 <x-version />
-            @endunless
+            @elseif (! isPlatformTenant())
+                <x-platform-version />
+            @endif
         </div>
         <div>
             <!-- Search button that triggers global search modal -->

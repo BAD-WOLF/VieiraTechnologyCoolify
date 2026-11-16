@@ -25,6 +25,12 @@ class Updates extends Component
 
     public function mount()
     {
+        if (! isInstanceAdmin()) {
+            return redirect()->route('dashboard');
+        }
+        if (isPlatform()) {
+            return redirect()->route('settings.index');
+        }
         $this->server = Server::findOrFail(0);
 
         $this->settings = instanceSettings();

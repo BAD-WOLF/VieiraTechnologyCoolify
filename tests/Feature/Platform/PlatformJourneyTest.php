@@ -83,6 +83,10 @@ function journeyWorld(): array
     $key = PrivateKey::query()->firstOrCreate(['name' => 'journey-node', 'team_id' => 0], [
         'private_key' => PrivateKey::generateNewKeyPair('ed25519')['private_key'],
     ]);
+    // The server the platform itself runs on, as in production.
+    Server::query()->whereKey(0)->exists() || Server::forceCreate([
+        'id' => 0, 'uuid' => (string) new Cuid2, 'name' => 'localhost', 'ip' => 'host.docker.internal', 'team_id' => 0, 'private_key_id' => $key->id,
+    ]);
     $node = Server::forceCreate([
         'uuid' => (string) new Cuid2,
         'name' => 'node-'.fake()->unique()->numberBetween(1, 9999),
@@ -355,15 +359,31 @@ it('opens every page of the operator without server errors', function () {
     $this->actingAs($owner);
     session(['currentTeam' => Team::find(0)]);
     Cache::forget('team:'.$owner->id);
-    config(['platform.security.require_two_factor' => 'none']);
+    config(['platform.security.require_two_factor' => 'none', 'platform.version' => 'platform-v1.4.0']);
 
+    Artisan::call('view:clear');
     $failures = journeySweep([
         'server_uuid' => $world['node']->uuid,
         'private_key_uuid' => $world['node']->privateKey->uuid,
         'destination_uuid' => $world['destination']->uuid,
-    ]);
+    ], $coolify);
+    $dashboard = journeyGet(route('dashboard'));
+    $updates = journeyGet(route('settings.updates'));
+    Artisan::call('view:clear');
 
-    expect($failures)->toBe([]);
+    expect($failures)->toBe([])
+        ->and($coolify)->toBe([])
+        // The release of the platform, not the Coolify version; updates come with the releases.
+        ->and($dashboard->getContent())->toContain('v1.4.0')->not->toContain(config('constants.coolify.version'))
+        ->and($updates->isRedirect(route('settings.index')))->toBeTrue();
+});
+
+it('keeps the instance settings to the operator', function () {
+    journeyWorld();
+
+    foreach (['settings.index', 'settings.advanced', 'settings.updates', 'settings.backup', 'settings.email', 'settings.oauth'] as $page) {
+        expect(journeyGet(route($page))->isRedirect(route('dashboard')))->toBeTrue("{$page} opens for a customer");
+    }
 });
 
 /**

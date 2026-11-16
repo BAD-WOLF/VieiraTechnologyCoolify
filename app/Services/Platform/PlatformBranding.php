@@ -11,16 +11,17 @@ use Psr\Http\Message\RequestInterface;
  * stay untouched; identifiers such as CoolifyTask, coolify-proxy or coolify.io are not changed.
  *
  * Text built at runtime gets the same treatment where it leaves the application: page titles,
- * notifications of the dashboard (toasts), e-mail subjects, chat notifications (Discord, Slack,
- * Telegram, Pushover) and deployment logs. The logo is the configured one or a mark drawn from
- * the platform name (/platform/brand/logo.svg), never the Coolify logo.
+ * notifications of the dashboard (toasts, links included), server validation errors, logs of the
+ * containers Coolify runs itself, e-mail subjects, chat notifications (Discord, Slack, Telegram,
+ * Pushover) and deployment logs. The logo is the configured one or a mark drawn from the platform
+ * name (/platform/brand/logo.svg), never the Coolify logo.
  */
 class PlatformBranding
 {
     /**
      * Bump when the template rewrites change, so the compiled views are discarded.
      */
-    public const VERSION = 3;
+    public const VERSION = 4;
 
     public const LOGO_PATH = '/platform/brand/logo.svg';
 
@@ -35,6 +36,19 @@ class PlatformBranding
      * Livewire events shown as notifications of the dashboard.
      */
     private const TOAST_EVENTS = ['success', 'error', 'warning', 'info'];
+
+    /**
+     * Values the templates print as they come, written by Coolify at runtime.
+     */
+    private const RUNTIME_OUTPUT = [
+        // Logs of coolify-proxy and coolify-sentinel, titled "Coolify" upstream.
+        "{{ str(\$container)->beforeLast('-')->headline() }}" => '{{ \\App\\Services\\Platform\\PlatformBranding::containerTitle($container) }}',
+        // Server validation errors, with links to the Coolify documentation.
+        '{!! $error !!}' => '{!! \\App\\Services\\Platform\\PlatformBranding::message($error) !!}',
+        '{!! $server->validation_logs !!}' => '{!! \\App\\Services\\Platform\\PlatformBranding::message($server->validation_logs) !!}',
+        // A domain already used by the dashboard itself ("Coolify Instance").
+        "<strong>{{ \$conflict['resource_name'] }}</strong>" => "<strong>{{ \\App\\Services\\Platform\\PlatformBranding::text(\$conflict['resource_name']) }}</strong>",
+    ];
 
     public static function enabled(): bool
     {
@@ -71,7 +85,11 @@ class PlatformBranding
 
     public static function apply(string $template): string
     {
-        if (is_null(self::name()) || ! str_contains(strtolower($template), 'coolify')) {
+        if (is_null(self::name())) {
+            return $template;
+        }
+        $template = strtr($template, self::RUNTIME_OUTPUT);
+        if (! str_contains(strtolower($template), 'coolify')) {
             return $template;
         }
         $description = (string) config('platform.branding.description');
@@ -114,6 +132,13 @@ class PlatformBranding
         }
         // "For example application deployments, checkout Coolify Examples." (a Coolify repository).
         $template = (string) preg_replace('#\s*For example application deployments, checkout\s*<a\b[^>]*coolify-examples[^>]*>.*?</a>\.#s', '', $template);
+        // The Coolify community: "or get help on Discord", "Discord: https://coolify.io/discord".
+        $template = (string) preg_replace('#\s*or get\s+help on\s*<a\b[^>]*(?:coolify|coollabs)\.io/discord[^>]*>\s*Discord\s*</a>#s', '', $template);
+        $template = (string) preg_replace('#(?:<br\s*/?>\s*)*Discord:\s*<a\b[^>]*(?:coolify|coollabs)\.io/discord[^>]*>.*?</a>#s', '', $template);
+        if ($docs === '') {
+            // "Docs: https://coolify.io/docs" with no documentation to point to.
+            $template = (string) preg_replace('#(?:<br\s*/?>\s*)*Docs:\s*<a\b[^>]*coolify\.io/docs[^>]*>.*?</a>#s', '', $template);
+        }
         $template = (string) preg_replace_callback(
             '#<a\b([^>]*?)\bhref=(\\\\?["\'])(https?://(?:[\w-]+\.)*(?:coolify\.io|coollabs\.io)[^"\'\\\\]*|https?://github\.com/coollabsio[^"\'\\\\]*)\2([^>]*)>(.*?)</a>#s',
             function (array $match) use ($docs): string {
@@ -149,6 +174,30 @@ class PlatformBranding
     }
 
     /**
+     * A message Coolify writes at runtime (notification of the dashboard, server validation error):
+     * its links to the Coolify sites and its name.
+     */
+    public static function message(?string $value): ?string
+    {
+        if (is_null($value) || is_null(self::name())) {
+            return $value;
+        }
+
+        return self::text(self::links($value));
+    }
+
+    /**
+     * Title of the logs of a container. Coolify names the containers it runs on every server
+     * coolify-<role> (coolify-proxy, coolify-sentinel), which the upstream title shows as "Coolify".
+     */
+    public static function containerTitle(?string $container): string
+    {
+        $container = str((string) $container);
+
+        return (string) ($container->startsWith('coolify-') ? $container->after('coolify-') : $container->beforeLast('-'))->headline();
+    }
+
+    /**
      * The messages Coolify itself writes into the deployment logs (the output of the customer's
      * build is left as it is).
      */
@@ -171,7 +220,7 @@ class PlatformBranding
             if (! is_array($dispatch) || ! in_array($dispatch['name'] ?? null, self::TOAST_EVENTS, true) || ! is_array($dispatch['params'] ?? null)) {
                 continue;
             }
-            $dispatches[$index]['params'] = self::brandStrings($dispatch['params']);
+            $dispatches[$index]['params'] = self::brandStrings($dispatch['params'], links: true);
         }
 
         return $dispatches;
@@ -202,11 +251,11 @@ class PlatformBranding
      * @param  array<int|string, mixed>  $values
      * @return array<int|string, mixed>
      */
-    private static function brandStrings(array $values): array
+    private static function brandStrings(array $values, bool $links = false): array
     {
-        array_walk_recursive($values, function (mixed &$value) {
+        array_walk_recursive($values, function (mixed &$value) use ($links) {
             if (is_string($value)) {
-                $value = self::text($value);
+                $value = $links ? self::message($value) : self::text($value);
             }
         });
 

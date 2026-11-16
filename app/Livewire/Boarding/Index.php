@@ -376,7 +376,7 @@ uZx9iFkCELtxrh31QJ68AAAAEXNhaWxANzZmZjY2ZDJlMmRkAQIDBA==
     private function createNewPrivateKey()
     {
         $this->privateKeyName = generate_random_name();
-        $this->privateKeyDescription = 'Created by Coolify';
+        $this->privateKeyDescription = 'Created by '.config('app.name');
         ['private' => $this->privateKey, 'public' => $this->publicKey] = generateSSHKey();
     }
 

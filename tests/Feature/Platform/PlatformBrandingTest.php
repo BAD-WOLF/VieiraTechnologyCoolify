@@ -6,10 +6,12 @@ use App\Livewire\Help;
 use App\Livewire\Platform\PlatformHelp;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\InstanceSettings;
+use App\Models\PrivateKey;
 use App\Models\Team;
 use App\Models\User;
 use App\Notifications\Dto\DiscordMessage;
 use App\Services\Platform\PlatformBranding;
+use App\Services\Platform\PlatformConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Mail\Events\MessageSending;
@@ -27,6 +29,11 @@ class BrandingProbeComponent extends Component
     public function save(): void
     {
         $this->dispatch('success', 'Coolify saved your changes.', 'Open App\\Coolify\\Task in Coolify.');
+    }
+
+    public function validateDns(): void
+    {
+        $this->dispatch('error', 'Validating DNS failed.', "Make sure you have added the DNS records correctly.<br><br>Check this <a target='_blank' class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/dns-configuration'>documentation</a> for further help.");
     }
 
     public function render(): string
@@ -51,6 +58,8 @@ beforeEach(function () {
 afterEach(function () {
     // Views compiled with the platform name must not leak into other tests.
     Artisan::call('view:clear');
+    PlatformConfig::$enabledInTests = false;
+    PlatformConfig::flush();
 });
 
 it('shows a logo drawn from the platform name instead of the Coolify logo', function () {
@@ -82,6 +91,49 @@ it('writes the platform name into the notifications of the dashboard', function 
     Livewire::test(BrandingProbeComponent::class)
         ->call('save')
         ->assertDispatched('success', 'Hostrema saved your changes.', 'Open App\\Coolify\\Task in Hostrema.');
+});
+
+it('points the links of the notifications of the dashboard to the platform documentation', function () {
+    Livewire::test(BrandingProbeComponent::class)
+        ->call('validateDns')
+        ->assertDispatched('error', 'Validating DNS failed.', 'Make sure you have added the DNS records correctly.<br><br>Check this documentation for further help.');
+
+    config(['platform.branding.docs_url' => 'https://ajuda.hostrema.com.br']);
+    Livewire::test(BrandingProbeComponent::class)
+        ->call('validateDns')
+        ->assertDispatched('error', 'Validating DNS failed.', "Make sure you have added the DNS records correctly.<br><br>Check this <a target='_blank' class='underline dark:text-white' href='https://ajuda.hostrema.com.br'>documentation</a> for further help.");
+});
+
+it('writes the platform name and links into the text Coolify builds at runtime', function () {
+    $port = "Port 80 is in use.<br>You must stop the process using this port.<br><br>Docs: <a target='_blank' class='dark:text-white hover:underline' href='https://coolify.io/docs'>https://coolify.io/docs</a><br>Discord: <a target='_blank' class='dark:text-white hover:underline' href='https://coolify.io/discord'>https://coolify.io/discord</a>";
+    $validation = 'Server is not reachable. Please validate your configuration and connection.<br>Check this <a target="_blank" class="underline" href="https://coolify.io/docs/knowledge-base/server/openssh">documentation</a> for further help.';
+
+    expect(PlatformBranding::message($port))->toBe('Port 80 is in use.<br>You must stop the process using this port.')
+        ->and(Blade::render('<pre>{!! $error !!}</pre>', ['error' => $validation]))
+        ->toBe('<pre>Server is not reachable. Please validate your configuration and connection.<br>Check this documentation for further help.</pre>')
+        ->and(Blade::render('{!! $server->validation_logs !!}', ['server' => (object) ['validation_logs' => 'Coolify could not connect.']]))
+        ->toBe('Hostrema could not connect.')
+        // Logs of the containers Coolify runs on every server, and of a service.
+        ->and(Blade::render("<h4>{{ str(\$container)->beforeLast('-')->headline() }}</h4>", ['container' => 'coolify-proxy']))->toBe('<h4>Proxy</h4>')
+        ->and(PlatformBranding::containerTitle('coolify-sentinel'))->toBe('Sentinel')
+        ->and(PlatformBranding::containerTitle('uptime-kuma-x8k2c'))->toBe('Uptime Kuma')
+        // A domain the dashboard itself uses.
+        ->and(Blade::render("<strong>{{ \$conflict['resource_name'] }}</strong>", ['conflict' => ['resource_name' => 'Coolify Instance']]))
+        ->toBe('<strong>Hostrema Instance</strong>')
+        // "get help on Discord" (the Coolify community) leaves the real-time warning.
+        ->and(Blade::render("Please ensure that you have opened the <a class=\"underline\" href='https://coolify.io/docs/knowledge-base/server/firewall' target='_blank'>required ports</a> or get\n help on <a class=\"underline\" href='https://coollabs.io/discord' target='_blank'>Discord</a>."))
+        ->toBe('Please ensure that you have opened the required ports.');
+
+    config(['platform.branding.docs_url' => 'https://ajuda.hostrema.com.br']);
+    expect(PlatformBranding::message($port))->toBe("Port 80 is in use.<br>You must stop the process using this port.<br><br>Docs: <a target='_blank' class='dark:text-white hover:underline' href='https://ajuda.hostrema.com.br'>https://ajuda.hostrema.com.br</a>");
+});
+
+it('names what Coolify creates after the platform', function () {
+    PlatformConfig::$enabledInTests = true;
+    PlatformConfig::apply();
+
+    expect(config('app.name'))->toBe('Hostrema')
+        ->and(PrivateKey::generateNewKeyPair('ed25519')['description'])->toBe('Created by Hostrema');
 });
 
 it('writes the platform name into chat notifications', function () {

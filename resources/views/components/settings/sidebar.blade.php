@@ -3,6 +3,8 @@
         href="{{ route('settings.index') }}">General</a>
     <a class="menu-item {{ $activeMenu === 'advanced' ? 'menu-item-active' : '' }}"
         href="{{ route('settings.advanced') }}">Advanced</a>
-    <a class="menu-item {{ $activeMenu === 'updates' ? 'menu-item-active' : '' }}"
-        href="{{ route('settings.updates') }}">Updates</a>
+    @unless (isPlatform())
+        <a class="menu-item {{ $activeMenu === 'updates' ? 'menu-item-active' : '' }}"
+            href="{{ route('settings.updates') }}">Updates</a>
+    @endunless
 </div>

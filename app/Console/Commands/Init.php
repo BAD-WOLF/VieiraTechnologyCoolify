@@ -129,6 +129,9 @@ class Init extends Command
 
     private function pullTemplatesFromCDN()
     {
+        if (isPlatform()) {
+            return;
+        }
         $response = Http::retry(3, 1000)->get(config('constants.services.official'));
         if ($response->successful()) {
             $services = $response->json();
