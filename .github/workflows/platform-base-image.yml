@@ -1,0 +1,71 @@
+# Keeps the PHP base image of docker/platform/Dockerfile on the newest serversideup/php 5.x
+# release. Versioned tags of serversideup/php are never rebuilt, so an image that stays on one tag
+# stops receiving PHP and Alpine fixes; floating tags are rebuilt but can jump to a new major
+# version, which changes the S6 and nginx setup. Every week the newest 5.x tag is proposed in a
+# pull request, with the CI and the local environment (build, boot, install) run on it.
+name: Platform base image
+
+on:
+  schedule:
+    - cron: "41 7 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: platform-base-image
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: platform
+
+      - name: Newest serversideup/php 5.x release
+        id: version
+        run: |
+          current=$(sed -n 's/^ARG SERVERSIDEUP_PHP_VERSION=8\.4-fpm-nginx-alpine-\(v[0-9.]*\)$/\1/p' docker/platform/Dockerfile)
+          latest=$(git ls-remote --tags --refs https://github.com/serversideup/docker-php.git 'refs/tags/v5.*' \
+            | sed 's#.*refs/tags/##' | grep -E '^v5\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ -z "$current" ] || [ -z "$latest" ]; then
+            echo "Could not read the versions (current: '$current', latest: '$latest')." >&2
+            exit 1
+          fi
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$newest" = "$latest" ] && [ "$latest" != "$current" ]; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Current $current, newest 5.x $latest."
+
+      - name: Open the pull request
+        if: steps.version.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ steps.version.outputs.current }}
+          LATEST: ${{ steps.version.outputs.latest }}
+        run: |
+          branch="platform-base-image/${LATEST}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          sed -i "s/^ARG SERVERSIDEUP_PHP_VERSION=8\.4-fpm-nginx-alpine-v[0-9.]*$/ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-${LATEST}/" docker/platform/Dockerfile
+          git commit -am "chore(docker): serversideup/php ${LATEST}"
+          git push -u origin "$branch"
+          gh pr create --base platform --head "$branch" \
+            --title "chore(docker): serversideup/php ${LATEST}" \
+            --body "Base image of \`docker/platform/Dockerfile\`: \`${CURRENT}\` → \`${LATEST}\` ([release notes](https://github.com/serversideup/docker-php/releases/tag/${LATEST})). The Platform CI and the Platform local environment (image build, boot, \`platform:install --local\`) run on this branch; merge when both pass."
+          # Pull requests opened with the default token do not start workflows by themselves.
+          gh workflow run platform-ci.yml --ref "$branch"
+          gh workflow run platform-local-env.yml --ref "$branch"

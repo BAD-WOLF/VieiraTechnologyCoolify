@@ -20,6 +20,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 
 jobs:
   sync:
@@ -63,11 +64,17 @@ jobs:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
           REF: ${{ steps.merge.outputs.ref }}
+          HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
         run: |
           git push -u origin "$BRANCH"
           gh pr create --base platform --head "$BRANCH" \
             --title "chore: sync upstream Coolify ($REF)" \
-            --body "Automatic merge of coollabsio/coolify \`$REF\` into \`platform\`. Check the Platform CI (tests/Feature/Platform) before merging."
+            --body "Automatic merge of coollabsio/coolify \`$REF\` into \`platform\`. Check the Platform CI (tests/Feature/Platform) and the Platform local environment before merging."
+          # Pull requests opened with the default token do not start workflows by themselves.
+          if [ "$HAS_SYNC_TOKEN" != "true" ]; then
+            gh workflow run platform-ci.yml --ref "$BRANCH"
+            gh workflow run platform-local-env.yml --ref "$BRANCH"
+          fi
 
       - name: Report the conflicts
         if: steps.merge.outputs.status == 'conflicts'

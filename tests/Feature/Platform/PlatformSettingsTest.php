@@ -438,14 +438,31 @@ it('gives the local node a key of its own and survives a node that is not up yet
         ->and($node->private_key_id)->toBe(PrivateKey::query()->where('name', PlatformInstall::LOCAL_NODE_KEY)->value('id'));
 });
 
-it('ships the files the platform reads at runtime in the production image', function () {
-    $dockerfile = file_get_contents(base_path('docker/production/Dockerfile'));
-    preg_match_all('#^COPY --chown=www-data:www-data (\S+) \./#m', $dockerfile, $matches);
-    $copied = array_map(fn ($path) => rtrim($path, '/'), $matches[1]);
+/**
+ * Sources copied into the image by a Dockerfile, as "source => destination".
+ *
+ * @return array<string, string>
+ */
+function copiedByDockerfile(string $dockerfile): array
+{
+    preg_match_all('#^COPY --chown=www-data:www-data (\S+) (\S+)$#m', (string) file_get_contents(base_path($dockerfile)), $matches, PREG_SET_ORDER);
 
-    foreach ([PlatformOpenApiController::path(), lang_path('platform/pt-br.json'), base_path('routes/platform/api.php'), resource_path('views/livewire/platform/admin-settings.blade.php')] as $file) {
+    return collect($matches)->mapWithKeys(fn ($match) => [rtrim($match[1], '/') => $match[2]])->all();
+}
+
+it('ships the files the platform reads at runtime in the production image', function () {
+    $copied = array_keys(copiedByDockerfile('docker/platform/Dockerfile'));
+
+    foreach ([PlatformOpenApiController::path(), lang_path('platform/pt-br.json'), base_path('routes/platform/api.php'), resource_path('views/livewire/platform/admin-settings.blade.php'), base_path('templates/service-templates-latest.json')] as $file) {
         $relative = ltrim(str_replace(base_path(), '', $file), '/');
         $shipped = collect($copied)->contains(fn ($path) => $relative === $path || str_starts_with($relative, $path.'/'));
         expect($shipped)->toBeTrue("{$relative} is not copied into the production image");
     }
+});
+
+it('copies everything the official image copies, so upstream additions are not lost', function () {
+    $official = copiedByDockerfile('docker/production/Dockerfile');
+
+    expect($official)->not->toBeEmpty()
+        ->and(array_diff_assoc($official, copiedByDockerfile('docker/platform/Dockerfile')))->toBe([]);
 });

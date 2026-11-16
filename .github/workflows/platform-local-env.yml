@@ -8,6 +8,7 @@ on:
     branches: [platform]
     paths:
       - infra/local/**
+      - docker/platform/**
       - docker/production/**
       - app/Console/Commands/PlatformInstall.php
       - app/Services/Platform/PlatformConfig.php
@@ -17,6 +18,7 @@ on:
     branches: [platform]
     paths:
       - infra/local/**
+      - docker/platform/**
       - docker/production/**
       - app/Console/Commands/PlatformInstall.php
       - app/Services/Platform/PlatformConfig.php
