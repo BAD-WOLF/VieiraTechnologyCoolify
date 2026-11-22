@@ -5,18 +5,21 @@ use App\Jobs\PlatformNoticeJob;
 use App\Jobs\PlatformSyncInvoiceJob;
 use App\Livewire\Platform\AdminBilling;
 use App\Livewire\Platform\Pricing;
+use App\Models\InstanceSettings;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
 use App\Models\Subscription;
 use App\Services\Platform\BillingProfile;
 use App\Services\Platform\Efi\EfiClient;
+use App\Services\Platform\Efi\EfiConnectionCheck;
 use App\Services\Platform\Efi\EfiException;
 use App\Services\Platform\Efi\EfiSettings;
 use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformBranding;
 use App\Services\Platform\PlatformConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Blade;
@@ -283,10 +286,12 @@ it('lets the operator store the Efí credentials and certificate encrypted and c
         ->set('certificateFile', UploadedFile::fake()->createWithContent('homologacao.p12', $made['p12']))
         ->call('save')
         ->assertHasNoErrors()
-        ->assertSet('resultOk', true)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Homologação)')
         ->assertSet('clientSecret', '')
         ->assertSet('certificateFile', null)
-        ->assertSee('Pix ready')
+        ->assertSee('Pix: Connected')
+        ->assertSee('Certificate issued to hostrema-efi-test')
+        ->assertSee('Payment notices registered: Efí warns as soon as a Pix is paid.')
         ->assertDontSee('Client_Secret_live')
         ->assertDontSee('PRIVATE KEY');
 
@@ -584,10 +589,10 @@ it('connects Efí while the invoices are confirmed manually and then charges thr
         ->set('clientSecret', 'Client_Secret_homologacao')
         ->call('save')
         ->assertHasNoErrors()
-        ->assertSet('resultOk', true)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Homologação)' && str_contains($params[1], 'Invoices are now charged through Efí.'))
         ->assertDontSee('Fill in the Client ID')
-        ->assertSee('Connected to Efí (sandbox)')
-        ->assertSee('Invoices are now charged through Efí.');
+        ->assertSee('Connected: invoices can be charged by boleto.')
+        ->assertSee('Not configured: to charge by Pix, fill in the certificate (.p12), the Pix key.');
 
     expect(PlatformBilling::isManual())->toBeFalse()
         ->and(config('platform.billing.provider'))->toBe(PlatformBilling::PROVIDER)
@@ -605,9 +610,8 @@ it('tests the Efí connection without changing how the invoices are charged', fu
 
     Livewire::test(AdminBilling::class)
         ->call('connect')
-        ->assertSet('resultOk', true)
-        ->assertSee('Connected to Efí (sandbox)')
-        ->assertSee('Invoices are still confirmed manually');
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Homologação)' && str_contains($params[1], 'Invoices are still confirmed manually'))
+        ->assertSee('Boleto: Connected');
 
     expect(PlatformBilling::isManual())->toBeTrue()
         ->and(BillingProfile::methods())->toBe([]);
@@ -634,7 +638,7 @@ it('keeps the credentials, the certificate and the Pix key of each Efí environm
         ->set('certificateFile', UploadedFile::fake()->createWithContent('producao.p12', $production['p12']))
         ->call('save')
         ->assertHasNoErrors()
-        ->assertSet('resultOk', true)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Produção)')
         // Homologação has credentials of its own: nothing of production shows up there.
         ->set('environment', 'sandbox')
         ->assertSet('clientId', '')
@@ -648,7 +652,8 @@ it('keeps the credentials, the certificate and the Pix key of each Efí environm
         ->set('certificatePassword', 'senha')
         ->call('save')
         ->assertHasNoErrors()
-        ->assertSet('resultOk', true)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Homologação)')
+        ->assertDontSee('The same certificate is saved in Produção and in Homologação')
         // Back to production: its values come back and its secret is kept when left empty.
         ->set('environment', 'production')
         ->assertSet('clientId', 'Client_Id_producao')
@@ -656,8 +661,8 @@ it('keeps the credentials, the certificate and the Pix key of each Efí environm
         ->assertSee('Stored - leave empty to keep')
         ->assertSee('Stored - send another one to replace it')
         ->call('save')
-        ->assertSet('resultOk', true)
-        ->assertSee('Connected to Efí (production)');
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Produção)')
+        ->assertSee('Efí connected (Produção)');
 
     PlatformSetting::flushMemo();
     expect(EfiSettings::environment())->toBe('production')
@@ -682,13 +687,12 @@ it('says what is missing or what Efí refused instead of a generic error', funct
 
     Livewire::test(AdminBilling::class)
         ->call('connect')
-        ->assertSet('resultOk', false)
-        ->assertSee('Fill in the Client ID and the Client Secret of the Efí application.')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Efí not connected (Homologação)')
+        ->assertSee('Not configured: fill in the Client ID and the Client Secret of the application.')
         ->set('environment', 'sandbox')
         ->set('clientId', 'Client_Id_sem_secret')
         ->call('save')
-        ->assertSet('resultOk', true)
-        ->assertSee('Saved. Fill in the Client ID and the Client Secret of the Efí application to charge.');
+        ->assertDispatched('warning', fn (string $event, array $params) => $params[0] === 'Saved, but Efí is not connected yet');
 
     Http::fake([EFI_CHARGES.'/v1/authorize' => Http::response(['error' => 'invalid_client', 'error_description' => 'Credenciais inválidas'], 401)]);
     Livewire::test(AdminBilling::class)
@@ -696,7 +700,9 @@ it('says what is missing or what Efí refused instead of a generic error', funct
         ->assertSet('clientId', 'Client_Id_sem_secret')
         ->set('clientSecret', 'Client_Secret_errado')
         ->call('save')
-        ->assertSet('resultOk', false)
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Efí not connected (Homologação)')
+        ->assertSee('Efí refused the Client ID and the Client Secret (HTTP 401).')
+        ->assertSee('Copy them again from Efí &gt; API &gt; Aplicações', false)
         ->assertSee('Credenciais inválidas')
         ->assertDontSee('Fill in the Client ID');
 });
@@ -756,4 +762,174 @@ it('reads the EFI_* variables only for the environment they were given for', fun
     EfiSettings::storeCredential('production', 'client_secret', 'Client_Secret_console');
     expect(EfiSettings::value('client_id'))->toBe('Client_Id_console')
         ->and(EfiSettings::credential('sandbox', 'client_secret'))->toBe('Client_Secret_env');
+});
+
+/**
+ * Pix ready in the sandbox: the certificate of the tests and a Pix key, given as EFI_* variables.
+ */
+function efiPixConfigured(): void
+{
+    $certificate = efiCertificate();
+    config(['platform.efi.pix_key' => 'pix@hostrema.com.br', 'platform.efi.certificate' => $certificate['certificate'], 'platform.efi.private_key' => $certificate['key']]);
+}
+
+it('says Efí refused the certificate when the boleto connects but the Pix gets HTTP 403', function () {
+    efiOperator();
+    Http::fake([EFI_PIX.'/oauth/token' => Http::response(['message' => 'Forbidden'], 403)]);
+    efiFake();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertDispatched('warning', fn (string $event, array $params) => $params[0] === 'Efí connected in part (Homologação)')
+        ->assertSee('Boleto: Connected')
+        ->assertSee('Pix: Error')
+        ->assertSee('Efí refused the certificate of Homologação (HTTP 403).')
+        ->assertSee('The Client ID and the Client Secret are right (the boleto connected), so the problem is the certificate')
+        ->assertSee('Efí Pix authentication failed (HTTP 403): Forbidden');
+
+    expect(PlatformBilling::registerWebhooks())->registered->toBe([BillingProfile::BOLETO])
+        ->errors->toHaveKey(BillingProfile::PIX);
+});
+
+it('says to check every credential when both APIs refuse them', function () {
+    efiOperator();
+    Http::fake([
+        EFI_PIX.'/oauth/token' => Http::response(['message' => 'Forbidden'], 403),
+        EFI_CHARGES.'/v1/authorize' => Http::response(['error' => 'invalid_client', 'error_description' => 'Credenciais inválidas'], 401),
+    ]);
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Efí not connected (Homologação)')
+        ->assertSee('Efí refused the Client ID and the Client Secret (HTTP 401).')
+        ->assertSee('Check that the certificate, the Client ID and the Client Secret are all of Homologação and of the same Efí account');
+});
+
+it('names the scopes the Efí application lacks, and keeps the Pix when only the notices lack them', function (string $scopes, string $pix, string $message, string $toast) {
+    efiOperator();
+    Http::fake([EFI_PIX.'/oauth/token' => Http::response(['access_token' => 'pix-token', 'expires_in' => 3600, 'scope' => $scopes])]);
+    efiFake();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertDispatched($toast)
+        ->assertSee($pix)
+        ->assertSee($message);
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/v2/webhook/'));
+})->with([
+    'no charges with a due date' => ['cob.read cob.write webhook.read webhook.write', 'Pix: Error', 'The application can not create Pix charges: the scopes cobv.write, cobv.read are not enabled.', 'warning'],
+    'no webhook' => ['cobv.read cobv.write', 'Pix: Connected', 'Payment notices are off: the scopes webhook.write, webhook.read are not enabled.', 'warning'],
+]);
+
+it('connects the Pix on a dashboard Efí can not reach and checks the invoices at Efí instead of waiting for notices', function (string $url, string $reason) {
+    InstanceSettings::query()->whereKey(0)->update(['fqdn' => $url]);
+    efiOperator();
+    efiFake();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Efí connected (Homologação)')
+        ->assertSee('Pix: Connected')
+        ->assertSee('Payment notices are off on this address.')
+        ->assertSee("this dashboard is at {$url} ({$reason})")
+        ->assertSee('Meanwhile the open invoices are checked at Efí every 15 minutes');
+
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/v2/webhook/'));
+    expect(PlatformSetting::get('efi.webhook_registered_at'))->toBeNull()
+        ->and(PlatformBilling::registerWebhooks()['errors'])->toBe([]);
+})->with([
+    'localhost' => ['http://localhost:8000', 'a local address'],
+    'local network name' => ['https://painel.local', 'a local address'],
+    'host without a domain' => ['https://coolify', 'a local address'],
+    'private address' => ['https://192.168.0.10', 'a private address'],
+    'public address without HTTPS' => ['http://painel.hostrema.com.br', 'not HTTPS'],
+]);
+
+it('keeps the Pix when Efí refuses the address of the notices or does not answer', function () {
+    efiOperator();
+    Http::fake([EFI_PIX.'/v2/webhook/*' => Http::response(['nome' => 'webhook_invalido', 'mensagem' => 'A URL informada respondeu com o código HTTP 404'], 400)]);
+    efiFake();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertDispatched('warning', fn (string $event, array $params) => $params[0] === 'Efí connected in part (Homologação)')
+        ->assertSee('Pix: Connected')
+        ->assertSee('Efí did not accept the address of the payment notices.')
+        ->assertSee('Check that painel.hostrema.com.br answers over HTTPS from the internet')
+        ->assertSee('A URL informada respondeu com o código HTTP 404');
+});
+
+it('tells a certificate Efí can not use from an Efí that does not answer', function (string $message, string $expected) {
+    efiOperator();
+    Http::fake([EFI_PIX.'/oauth/token' => fn () => throw new ConnectionException($message)]);
+    efiFake();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertSee($expected)
+        ->assertSee($message);
+})->with([
+    'key the certificate can not use' => ['cURL error 58: unable to set private key file', 'The certificate could not be used to connect to Efí.'],
+    'timeout' => ['cURL error 28: Operation timed out after 30001 milliseconds', 'No answer from Efí.'],
+]);
+
+it('shows the certificate of each environment and refuses one that expired without asking Efí', function () {
+    efiOperator();
+    efiFake();
+    $certificate = efiCertificate();
+    foreach (EfiSettings::ENVIRONMENTS as $environment) {
+        EfiSettings::storeCredential($environment, 'certificate', $certificate['certificate']);
+        EfiSettings::storeCredential($environment, 'private_key', $certificate['key']);
+    }
+    config(['platform.efi.pix_key' => 'pix@hostrema.com.br']);
+    $validUntil = EfiSettings::certificateInfo('sandbox')['valid_to']->format('d/m/Y');
+
+    Livewire::test(AdminBilling::class)
+        ->assertSee("Certificate issued to hostrema-efi-test, valid until {$validUntil}.")
+        ->assertSee('The same certificate is saved in Produção and in Homologação');
+
+    $this->travel(3)->days();
+    Livewire::test(AdminBilling::class)
+        ->assertSee("The certificate of Homologação expired on {$validUntil}.")
+        ->call('connect')
+        ->assertSee('In Efí &gt; API &gt; Meus certificados, create a certificate of Homologação and send it here.', false);
+    Http::assertNotSent(fn (Request $request) => $request->url() === EFI_PIX.'/oauth/token');
+    expect(EfiSettings::certificateInfo('production'))->expired->toBeTrue()
+        ->and(EfiSettings::certificateInfo('production')['fingerprint'])->toMatch('/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/');
+});
+
+it('keeps the last test of each environment and says when the credentials changed after it', function () {
+    efiOperator();
+    efiFake();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertSee('Boleto: Connected')
+        ->assertDontSee('changed after this test');
+    expect(EfiConnectionCheck::last('sandbox'))->level->toBe(EfiConnectionCheck::OK)->stale->toBeFalse()
+        ->and(EfiConnectionCheck::last('production'))->toBeNull();
+
+    EfiSettings::storeCredential('sandbox', 'client_secret', 'Client_Secret_novo');
+    PlatformSetting::flushMemo();
+    Livewire::test(AdminBilling::class)
+        ->assertSee('Boleto: Not tested')
+        ->assertSee('The credentials, the certificate or the Pix key changed after this test');
+    expect(EfiConnectionCheck::last('sandbox')['stale'])->toBeTrue();
+
+    PlatformSetting::put('efi.sandbox.last_check', '{"incompleto": true}');
+    expect(EfiConnectionCheck::last('sandbox'))->toBeNull();
+});
+
+it('reads the Efí error message whatever field it comes in', function () {
+    $response = fn (array $body, int $status) => new \Illuminate\Http\Client\Response(new \GuzzleHttp\Psr7\Response($status, [], json_encode($body)));
+
+    expect(EfiException::fromResponse('Efí Pix authentication', $response(['message' => 'Forbidden'], 403))->getMessage())->toBe('Efí Pix authentication failed (HTTP 403): Forbidden')
+        ->and(EfiException::fromResponse('Efí GET /x', $response([], 502))->getMessage())->toBe('Efí GET /x failed (HTTP 502).')
+        ->and(EfiException::fromResponse('Efí GET /x', $response(['message' => ['not', 'text']], 500))->getMessage())->toBe('Efí GET /x failed (HTTP 500).');
 });

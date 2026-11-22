@@ -6,8 +6,8 @@
         <h1>{{ __('Platform') }}</h1>
         <div class="subtitle">{{ __('Customers, plans, billing, regions, nodes and audit trail of the platform.') }}</div>
     </div>
-    <div class="flex gap-2">
-        @foreach (['tenants' => __('Tenants'), 'plans' => __('Plans'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
+    <div class="flex flex-wrap gap-2">
+        @foreach (['tenants' => __('Tenants'), 'plans' => __('Plans'), 'billing' => __('Billing'), 'notifications' => __('Announcements'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
             <x-forms.button wire:click="$set('tab', '{{ $key }}')" :isHighlighted="$tab === $key">{{ $label }}</x-forms.button>
         @endforeach
     </div>
@@ -113,6 +113,8 @@
         <livewire:platform.admin-plans />
     @elseif ($tab === 'billing')
         <livewire:platform.admin-billing />
+    @elseif ($tab === 'notifications')
+        <livewire:platform.admin-notifications />
     @elseif ($tab === 'settings')
         <livewire:platform.admin-settings />
     @elseif ($tab === 'nodes')

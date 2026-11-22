@@ -19,7 +19,7 @@ class EfiException extends \RuntimeException
         $body = (array) $response->json();
         $parts = array_filter([
             data_get($body, 'title') ?? data_get($body, 'nome'),
-            data_get($body, 'detail') ?? data_get($body, 'mensagem'),
+            data_get($body, 'detail') ?? data_get($body, 'mensagem') ?? (is_string(data_get($body, 'message')) ? data_get($body, 'message') : null),
             is_string(data_get($body, 'error_description')) ? data_get($body, 'error_description') : (is_string(data_get($body, 'error')) ? data_get($body, 'error') : null),
             // Cobranças API: {"error": "validation_error", "error_description": {"property": "/payment/...", "message": "..."}}
             is_array(data_get($body, 'error_description')) ? trim(data_get($body, 'error_description.property', '').': '.data_get($body, 'error_description.message', ''), ': ') : null,

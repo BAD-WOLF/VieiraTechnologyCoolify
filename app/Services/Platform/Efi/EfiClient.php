@@ -31,6 +31,17 @@ class EfiClient
         if (! $fresh && is_string($cached = Cache::get($cacheKey)) && $cached !== '') {
             return $cached;
         }
+
+        return (string) $this->authorize($api)['access_token'];
+    }
+
+    /**
+     * Asks Efí for a new token of the API (the Pix one with the certificate) and keeps it.
+     *
+     * @return array{access_token: string, scope?: string, expires_in?: int} answer of Efí
+     */
+    public function authorize(string $api): array
+    {
         $request = Http::acceptJson()
             ->asJson()
             ->withBasicAuth((string) EfiSettings::value('client_id'), (string) EfiSettings::value('client_secret'))
@@ -41,10 +52,10 @@ class EfiClient
         if ($response->failed() || blank($response->json('access_token'))) {
             throw EfiException::fromResponse($api === self::API_PIX ? 'Efí Pix authentication' : 'Efí Cobranças authentication', $response);
         }
-        $token = (string) $response->json('access_token');
-        Cache::put($cacheKey, $token, max(60, (int) $response->json('expires_in', 600) - 60));
+        $answer = (array) $response->json();
+        Cache::put(self::tokenCacheKey($api), (string) $answer['access_token'], max(60, (int) ($answer['expires_in'] ?? 600) - 60));
 
-        return $token;
+        return $answer;
     }
 
     public static function tokenCacheKey(string $api): string

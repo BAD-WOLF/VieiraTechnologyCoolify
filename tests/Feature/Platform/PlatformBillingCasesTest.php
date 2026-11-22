@@ -681,12 +681,12 @@ it('keeps the operator console working when an action on an invoice fails', func
 
     Livewire::test(AdminBilling::class)
         ->call('syncInvoice', $invoice->uuid)
-        ->assertSet('resultOk', false)
-        ->assertSee('Credenciais inválidas')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === "Invoice {$invoice->number} could not be checked at the bank" && str_contains($params[1], 'Credenciais inválidas'))
         ->call('reissue', $invoice->uuid)
-        ->assertSet('resultOk', false)
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === "Invoice {$invoice->number} could not be issued again")
         ->call('simulatePayment', $invoice->uuid)
-        ->assertSet('resultOk', false);
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'The payment could not be simulated')
+        ->assertNotDispatched('success');
 });
 
 it('lets the operator check, cancel, re-issue and simulate invoices and run the cycle', function () {
@@ -705,41 +705,49 @@ it('lets the operator check, cancel, re-issue and simulate invoices and run the 
         ->assertDontSee($invoice->number)
         ->set('search', '')
         ->call('syncInvoice', $invoice->uuid)
-        ->call('reissue', $invoice->uuid);
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === "Invoice {$invoice->number} checked at the bank: Open.")
+        ->call('reissue', $invoice->uuid)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === "A new charge of invoice {$invoice->number} was issued.");
     expect($invoice->fresh()->provider_reference)->toBe('1002')
         ->and($invoice->fresh()->status)->toBe(PlatformInvoice::STATUS_OPEN)
         ->and(Http::recorded(fn (Request $request) => $request->url() === EFI_CHARGES.'/v1/charge/one-step')->count())->toBe(2)
         ->and(Http::recorded(fn (Request $request) => $request->url() === EFI_CHARGES.'/v1/charge/1002/cancel')->count())->toBe(1);
 
-    $component->call('cancelInvoice', $invoice->uuid);
+    $component->call('cancelInvoice', $invoice->uuid)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === "Invoice {$invoice->number} cancelled.");
     expect($invoice->fresh()->status)->toBe(PlatformInvoice::STATUS_VOID);
 
     $this->travel(2)->seconds();
     $other = PlatformBilling::subscribe($tenant->fresh(), 'pro', 'monthly')['invoice'];
     efiFake(['status' => 'settled']);
     $component->call('simulatePayment', $other->uuid)
-        ->assertSet('resultOk', true)
-        ->assertSee('Payment simulated in the sandbox.')
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Payment simulated in the sandbox.')
+        ->call('markPaid', $invoice->uuid)
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === "Invoice {$invoice->number} marked as paid.")
         ->call('runCycle')
-        ->assertSet('resultOk', true)
-        ->assertSee('Billing cycle executed.');
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Billing cycle executed.');
     expect($other->fresh()->status)->toBe(PlatformInvoice::STATUS_PAID);
 
     $component->call('markPaid', 'nao-existe')->assertNotFound();
 });
 
-it('reports a connection that breaks and a payment method Efí refused while the other works', function () {
+it('says which payment method Efí refused while the other works, and why', function () {
     efiOperator();
-    Http::fake([EFI_PIX.'/oauth/token' => Http::response(['error' => 'invalid_client', 'error_description' => 'Certificado recusado'], 401)]);
+    Http::fake([EFI_PIX.'/oauth/token' => Http::response(['error' => 'invalid_client', 'error_description' => 'Credenciais recusadas'], 401)]);
     efiFake();
     $certificate = efiCertificate();
     config(['platform.efi.pix_key' => 'pix@hostrema.com.br', 'platform.efi.certificate' => $certificate['certificate'], 'platform.efi.private_key' => $certificate['key']]);
 
     Livewire::test(AdminBilling::class)
         ->call('connect')
-        ->assertSet('resultOk', false)
-        ->assertSee('Ready to charge with Boleto')
-        ->assertSee('Not available: Pix: Efí Pix authentication failed (HTTP 401): Certificado recusado');
+        ->assertDispatched('warning', fn (string $event, array $params) => $params[0] === 'Efí connected in part (Homologação)')
+        ->assertSee('Efí connected in part (Homologação)')
+        ->assertSee('Boleto: Connected')
+        ->assertSee('Pix: Error')
+        ->assertSee('Connected: invoices can be charged by boleto.')
+        ->assertSee('Efí refused the Client ID and the Client Secret on the Pix API (HTTP 401).')
+        ->assertSee('Credenciais recusadas')
+        ->assertSee('Payment notices wait for the Pix connection.');
 });
 
 it('reports a failure while recording the connection instead of breaking the console', function () {
@@ -755,8 +763,7 @@ it('reports a failure while recording the connection instead of breaking the con
 
     Livewire::test(AdminBilling::class)
         ->call('connect')
-        ->assertSet('resultOk', false)
-        ->assertSee('could not save the webhook date');
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'The connection test could not run' && $params[1] === 'could not save the webhook date');
 });
 
 it('shows a customer with a monthly or yearly plan the interval of the plan', function () {

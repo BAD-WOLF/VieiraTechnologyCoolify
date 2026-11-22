@@ -11,6 +11,7 @@ use App\Actions\Service\StopService;
 use App\Jobs\DatabaseBackupJob;
 use App\Jobs\PlatformNoticeJob;
 use App\Models\Application;
+use App\Models\PlatformNotification;
 use App\Models\PlatformTenant;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\Service;
@@ -260,14 +261,19 @@ class TenantLifecycle
     }
 
     /**
+     * Tells the team about an event of its account: an e-mail to its owners and admins, and the
+     * bell of every member.
+     *
      * @param  array<int, string>  $lines
      */
-    public static function notify(PlatformTenant $tenant, string $subject, array $lines): void
+    public static function notify(PlatformTenant $tenant, string $subject, array $lines, string $kind = PlatformNotification::KIND_ACCOUNT): void
     {
         $team = $tenant->team;
         if (is_null($team)) {
             return;
         }
-        PlatformNoticeJob::dispatch($team, $subject, array_values(array_filter($lines)), route('subscription.show'), __('Plan & usage'));
+        $lines = array_values(array_filter($lines));
+        PlatformNoticeJob::dispatch($team, $subject, $lines, route('subscription.show'), __('Plan & usage'));
+        PlatformInbox::toTeam($team->id, $kind, $subject, implode("\n", $lines), route('subscription.show'), __('Plan & usage'));
     }
 }

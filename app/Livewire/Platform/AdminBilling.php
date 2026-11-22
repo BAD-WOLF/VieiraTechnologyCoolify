@@ -4,8 +4,8 @@ namespace App\Livewire\Platform;
 
 use App\Models\PlatformInvoice;
 use App\Models\PlatformSetting;
-use App\Services\Platform\BillingProfile;
 use App\Services\Platform\Efi\EfiClient;
+use App\Services\Platform\Efi\EfiConnectionCheck;
 use App\Services\Platform\Efi\EfiException;
 use App\Services\Platform\Efi\EfiSettings;
 use App\Services\Platform\PlatformBilling;
@@ -19,6 +19,9 @@ use Livewire\WithFileUploads;
  *
  * Each environment (Produção, Homologação) keeps its own credentials: choosing one in the form
  * shows what is saved for it, and saving makes it the one in use.
+ *
+ * Messages: the connection test is a state, shown under the form method by method (what failed,
+ * why, how to fix it) until the next test; the outcome of a click is a notification.
  */
 class AdminBilling extends Component
 {
@@ -36,10 +39,6 @@ class AdminBilling extends Component
     public string $certificatePassword = '';
 
     public string $pixKey = '';
-
-    public ?string $result = null;
-
-    public bool $resultOk = true;
 
     public string $search = '';
 
@@ -104,7 +103,7 @@ class AdminBilling extends Component
         if (EfiSettings::isConfigured()) {
             $this->checkConnection(activate: true);
         } else {
-            $this->report(true, __('Saved. Fill in the Client ID and the Client Secret of the Efí application to charge.'));
+            $this->dispatch('warning', __('Saved, but Efí is not connected yet'), __('To charge, fill in the Client ID and the Client Secret of the application and click "Save and connect".'));
         }
     }
 
@@ -120,52 +119,34 @@ class AdminBilling extends Component
 
     /**
      * Connection test of the environment in use. With $activate (Save and connect), a platform that
-     * confirms payments manually starts charging through Efí once the connection works.
+     * confirms payments manually starts charging through Efí once a payment method works.
      */
     private function checkConnection(bool $activate): void
     {
-        if (! EfiSettings::isConfigured()) {
-            $this->report(false, __('Fill in the Client ID and the Client Secret of the Efí application.'));
-
-            return;
-        }
         try {
-            EfiClient::forgetTokens();
             $result = PlatformBilling::registerWebhooks();
         } catch (\Throwable $e) {
-            $this->report(false, $e->getMessage());
+            $this->dispatch('error', __('The connection test could not run'), $e->getMessage());
 
             return;
         }
-        $labels = [BillingProfile::PIX => 'Pix', BillingProfile::BOLETO => __('Boleto')];
-        $failures = collect($result['errors'])->map(fn (string $error, string $method) => ($labels[$method] ?? $method).': '.$error)->values()->all();
-        if ($result['registered'] === []) {
-            $this->report(false, implode(' ', $failures));
-
-            return;
-        }
-        $message = __('Connected to Efí (:env). Ready to charge with :methods.', [
-            'env' => EfiSettings::isSandbox() ? __('sandbox') : __('production'),
-            'methods' => collect($result['registered'])->map(fn (string $method) => $labels[$method] ?? $method)->implode(', '),
-        ]);
-        if (in_array(BillingProfile::PIX, $result['registered'], true)) {
-            $message .= ' '.__('Pix notifications: :url', ['url' => preg_replace('#/[^/]+$#', '/•••', $result['url'])]);
-        } elseif (! EfiSettings::pixReady()) {
-            $message .= ' '.__('For Pix charges, also send the certificate of the application and the Pix key.');
-        }
-        if ($failures !== []) {
-            $message .= ' '.__('Not available: :errors', ['errors' => implode(' ', $failures)]);
-        }
-        if (PlatformBilling::isManual()) {
+        $check = $result['check'];
+        $environment = EfiConnectionCheck::environmentLabel($check['environment']);
+        $description = __('See under the form what each payment method returned and how to fix it.');
+        if (PlatformBilling::isManual() && $result['registered'] !== []) {
             if ($activate) {
                 PlatformConfig::set('platform.billing.provider', PlatformBilling::PROVIDER);
                 audit_log('platform.efi.activated', null, ['environment' => EfiSettings::environment()], 0);
-                $message .= ' '.__('Invoices are now charged through Efí.');
+                $description = __('Invoices are now charged through Efí.').' '.$description;
             } else {
-                $message .= ' '.__('Invoices are still confirmed manually: "Save and connect" makes Efí charge them.');
+                $description = __('Invoices are still confirmed manually: "Save and connect" makes Efí charge them.').' '.$description;
             }
         }
-        $this->report($failures === [], $message);
+        match ($check['level']) {
+            EfiConnectionCheck::OK => $this->dispatch('success', __('Efí connected (:env)', ['env' => $environment]), $description),
+            EfiConnectionCheck::WARNING => $this->dispatch('warning', __('Efí connected in part (:env)', ['env' => $environment]), $description),
+            default => $this->dispatch('error', __('Efí not connected (:env)', ['env' => $environment]), $description),
+        };
     }
 
     public function markPaid(string $uuid): void
@@ -173,55 +154,56 @@ class AdminBilling extends Component
         $this->guard();
         $invoice = $this->invoice($uuid);
         PlatformBilling::markPaid($invoice, $invoice->amount_cents, 'MANUAL', now(), 'user');
-        $this->report(true, __('Invoice :number marked as paid.', ['number' => $invoice->number]));
+        $this->dispatch('success', __('Invoice :number marked as paid.', ['number' => $invoice->number]));
     }
 
     public function cancelInvoice(string $uuid): void
     {
         $this->guard();
-        PlatformBilling::cancelInvoice($this->invoice($uuid));
+        $invoice = $this->invoice($uuid);
+        $this->attempt(__('Invoice :number could not be cancelled', ['number' => $invoice->number]), function () use ($invoice) {
+            PlatformBilling::cancelInvoice($invoice);
+            $this->dispatch('success', __('Invoice :number cancelled.', ['number' => $invoice->number]));
+        });
     }
 
     public function syncInvoice(string $uuid): void
     {
         $this->guard();
-        try {
-            PlatformBilling::sync($this->invoice($uuid));
-        } catch (\Throwable $e) {
-            $this->report(false, $e->getMessage());
-        }
+        $invoice = $this->invoice($uuid);
+        $this->attempt(__('Invoice :number could not be checked at the bank', ['number' => $invoice->number]), function () use ($invoice) {
+            PlatformBilling::sync($invoice);
+            $this->dispatch('success', __('Invoice :number checked at the bank: :status.', ['number' => $invoice->number, 'status' => __(ucfirst((string) $invoice->fresh()->status))]));
+        });
     }
 
     public function reissue(string $uuid): void
     {
         $this->guard();
-        try {
-            PlatformBilling::reissue($this->invoice($uuid));
-        } catch (\Throwable $e) {
-            $this->report(false, $e->getMessage());
-        }
+        $invoice = $this->invoice($uuid);
+        $this->attempt(__('Invoice :number could not be issued again', ['number' => $invoice->number]), function () use ($invoice) {
+            PlatformBilling::reissue($invoice);
+            $this->dispatch('success', __('A new charge of invoice :number was issued.', ['number' => $invoice->number]));
+        });
     }
 
     public function simulatePayment(string $uuid): void
     {
         $this->guard();
-        try {
-            PlatformBilling::simulatePayment($this->invoice($uuid));
-            $this->report(true, __('Payment simulated in the sandbox.'));
-        } catch (\Throwable $e) {
-            $this->report(false, $e->getMessage());
-        }
+        $invoice = $this->invoice($uuid);
+        $this->attempt(__('The payment could not be simulated'), function () use ($invoice) {
+            PlatformBilling::simulatePayment($invoice);
+            $this->dispatch('success', __('Payment simulated in the sandbox.'));
+        });
     }
 
     public function runCycle(): void
     {
         $this->guard();
-        try {
+        $this->attempt(__('The billing cycle stopped with an error'), function () {
             PlatformBilling::runCycle();
-            $this->report(true, __('Billing cycle executed.'));
-        } catch (\Throwable $e) {
-            $this->report(false, $e->getMessage());
-        }
+            $this->dispatch('success', __('Billing cycle executed.'), __('Due renewals were issued and open invoices were checked at the bank.'));
+        });
     }
 
     public function render()
@@ -249,19 +231,39 @@ class AdminBilling extends Component
             'webhookAt' => PlatformSetting::get('efi.webhook_registered_at'),
             'lastWebhookAt' => PlatformSetting::get('efi.last_webhook_at'),
             'sandbox' => EfiSettings::isSandbox(),
+            'check' => EfiConnectionCheck::last($this->environment),
+            'certificate' => EfiSettings::certificateInfo($this->environment),
+            'sameCertificate' => $this->sameCertificate(),
+            'environmentLabel' => EfiConnectionCheck::environmentLabel($this->environment),
         ]);
+    }
+
+    /**
+     * The same certificate saved for both environments: each environment of Efí issues its own.
+     */
+    private function sameCertificate(): bool
+    {
+        $fingerprints = array_map(fn (string $environment) => EfiSettings::certificateInfo($environment)['fingerprint'] ?? null, EfiSettings::ENVIRONMENTS);
+
+        return ! in_array(null, $fingerprints, true) && count(array_unique($fingerprints)) === 1;
+    }
+
+    /**
+     * Runs an action and turns its failure into a notification with a title saying what failed.
+     */
+    private function attempt(string $failure, \Closure $action): void
+    {
+        try {
+            $action();
+        } catch (\Throwable $e) {
+            $this->dispatch('error', $failure, $e->getMessage());
+        }
     }
 
     private function loadEnvironment(): void
     {
         $this->clientId = (string) EfiSettings::credential($this->environment, 'client_id');
         $this->pixKey = (string) EfiSettings::pixKey($this->environment);
-    }
-
-    private function report(bool $ok, string $message): void
-    {
-        $this->resultOk = $ok;
-        $this->result = $message;
     }
 
     private function invoice(string $uuid): PlatformInvoice

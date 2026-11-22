@@ -5,10 +5,12 @@ namespace App\Services\Platform;
 use App\Actions\Platform\ProvisionTenant;
 use App\Jobs\PlatformSyncInvoiceJob;
 use App\Models\PlatformInvoice;
+use App\Models\PlatformNotification;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
 use App\Models\Subscription;
 use App\Services\Platform\Efi\EfiClient;
+use App\Services\Platform\Efi\EfiConnectionCheck;
 use App\Services\Platform\Efi\EfiSettings;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -620,7 +622,7 @@ class PlatformBilling
         TenantLifecycle::notify($tenant, __('Payment confirmed'), array_values(array_filter([
             __('We received the payment of invoice :number (:amount). Thank you!', ['number' => $paid->number, 'amount' => formatPlatformMoney((int) $paid->amount_paid_cents, 'brl')]),
             $wasPending ? __('Thank you! Your plan is being activated; this can take a few seconds.') : null,
-        ])));
+        ])), PlatformNotification::KIND_BILLING);
     }
 
     /**
@@ -665,7 +667,7 @@ class PlatformBilling
                 'days' => (int) config('platform.enforcement.suspend_after_days', 7),
                 'hard' => (int) config('platform.enforcement.hard_suspend_after_days', 30),
             ]),
-        ]);
+        ], PlatformNotification::KIND_BILLING);
     }
 
     /**
@@ -796,7 +798,7 @@ class PlatformBilling
             __('Your subscription ended. Deployments are disabled and the containers will be stopped in :days days unless you subscribe again.', [
                 'days' => (int) config('platform.enforcement.suspend_after_days', 7),
             ]),
-        ]);
+        ], PlatformNotification::KIND_BILLING);
     }
 
     public static function markOverdue(): int
@@ -952,35 +954,28 @@ class PlatformBilling
     }
 
     /**
-     * Checks the credentials and registers the Pix webhook of the key. Boletos need no
-     * registration: each one carries its notification address.
+     * Tests the Efí environment in use (EfiConnectionCheck) and registers the Pix webhook of the
+     * key when the dashboard can be reached. Boletos need no registration: each one carries its
+     * notification address. "registered" lists the methods that can charge; "errors" what failed,
+     * with how to fix it (the webhook only when Efí refused it).
      *
-     * @return array{url: string, registered: array<int, string>, errors: array<string, string>}
+     * @return array{url: string, registered: array<int, string>, errors: array<string, string>, check: array<string, mixed>}
      */
     public static function registerWebhooks(): array
     {
-        $url = EfiSettings::webhookUrl();
+        $check = EfiConnectionCheck::run();
         $registered = [];
         $errors = [];
-        foreach (BillingProfile::configuredMethods() as $method) {
-            try {
-                if ($method === BillingProfile::PIX) {
-                    self::client()->registerPixWebhook((string) EfiSettings::pixKey(), $url);
-                } else {
-                    self::client()->token(EfiClient::API_CHARGES, true);
-                }
+        foreach ([BillingProfile::PIX => 'pix', BillingProfile::BOLETO => 'boleto', 'webhook' => 'webhook'] as $method => $key) {
+            $item = $check[$key];
+            if ($item['status'] === EfiConnectionCheck::OK && $key !== 'webhook') {
                 $registered[] = $method;
-            } catch (\Throwable $e) {
-                $errors[$method] = $e->getMessage();
+            } elseif (in_array($item['status'], [EfiConnectionCheck::FAILED, EfiConnectionCheck::WARNING], true)) {
+                $errors[$method] = trim($item['title'].' '.($item['fix'] ?? ''));
             }
         }
-        if (in_array(BillingProfile::PIX, $registered, true)) {
-            PlatformSetting::put('efi.webhook_registered_at', now()->toIso8601String());
-            PlatformSetting::put('efi.webhook_registered_url', $url);
-            audit_log('platform.efi.webhook_registered', null, ['url' => preg_replace('#/[^/]+$#', '/***', $url)], 0);
-        }
 
-        return ['url' => $url, 'registered' => $registered, 'errors' => $errors];
+        return ['url' => EfiSettings::webhookUrl(), 'registered' => $registered, 'errors' => $errors, 'check' => $check];
     }
 
     /**
@@ -1036,7 +1031,7 @@ class PlatformBilling
         if ($instructions = data_get($invoice->payment_details, 'instructions')) {
             $lines[] = (string) $instructions;
         }
-        TenantLifecycle::notify($tenant, __('Invoice available'), $lines);
+        TenantLifecycle::notify($tenant, __('Invoice available'), $lines, PlatformNotification::KIND_BILLING);
     }
 
     private static function parseDate(mixed $value): ?CarbonImmutable

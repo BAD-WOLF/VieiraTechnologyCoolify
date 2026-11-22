@@ -57,7 +57,14 @@
 
             <main class="lg:pl-56">
                 <div class="p-4 sm:px-6 lg:px-8 lg:py-6">
-                    <x-platform-banner />
+                    @if (isPlatform())
+                        <div class="flex items-start gap-3 mb-2 -mt-1 lg:-mt-3">
+                            <div class="flex-1 min-w-0"><x-platform-banner /></div>
+                            <livewire:platform.notification-bell />
+                        </div>
+                    @else
+                        <x-platform-banner />
+                    @endif
                     {{ $slot }}
                 </div>
             </main>

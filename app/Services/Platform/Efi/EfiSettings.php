@@ -138,6 +138,35 @@ class EfiSettings
     }
 
     /**
+     * What the operator needs to recognize the certificate saved for an environment: to whom it was
+     * issued, until when it is valid and its fingerprint (the same in "openssl x509 -fingerprint").
+     *
+     * @return array{subject: string, issuer: string, valid_from: \Carbon\CarbonImmutable, valid_to: \Carbon\CarbonImmutable, fingerprint: string, expired: bool, not_yet_valid: bool}|null
+     */
+    public static function certificateInfo(?string $environment = null): ?array
+    {
+        $pem = self::pem('certificate', $environment);
+        $parsed = is_null($pem) ? false : @openssl_x509_parse($pem);
+        if ($parsed === false) {
+            return null;
+        }
+        $name = fn (array $parts): string => (string) ($parts['CN'] ?? $parts['O'] ?? collect($parts)->flatten()->implode(', '));
+        $validFrom = \Carbon\CarbonImmutable::createFromTimestamp((int) ($parsed['validFrom_time_t'] ?? 0));
+        $validTo = \Carbon\CarbonImmutable::createFromTimestamp((int) ($parsed['validTo_time_t'] ?? 0));
+        $fingerprint = strtoupper((string) @openssl_x509_fingerprint($pem, 'sha256'));
+
+        return [
+            'subject' => $name((array) ($parsed['subject'] ?? [])),
+            'issuer' => $name((array) ($parsed['issuer'] ?? [])),
+            'valid_from' => $validFrom,
+            'valid_to' => $validTo,
+            'fingerprint' => implode(':', str_split($fingerprint, 2)),
+            'expired' => $validTo->isPast(),
+            'not_yet_valid' => $validFrom->isFuture(),
+        ];
+    }
+
+    /**
      * Certificate or key as PEM, accepting a PEM text, a base64 encoded PEM or a file path.
      */
     public static function pem(string $key, ?string $environment = null): ?string

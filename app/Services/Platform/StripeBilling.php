@@ -4,6 +4,7 @@ namespace App\Services\Platform;
 
 use App\Actions\Platform\ProvisionTenant;
 use App\Models\PlatformInvoice;
+use App\Models\PlatformNotification;
 use App\Models\PlatformTenant;
 use App\Models\Subscription;
 use App\Models\Team;
@@ -192,7 +193,7 @@ class StripeBilling
         ]);
         TenantLifecycle::notify($tenant, __('Subscription cancelled'), [
             __('Your subscription ended. Deployments are disabled and the containers will be stopped in :days days unless you subscribe again.', ['days' => (int) config('platform.enforcement.suspend_after_days', 7)]),
-        ]);
+        ], PlatformNotification::KIND_BILLING);
     }
 
     /**
@@ -301,7 +302,7 @@ class StripeBilling
                 'days' => (int) config('platform.enforcement.suspend_after_days', 7),
                 'hard' => (int) config('platform.enforcement.hard_suspend_after_days', 30),
             ]),
-        ]);
+        ], PlatformNotification::KIND_BILLING);
     }
 
     /**
