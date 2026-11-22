@@ -198,7 +198,8 @@ class PublicGitRepository extends Component
             }
             $this->selectedBranch = $this->git_branch;
         } catch (\Throwable $e) {
-            if ($this->rate_limit_remaining == 0) {
+            // Only a rate limited API keeps the guessed branch: a repository without "main" uses its default branch.
+            if (str($e->getMessage())->contains('rate limit')) {
                 $this->selectedBranch = $this->git_branch;
                 $this->branchFound = true;
 
@@ -206,8 +207,9 @@ class PublicGitRepository extends Component
             }
             if (! $this->branchFound && $this->git_branch === 'main') {
                 try {
-                    $this->git_branch = 'master';
+                    $this->git_branch = data_get(githubApi(source: $this->git_source, endpoint: "/repos/{$this->git_repository}"), 'data.default_branch') ?: 'master';
                     $this->getBranch();
+                    $this->selectedBranch = $this->git_branch;
                 } catch (\Throwable $e) {
                     return handleError($e, $this);
                 }

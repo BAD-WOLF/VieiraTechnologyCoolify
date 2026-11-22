@@ -115,6 +115,10 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Models/PrivateKey.php`, `app/Http/Controllers/Api/SecurityController.php`, `app/Livewire/Boarding/Index.php`
   e `app/Livewire/SettingsBackup.php`: as descrições que o sistema cria ("Created by Coolify") usam o nome da
   aplicação (`config('app.name')`, "Coolify" no upstream e o nome da plataforma aqui).
+- `app/Livewire/Project/New/PublicGitRepository.php`: correção de um bug do upstream (num repositório público do
+  GitHub sem branch `main`, como os que usam `master`, o "Check repository" tratava o 404 da API como limite de
+  requisições e ficava com `main`, e o clone falhava depois). Agora só o limite de requisições mantém o branch, e
+  o repositório sem `main` usa o branch padrão informado pela API.
 - `app/Livewire/SettingsOauth.php`: correção de um bug do upstream (a rota `home` não existe; quem não é
   administrador da instância vai para o painel, como nas outras telas de configuração).
 - `bootstrap/helpers/subscriptions.php`: antes do primeiro pagamento o cliente abre o painel (início), que
@@ -128,12 +132,12 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Console`: `Commands/Init.php` (+3/-0)
 - `app/Http`: `Controllers/Api/ApplicationsController.php` (+7/-3), `Controllers/Api/DatabasesController.php` (+7/-4), `Controllers/Api/DeployController.php` (+13/-2), `Controllers/Api/SecurityController.php` (+1/-1), `Controllers/Api/ServersController.php` (+19/-0), `Controllers/Api/ServicesController.php` (+13/-7)
 - `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullChangelog.php` (+3/-0), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
-- `app/Livewire`: `Boarding/Index.php` (+4/-1), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `Settings/Updates.php` (+6/-0), `SettingsBackup.php` (+1/-1), `SettingsOauth.php` (+1/-1)
+- `app/Livewire`: `Boarding/Index.php` (+4/-1), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/PublicGitRepository.php` (+4/-2), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `Settings/Updates.php` (+6/-0), `SettingsBackup.php` (+1/-1), `SettingsOauth.php` (+1/-1)
 - `app/Models`: `PrivateKey.php` (+1/-1), `Service.php` (+8/-1)
 - `bootstrap`: `helpers/shared.php` (+2/-2), `helpers/subscriptions.php` (+2/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
 - `resources`: `views/components/navbar.blade.php` (+28/-2), `views/components/settings/sidebar.blade.php` (+4/-2), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+5/-1), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+7/-3), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 57 arquivos.
+Total: 58 arquivos.
 <!-- upstream-files:end -->
 

@@ -160,6 +160,53 @@ it('creates an application from a public GitHub repository', function () {
         ->and($application->fqdn)->toEndWith('.apps.example.com');
 });
 
+it('uses the default branch of a public GitHub repository that has no main branch', function (string $defaultBranch) {
+    $world = journeyWorld();
+    $headers = ['X-RateLimit-Remaining' => '58', 'X-RateLimit-Reset' => (string) now()->addHour()->timestamp];
+    Http::fake([
+        'https://api.github.com/repos/clemdesign/docker-symfony-demo/branches/main' => Http::response(['message' => 'Branch not found'], 404, $headers),
+        "https://api.github.com/repos/clemdesign/docker-symfony-demo/branches/{$defaultBranch}" => Http::response(['name' => $defaultBranch], 200, $headers),
+        'https://api.github.com/repos/clemdesign/docker-symfony-demo' => Http::response(['full_name' => 'clemdesign/docker-symfony-demo', 'default_branch' => $defaultBranch], 200, $headers),
+    ]);
+
+    journeyNewResource(PublicGitRepository::class, $world)
+        ->set('repository_url', 'https://github.com/clemdesign/docker-symfony-demo')
+        ->call('loadBranch')
+        ->assertNotDispatched('error')
+        ->assertSet('git_branch', $defaultBranch)
+        ->assertSet('branchFound', true)
+        ->set('build_pack', 'dockercompose')
+        ->set('docker_compose_location', '/docker-compose.yml')
+        ->call('submit')
+        ->assertNotDispatched('error')
+        ->assertRedirect();
+
+    expect(Application::query()->latest('id')->first())
+        ->git_branch->toBe($defaultBranch)
+        ->docker_compose_location->toBe('/docker-compose.yml');
+})->with(['master', 'develop']);
+
+it('keeps the branch it has when the GitHub API is rate limited, and reports a repository that does not exist', function () {
+    $world = journeyWorld();
+    Http::fake([
+        'https://api.github.com/repos/someone/limited/*' => Http::response(['message' => 'API rate limit exceeded for 203.0.113.7.'], 403, ['X-RateLimit-Remaining' => '0', 'X-RateLimit-Reset' => (string) now()->addHour()->timestamp]),
+        'https://api.github.com/repos/someone/missing*' => Http::response(['message' => 'Not Found'], 404, ['X-RateLimit-Remaining' => '57']),
+    ]);
+
+    journeyNewResource(PublicGitRepository::class, $world)
+        ->set('repository_url', 'https://github.com/someone/limited')
+        ->call('loadBranch')
+        ->assertNotDispatched('error')
+        ->assertSet('git_branch', 'main')
+        ->assertSet('branchFound', true);
+
+    journeyNewResource(PublicGitRepository::class, $world)
+        ->set('repository_url', 'https://github.com/someone/missing')
+        ->call('loadBranch')
+        ->assertDispatched('error')
+        ->assertSet('branchFound', false);
+});
+
 it('creates an application from a repository of another Git host', function () {
     $world = journeyWorld();
 
