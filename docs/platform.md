@@ -81,7 +81,7 @@ O SSH do painel e dos servidores só aceita o IP público de quem roda o script.
 | `./hostrema-prod.sh logs` | logs do painel |
 | `./hostrema-prod.sh destroy` | apaga a instalação (pede para você digitar o domínio) |
 
-Até a AWS liberar o SES (a resposta chega por e-mail, normalmente em até 24 horas), o painel só consegue enviar e-mail para endereços verificados, como o seu. O `info` mostra quando foi liberado. `infra/prod/test/simulate.sh` roda o script em todos os cenários (instalação, segunda execução, código novo, `upgrade`, `reconfigure`, `destroy`, máquina nova, IP novo, domínio na AWS, SMTP próprio, Efí, outra região, credenciais e respostas inválidas, e cada falha possível) com substitutos da AWS, do Terraform, do SSH e do Ansible. `bash infra/test/run.sh` roda todos os testes de uma vez (scripts, Terraform, Ansible e a suíte PHP da plataforma); o CI roda a parte dos scripts a cada mudança.
+Até a AWS liberar o SES (a resposta chega por e-mail, normalmente em até 24 horas), o painel só consegue enviar e-mail para endereços verificados, como o seu. O `info` mostra quando foi liberado. `infra/prod/test/simulate.sh` roda o script em todos os cenários (instalação, segunda execução, código novo, `upgrade`, `reconfigure`, `destroy`, máquina nova, IP novo, domínio na AWS, SMTP próprio, Efí, outra região, credenciais e respostas inválidas, e cada falha possível) com substitutos da AWS, do Terraform, do SSH e do Ansible. `bash infra/test/run.sh` roda todos os testes de uma vez (scripts, Terraform, Ansible, a lista de arquivos do Coolify oficial que o fork altera e a suíte PHP da plataforma); o CI roda a parte dos scripts a cada mudança.
 
 ### Ao atualizar uma instalação existente
 

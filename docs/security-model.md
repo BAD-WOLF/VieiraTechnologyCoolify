@@ -128,7 +128,7 @@ Mudanças em arquivos originais que não são só ganchos:
   operador vê a da plataforma (o resto da marca é trocado sem editar as telas, veja `PlatformBranding`).
 
 <!-- upstream-files:start -->
-- `/`: `CLAUDE.md` (+10/-0)
+- `/`: `CLAUDE.md` (+11/-0)
 - `app/Actions`: `Application/StopApplication.php` (+2/-0), `Application/StopApplicationOneServer.php` (+2/-0), `Database/StartClickhouse.php` (+2/-0), `Database/StartDatabase.php` (+3/-0), `Database/StartDragonfly.php` (+2/-0), `Database/StartKeydb.php` (+2/-0), `Database/StartMariadb.php` (+2/-0), `Database/StartMongodb.php` (+2/-0), `Database/StartMysql.php` (+2/-0), `Database/StartPostgresql.php` (+7/-0), `Database/StartRedis.php` (+2/-0), `Database/StopDatabase.php` (+2/-0), `Service/StartService.php` (+6/-0), `Service/StopService.php` (+2/-0)
 - `app/Console`: `Commands/Init.php` (+3/-0)
 - `app/Http`: `Controllers/Api/ApplicationsController.php` (+7/-3), `Controllers/Api/DatabasesController.php` (+7/-4), `Controllers/Api/DeployController.php` (+13/-2), `Controllers/Api/SecurityController.php` (+1/-1), `Controllers/Api/ServersController.php` (+19/-0), `Controllers/Api/ServicesController.php` (+13/-7)

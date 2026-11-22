@@ -93,6 +93,12 @@ php_suite() {
     php artisan test tests/Feature/Platform --compact
 }
 
+# Arquivos do Coolify oficial que o fork altera: a lista em docs/security-model.md precisa
+# acompanhar (o CI faz a mesma conferência contra origin/v4.x).
+upstream_files() {
+    bash infra/scripts/upstream-touched-files.sh --check docs/security-model.md origin/v4.x
+}
+
 if [ "$WHAT" = all ] || [ "$WHAT" = scripts ]; then
     if command -v shellcheck >/dev/null 2>&1; then
         step "shellcheck dos scripts" run_shellcheck
@@ -111,6 +117,11 @@ if [ "$WHAT" = all ] || [ "$WHAT" = scripts ]; then
         step "Ansible (sintaxe e ansible-lint)" ansible_checks
     else
         skip "Ansible" "instale com: pip install ansible ansible-lint (o CI roda)"
+    fi
+    if git rev-parse --verify --quiet origin/v4.x >/dev/null; then
+        step "arquivos do Coolify alterados (docs/security-model.md)" upstream_files
+    else
+        skip "arquivos do Coolify alterados" "busque o oficial com: git fetch origin v4.x (o CI confere)"
     fi
 fi
 
