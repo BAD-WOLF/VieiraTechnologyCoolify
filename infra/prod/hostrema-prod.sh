@@ -82,12 +82,21 @@ ask() {
         printf -v "$var" '%s' "${!env_name}"
         return 0
     fi
+    # Sem terminal: o padrão, se houver; senão a resposta precisa vir do ambiente.
     if ! has_tty; then
+        if [ -n "$default" ]; then
+            printf -v "$var" '%s' "$default"
+            return 0
+        fi
         [ "$mode" = optional ] && return 0
         fail "falta \"$question\": defina $env_name no ambiente e rode de novo."
     fi
     prompt="$question"
-    [ -n "$default" ] && prompt="$prompt [$default]"
+    if [ -n "$default" ] && [ "$mode" = secret ]; then
+        prompt="$prompt [Enter mantém a atual]"
+    elif [ -n "$default" ]; then
+        prompt="$prompt [$default]"
+    fi
     while :; do
         printf '  %s: ' "$prompt" >/dev/tty
         if [ "$mode" = secret ]; then
@@ -103,6 +112,15 @@ ask() {
         printf '    (obrigatório)\n' >/dev/tty
     done
     printf -v "$var" '%s' "$answer"
+}
+
+# reject VAR "motivo": resposta inválida. Digitada, é perguntada de novo; vinda do ambiente
+# (HOSTREMA_VAR), o script para, porque perguntar de novo leria o mesmo valor.
+reject() {
+    local env_name="HOSTREMA_$1"
+    [ -z "${!env_name:-}" ] || fail "$2 (valor de $env_name)."
+    warn "$2"
+    printf -v "$1" '%s' ''
 }
 
 # confirm "pergunta": sim com -y; sem terminal, não.
@@ -179,6 +197,16 @@ restore_state() {
         chmod 600 "$STATE_DIR"/*
         load_state
     fi
+}
+
+# Estado desta máquina ou, numa máquina nova, o guardado no bucket da conta.
+load_or_restore_state() {
+    load_state
+    [ -z "${DOMAIN:-}" ] || return 0
+    ensure_tools
+    ensure_aws_auth
+    restore_state
+    [ -n "${DOMAIN:-}" ] || fail "ainda não há instalação nesta conta; rode ./hostrema-prod.sh"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -412,16 +440,14 @@ ask_configuration() {
         ask DOMAIN "Domínio principal da plataforma (ex.: hostrema.com.br)" "${PREV_DOMAIN:-}"
         DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]' | sed -E 's#^https?://##; s#/.*$##')
         [[ $DOMAIN =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] && break
-        warn "\"$DOMAIN\" não é um domínio válido."
-        DOMAIN=
+        reject DOMAIN "\"$DOMAIN\" não é um domínio válido."
     done
     PANEL_HOST=${PANEL_HOST:-painel.$DOMAIN}
     APPS_DOMAIN=${APPS_DOMAIN:-apps.$DOMAIN}
     while :; do
         ask OWNER_EMAIL "Seu e-mail (login do owner, alertas e certificados)" "${PREV_OWNER_EMAIL:-}"
         [[ $OWNER_EMAIL =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] && break
-        warn "\"$OWNER_EMAIL\" não é um e-mail válido."
-        OWNER_EMAIL=
+        reject OWNER_EMAIL "\"$OWNER_EMAIL\" não é um e-mail válido."
     done
     if [ -z "${SIZE:-}" ]; then
         note "Tamanho inicial (dá para mudar depois com ./hostrema-prod.sh reconfigure):"
@@ -432,8 +458,7 @@ ask_configuration() {
     while :; do
         ask SIZE "Tamanho (inicial, padrao ou grande)" "${PREV_SIZE:-inicial}"
         case "$SIZE" in inicial | padrao | grande) break ;; esac
-        warn "escolha inicial, padrao ou grande."
-        SIZE=
+        reject SIZE "\"$SIZE\" não é um tamanho: escolha inicial, padrao ou grande."
     done
     if [ -z "${EMAIL_MODE:-}" ]; then
         note "E-mail transacional (confirmação de cadastro, faturas): o Amazon SES é configurado sozinho."
@@ -441,14 +466,14 @@ ask_configuration() {
     while :; do
         ask EMAIL_MODE "E-mail: ses (automático) ou smtp (seu servidor)" "${PREV_EMAIL_MODE:-ses}"
         case "$EMAIL_MODE" in ses | smtp) break ;; esac
-        EMAIL_MODE=
+        reject EMAIL_MODE "\"$EMAIL_MODE\" não é uma opção de e-mail: escolha ses ou smtp."
     done
     if [ "$EMAIL_MODE" = smtp ]; then
-        ask SMTP_HOST "Servidor SMTP"
-        ask SMTP_PORT "Porta SMTP" "587"
-        ask SMTP_USER "Usuário SMTP" "" optional
-        ask SMTP_PASSWORD "Senha SMTP" "" secret
-        ask SMTP_FROM "Remetente" "nao-responda@$DOMAIN"
+        ask SMTP_HOST "Servidor SMTP" "${PREV_SMTP_HOST:-}"
+        ask SMTP_PORT "Porta SMTP" "${PREV_SMTP_PORT:-587}"
+        ask SMTP_USER "Usuário SMTP" "${PREV_SMTP_USER:-}" optional
+        ask SMTP_PASSWORD "Senha SMTP" "${PREV_SMTP_PASSWORD:-}" secret
+        ask SMTP_FROM "Remetente" "${PREV_SMTP_FROM:-nao-responda@$DOMAIN}"
     fi
     ask_efi
 }
@@ -463,7 +488,8 @@ ask_efi() {
         note "Sem elas, as faturas ficam no modo manual (você confirma cada pagamento) até configurar."
         ask wants "Configurar a Efí Bank agora? (s/n)" "n" optional
         case "$wants" in s | S | sim | y | Y) ;; *)
-            EFI_STATUS=${EFI_STATUS:-skipped}
+            # Não: fica como estava (a Efí já configurada continua).
+            EFI_STATUS=${PREV_EFI_STATUS:-${EFI_STATUS:-skipped}}
             return 0
             ;;
         esac
@@ -478,8 +504,7 @@ ask_efi() {
         if [ -z "$EFI_CERTIFICATE_FILE" ] || [ -f "$EFI_CERTIFICATE_FILE" ]; then
             break
         fi
-        warn "arquivo não encontrado: $EFI_CERTIFICATE_FILE"
-        EFI_CERTIFICATE_FILE=
+        reject EFI_CERTIFICATE_FILE "arquivo não encontrado: $EFI_CERTIFICATE_FILE"
     done
     ask EFI_PIX_KEY "Chave Pix da conta (vazio = só boleto)" "" optional
     EFI_STATUS=pending
@@ -540,7 +565,7 @@ show_summary() {
   Tamanho ........... $SIZE: painel ${CP_COUNT}x $CP_TYPE$([ "$CP_WORKERS" -gt 0 ] && printf ' + %sx worker' "$CP_WORKERS"), PostgreSQL $CP_DB (Multi-AZ), Redis $CP_REDIS
                       região: nó de controle $RG_CONTROL_TYPE, ${RG_NODES}x nó $RG_NODE_TYPE (${RG_NODE_DISK} GB)
   E-mail ............ $([ "$EMAIL_MODE" = ses ] && echo "Amazon SES (nao-responda@$DOMAIN)" || echo "SMTP $SMTP_HOST")
-  Cobrança .......... $([ "${EFI_STATUS:-skipped}" = skipped ] && echo "manual (configure a Efí depois com: ./hostrema-prod.sh reconfigure)" || echo "Efí Bank (${EFI_ENVIRONMENT:-production})")
+  Cobrança .......... $({ [ "${EFI_STATUS:-skipped}" = skipped ] && [ "${BILLING_PROVIDER:-}" != efi ]; } && echo "manual (configure a Efí depois com: ./hostrema-prod.sh reconfigure)" || echo "Efí Bank (${EFI_ENVIRONMENT:-production})")
 EOF
 }
 
@@ -1447,8 +1472,7 @@ cmd_up() {
 }
 
 cmd_info() {
-    load_state
-    [ -n "${DOMAIN:-}" ] || fail "ainda não há instalação; rode ./hostrema-prod.sh"
+    load_or_restore_state
     local ses_status="" grafana_host=""
     if [ "${EMAIL_MODE:-}" = ses ] && command -v aws >/dev/null 2>&1; then
         [ -n "${AWS_PROFILE_NAME:-}" ] && export AWS_PROFILE=$AWS_PROFILE_NAME
@@ -1496,9 +1520,8 @@ ensure_operator_access() {
 }
 
 cmd_upgrade() {
+    load_or_restore_state
     ensure_tools
-    load_state
-    [ -n "${DOMAIN:-}" ] || fail "ainda não há instalação; rode ./hostrema-prod.sh"
     ensure_aws_auth
     ensure_image
     wait_for_image
@@ -1516,7 +1539,7 @@ use_saved_credentials() {
 }
 
 cmd_ssh() {
-    load_state
+    load_or_restore_state
     use_saved_credentials
     ensure_operator_access
     local target=${1:-}
@@ -1534,7 +1557,7 @@ cmd_ssh() {
 }
 
 cmd_artisan() {
-    load_state
+    load_or_restore_state
     use_saved_credentials
     ensure_operator_access
     local host
@@ -1543,7 +1566,7 @@ cmd_artisan() {
 }
 
 cmd_logs() {
-    load_state
+    load_or_restore_state
     use_saved_credentials
     ensure_operator_access
     exec ssh -t -F "$SSH_CONFIG" "$(first_host)" "sudo docker logs -f --tail=200 coolify"
@@ -1553,8 +1576,14 @@ cmd_reconfigure() {
     load_state
     say "Responda de novo (Enter mantém o valor atual)"
     PREV_DOMAIN=${DOMAIN:-} PREV_OWNER_EMAIL=${OWNER_EMAIL:-} PREV_SIZE=${SIZE:-} PREV_EMAIL_MODE=${EMAIL_MODE:-}
+    PREV_EFI_STATUS=${EFI_STATUS:-}
+    # Os dados do SMTP próprio viram o padrão das perguntas; os do SES são refeitos por ele.
+    if [ "${EMAIL_MODE:-}" = smtp ]; then
+        PREV_SMTP_HOST=${SMTP_HOST:-} PREV_SMTP_PORT=${SMTP_PORT:-} PREV_SMTP_USER=${SMTP_USER:-}
+        PREV_SMTP_PASSWORD=${SMTP_PASSWORD:-} PREV_SMTP_FROM=${SMTP_FROM:-}
+    fi
     DOMAIN='' OWNER_EMAIL='' SIZE='' EMAIL_MODE=''
-    EFI_STATUS='' SMTP_HOST='' SMTP_PASSWORD=''
+    EFI_STATUS='' SMTP_HOST='' SMTP_PORT='' SMTP_USER='' SMTP_PASSWORD='' SMTP_FROM=''
     ensure_tools
     ensure_aws_auth
     ask_configuration
@@ -1566,21 +1595,23 @@ cmd_reconfigure() {
 }
 
 cmd_destroy() {
+    load_or_restore_state
     ensure_tools
-    load_state
-    [ -n "${DOMAIN:-}" ] || fail "não há instalação para apagar."
     ensure_aws_auth
     warn "isto apaga o painel, a região, os nós e os dados dos clientes desta instalação na AWS."
     note "O banco do painel guarda um snapshot final; o bucket de estado e a zona DNS ficam."
-    local typed=""
-    if has_tty; then
+    # Sem terminal, HOSTREMA_CONFIRM_DESTROY com o domínio confirma.
+    local typed=${HOSTREMA_CONFIRM_DESTROY:-}
+    if [ -z "$typed" ] && has_tty; then
         printf '  Para confirmar, digite o domínio (%s): ' "$DOMAIN" >/dev/tty
         IFS= read -r typed </dev/tty || typed=
     fi
     [ "$typed" = "$DOMAIN" ] || fail "nada foi apagado."
     local dir
     dir=$(region_dir)
-    if [ -d "$dir" ]; then
+    # A pasta de uma região criada em outra máquina é gerada de novo: o estado dela está no bucket.
+    if [ -f "$STATE_DIR/region-$AWS_REGION.tfvars.json" ]; then
+        ensure_region_dir
         tf_init "$dir" "regions/$AWS_REGION/terraform.tfstate"
         say "Apagando a região $AWS_REGION"
         terraform -chdir="$dir" destroy -input=false -auto-approve -var-file="$STATE_DIR/region-$AWS_REGION.tfvars.json"

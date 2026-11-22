@@ -215,6 +215,16 @@ When developing features:
 - Consider rate limiting and resource constraints
 - Implement proper error recovery mechanisms
 
+## Hostrema: run every test before finishing
+
+Whatever the request, before reporting it done run `bash infra/test/run.sh` and report any failure. It runs:
+- shellcheck of every script and the dashboard boot script rendered from its Terraform template;
+- every scenario of `infra/prod/hostrema-prod.sh` (`infra/prod/test/simulate.sh`: AWS, Terraform, SSH and Ansible are stand-ins) and of `infra/local/hostrema-local.sh` (`infra/local/test/run.sh`: Docker is a stand-in);
+- the HCL syntax (python-hcl2) and ansible-lint, when installed;
+- the platform PHP suite (`tests/Feature/Platform`), which needs the PostgreSQL test database and Redis of `phpunit.xml` (`DB_TEST_HOST`, `DB_TEST_DATABASE`, `REDIS_HOST`).
+
+New or changed behavior gets a test in the matching suite: `tests/Feature/Platform` (PHP), `infra/prod/test/simulate.sh` or `infra/local/test/run.sh` (shell), covering the failure and edge cases too.
+
 ## Important Reminders
 
 - Always run code formatting: `./vendor/bin/pint`

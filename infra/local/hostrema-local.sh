@@ -299,7 +299,9 @@ cmd_doctor() {
         problems=$((problems + 1))
         printf '        rode ./hostrema-local.sh setup para iniciar o proxy do nó\n'
     }
-    check "aplicações em http://<nome>.localhost${HOSTREMA_APPS_HTTP_PORT:+:${HOSTREMA_APPS_HTTP_PORT}} (porta ${HOSTREMA_APPS_HTTP_PORT:-80})" apps_answer_404 || problems=$((problems + 1))
+    local apps_port=""
+    [ "${HOSTREMA_APPS_HTTP_PORT:-80}" = 80 ] || apps_port=":${HOSTREMA_APPS_HTTP_PORT}"
+    check "aplicações em http://<nome>.localhost${apps_port}" apps_answer_404 || problems=$((problems + 1))
     if [ "$problems" -eq 0 ]; then
         say "Tudo certo."
     else
@@ -352,7 +354,7 @@ cmd_rebuild() {
 cmd_reset() {
     if [ "${1:-}" != "-y" ]; then
         printf 'Apagar TODOS os dados locais (banco, aplicações do nó, senhas)? [s/N] '
-        read -r answer
+        read -r answer || true
         case "$answer" in
         s | S | y | Y) ;;
         *)

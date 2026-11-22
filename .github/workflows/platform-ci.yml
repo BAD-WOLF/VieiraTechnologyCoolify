@@ -146,11 +146,11 @@ jobs:
           ansible-playbook --syntax-check -i inventory/example.yml playbooks/rotate-coolify-key.yml
           ansible-lint --offline playbooks roles
 
-      - name: Shell scripts
-        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits infra/local/hostrema-local.sh infra/local/node/entrypoint.sh infra/prod/hostrema-prod.sh infra/prod/test/simulate.sh
-
-      - name: Production installer (simulated AWS, Terraform, SSH and Ansible)
-        run: bash infra/prod/test/simulate.sh
+      # shellcheck of every script, the boot script rendered from its template, and every scenario
+      # of hostrema-prod.sh (simulated AWS, Terraform, SSH and Ansible) and hostrema-local.sh
+      # (simulated Docker). The same command runs locally: bash infra/test/run.sh scripts
+      - name: Shell scripts and installers
+        run: bash infra/test/run.sh scripts
 
       - name: Local test environment (infra/local)
         working-directory: infra/local
