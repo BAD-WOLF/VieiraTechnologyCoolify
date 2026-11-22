@@ -291,7 +291,6 @@ class PlatformConfig
         $value = match ($type) {
             'int' => (int) $text,
             'decimal' => round((float) str_replace(',', '.', $text), 4),
-            'money' => $text === '' ? null : number_format((float) str_replace(',', '.', $text), 2, '.', ''),
             'list' => array_values(array_unique(array_filter(array_map('trim', preg_split('/[\s,;]+/', $text) ?: []), fn ($item) => $item !== ''))),
             'host' => $text === '' ? null : strtolower(preg_replace('#^https?://#i', '', rtrim($text, '/'))),
             'size' => strtolower($text),
@@ -338,7 +337,6 @@ class PlatformConfig
             'bool' => ['boolean'],
             'int' => ['required', 'integer', 'min:'.($definition['min'] ?? 0), 'max:'.($definition['max'] ?? PHP_INT_MAX)],
             'decimal' => ['required', 'numeric', 'min:'.($definition['min'] ?? 0), 'max:'.($definition['max'] ?? 1000000)],
-            'money' => ['nullable', 'regex:/^\d{1,7}([.,]\d{1,2})?$/'],
             'select' => ['nullable', Rule::in(array_map('strval', array_keys($definition['options'] ?? [])))],
             'email' => [...$base, 'email', 'max:255'],
             'url' => [...$base, 'url:http,https', 'max:255'],
@@ -443,7 +441,6 @@ class PlatformConfig
                 'bool' => $value ? '1' : '0',
                 'int' => (string) (int) $value,
                 'decimal' => (string) round((float) $value, 4),
-                'money' => is_null($value) || $value === '' ? '' : number_format((float) $value, 2, '.', ''),
                 'list' => implode(',', (array) $value),
                 default => (string) $value,
             };

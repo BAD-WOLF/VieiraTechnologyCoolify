@@ -53,6 +53,7 @@ it('re-encrypts every encrypted column with the new APP_KEY', function () {
     $team = Team::factory()->create();
     $webhook = PlatformWebhook::create(['team_id' => $team->id, 'url' => 'https://hooks.example.com', 'events' => ['*'], 'secret' => 'whsec_rotate_me']);
     WebhookUrlGuard::resolveUsing(null);
+    \App\Models\PlatformSetting::put('efi.production.client_secret', 'efi-secret-rotate-me');
 
     useAppKeys($new, [$old]);
     $this->artisan('platform:rotate-app-key', ['--dry-run' => true])->assertSuccessful();
@@ -64,8 +65,11 @@ it('re-encrypts every encrypted column with the new APP_KEY', function () {
     expect((new Encrypter(base64_decode(substr($new, 7)), 'AES-256-CBC'))->decryptString($raw))->toBe('whsec_rotate_me');
 
     useAppKeys($new);
+    \App\Models\PlatformSetting::flushMemo();
     expect($webhook->fresh()->secret)->toBe('whsec_rotate_me')
-        ->and(\App\Console\Commands\PlatformRotateAppKey::encryptedColumns())->toHaveKeys(['environment_variables', 'private_keys', 'platform_webhooks', 'platform_tenants']);
+        // Settings are encrypted by hand: no cast reveals them, and they are re-encrypted too.
+        ->and(\App\Models\PlatformSetting::get('efi.production.client_secret'))->toBe('efi-secret-rotate-me')
+        ->and(\App\Console\Commands\PlatformRotateAppKey::encryptedColumns())->toHaveKeys(['environment_variables', 'private_keys', 'platform_webhooks', 'platform_tenants', 'platform_settings', 'oauth_settings']);
 });
 
 it('rewrites a stale SSH key file when the key changes in the database', function () {

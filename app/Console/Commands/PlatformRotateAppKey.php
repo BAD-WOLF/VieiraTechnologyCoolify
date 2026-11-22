@@ -78,6 +78,16 @@ class PlatformRotateAppKey extends Command
     /**
      * @return array<string, array{key: string, columns: list<string>}>
      */
+    /**
+     * Columns encrypted by hand (Crypt in an accessor or a model method), which no cast reveals:
+     * every setting of the platform (Efí, Stripe and the saved configuration) and the OAuth
+     * secrets. Left out, they would be lost once APP_PREVIOUS_KEYS is removed.
+     */
+    private const ENCRYPTED_BY_HAND = [
+        'platform_settings' => ['key' => 'id', 'columns' => ['value']],
+        'oauth_settings' => ['key' => 'id', 'columns' => ['client_secret']],
+    ];
+
     public static function encryptedColumns(): array
     {
         $tables = [];
@@ -101,6 +111,15 @@ class PlatformRotateAppKey extends Command
                 'key' => $model->getKeyName(),
                 'columns' => array_values(array_unique(array_merge($tables[$table]['columns'] ?? [], $columns))),
             ];
+        }
+        foreach (self::ENCRYPTED_BY_HAND as $table => ['key' => $keyName, 'columns' => $columns]) {
+            $columns = Schema::hasTable($table) ? array_values(array_filter($columns, fn ($column) => Schema::hasColumn($table, $column))) : [];
+            if ($columns !== []) {
+                $tables[$table] = [
+                    'key' => $keyName,
+                    'columns' => array_values(array_unique(array_merge($tables[$table]['columns'] ?? [], $columns))),
+                ];
+            }
         }
         ksort($tables);
 
