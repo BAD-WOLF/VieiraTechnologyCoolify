@@ -134,7 +134,7 @@ trait ManagesInvoices
             return null;
         }
 
-        return PlatformInvoice::query()->where('uuid', $this->watchedInvoice)->where('team_id', currentTeam()?->id)
+        return PlatformInvoice::query()->withUuid($this->watchedInvoice)->where('team_id', currentTeam()?->id)
             ->where('status', PlatformInvoice::STATUS_PAID)->first();
     }
 
@@ -202,7 +202,7 @@ trait ManagesInvoices
 
     protected function teamInvoice(string $uuid): PlatformInvoice
     {
-        $invoice = PlatformInvoice::query()->where('uuid', $uuid)->where('team_id', currentTeam()?->id)->first();
+        $invoice = PlatformInvoice::query()->withUuid($uuid)->where('team_id', currentTeam()?->id)->first();
         abort_if(is_null($invoice), 404);
 
         return $invoice;

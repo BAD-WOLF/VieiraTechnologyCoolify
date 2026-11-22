@@ -266,7 +266,7 @@ class AdminBilling extends Component
 
     private function invoice(string $uuid): PlatformInvoice
     {
-        $invoice = PlatformInvoice::query()->where('uuid', $uuid)->first();
+        $invoice = PlatformInvoice::query()->withUuid($uuid)->first();
         abort_if(is_null($invoice), 404);
 
         return $invoice;

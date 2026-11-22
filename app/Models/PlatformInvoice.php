@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
@@ -52,6 +53,21 @@ class PlatformInvoice extends Model
                 $invoice->uuid = (string) Str::uuid();
             }
         });
+    }
+
+    /**
+     * Invoices with this uuid. The column is a native uuid: a value that is not one (typed in the
+     * browser, for example) finds nothing instead of failing the query.
+     *
+     * @param  Builder<PlatformInvoice>  $query
+     */
+    public function scopeWithUuid(Builder $query, mixed $uuid): void
+    {
+        if (is_string($uuid) && Str::isUuid($uuid)) {
+            $query->where('uuid', $uuid);
+        } else {
+            $query->whereRaw('1 = 0');
+        }
     }
 
     public function team(): BelongsTo
