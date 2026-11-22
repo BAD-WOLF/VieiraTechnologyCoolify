@@ -107,6 +107,17 @@ data "aws_iam_policy_document" "read_config" {
     resources = ["arn:aws:ssm:${var.region}:*:parameter/hostrema/control-plane/image"]
   }
 
+  # Images built by infra/prod/hostrema-prod.sh and kept in Amazon ECR.
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions   = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    resources = ["arn:aws:ecr:${var.region}:*:repository/hostrema*"]
+  }
+
   statement {
     actions   = ["kms:Decrypt"]
     resources = ["*"]

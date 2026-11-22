@@ -1,3 +1,22 @@
+# A new instance may still be finishing its first boot (cloud-init) and installing security updates
+# (apt-daily): wait for both, or the package tasks below would fail on the apt lock.
+- name: Look for cloud-init
+  ansible.builtin.stat:
+    path: /usr/bin/cloud-init
+  register: common_cloud_init
+
+- name: Wait for the first boot to finish
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+  failed_when: false
+  when: common_cloud_init.stat.exists
+
+- name: Wait for the automatic package updates to finish
+  ansible.builtin.command: >-
+    systemd-run --quiet --wait --property=After=apt-daily.service --property=After=apt-daily-upgrade.service /bin/true
+  changed_when: false
+  when: ansible_facts.service_mgr == 'systemd'
+
 - name: Install base packages
   ansible.builtin.apt:
     name: "{{ common_packages }}"

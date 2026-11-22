@@ -4,15 +4,29 @@ set -euo pipefail
 exec > >(tee -a /var/log/hostrema-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update -y
-apt-get install -y curl jq unzip ca-certificates
+# Right after boot the network, the credentials of the instance role and apt (security updates of
+# the first boot) can be unavailable for a moment: wait and try again instead of failing the boot.
+retry() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    "$@" && return 0
+    echo "attempt $attempt failed: $*" >&2
+    sleep 10
+  done
+  return 1
+}
+echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90-hostrema-lock-timeout
+
+retry apt-get update -y
+retry apt-get install -y curl jq unzip ca-certificates
 if ! command -v aws >/dev/null 2>&1; then
-  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscli.zip
-  unzip -q /tmp/awscli.zip -d /tmp
-  /tmp/aws/install
+  retry curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscli.zip
+  unzip -q -o /tmp/awscli.zip -d /tmp
+  /tmp/aws/install --update
 fi
 if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
+  retry curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  retry sh /tmp/get-docker.sh
 fi
 
 mkdir -p /data/coolify/source /data/coolify/ssh/keys /data/coolify/ssh/mux /data/coolify/applications \
@@ -20,7 +34,7 @@ mkdir -p /data/coolify/source /data/coolify/ssh/keys /data/coolify/ssh/mux /data
   /data/coolify/webhooks-during-maintenance /data/coolify/sentinel
 cd /data/coolify/source
 
-aws ssm get-parameter --region "${region}" --name "${env_parameter}" --with-decryption \
+retry aws ssm get-parameter --region "${region}" --name "${env_parameter}" --with-decryption \
   --query Parameter.Value --output text > .env
 chmod 600 .env
 # Role of the instance: "web" serves the dashboard, the API and the realtime server only,
@@ -32,15 +46,23 @@ printf 'HORIZON_ENABLED=false\nSCHEDULER_ENABLED=false\n' >> .env
 %{ if role == "worker" ~}
 printf 'HORIZON_ENABLED=true\nSCHEDULER_ENABLED=true\n' >> .env
 %{ endif ~}
-curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.yml -o docker-compose.yml
-curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.prod.yml -o docker-compose.prod.yml
-
 # Version of the cluster: the last one deployed by the release workflow, or the Terraform default.
-IMAGE=$(aws ssm get-parameter --region "${region}" --name "${image_parameter}" \
+IMAGE=$(retry aws ssm get-parameter --region "${region}" --name "${image_parameter}" \
   --query Parameter.Value --output text 2>/dev/null || true)
 if [ -z "$IMAGE" ] || [ "$IMAGE" = "None" ]; then
   IMAGE="${image}"
 fi
+
+# Images built by infra/prod/hostrema-prod.sh live in Amazon ECR: the role of the instance logs in.
+ecr_login() {
+  aws ecr get-login-password --region "$(echo "$1" | cut -d. -f4)" |
+    docker login --username AWS --password-stdin "$1"
+}
+case "$IMAGE" in
+  *.dkr.ecr.*.amazonaws.com/*)
+    retry ecr_login "$${IMAGE%%/*}"
+    ;;
+esac
 install -d -m 755 /etc/hostrema
 cat > /etc/hostrema/control-plane.env <<ENV
 AWS_REGION=${region}
@@ -69,9 +91,24 @@ YAML
 
 docker network create --attachable coolify >/dev/null 2>&1 || true
 %{ if registry_username != "" ~}
-aws ssm get-parameter --region "${region}" --name "${registry_password}" --with-decryption \
-  --query Parameter.Value --output text | docker login ghcr.io -u "${registry_username}" --password-stdin
+ghcr_login() {
+  aws ssm get-parameter --region "${region}" --name "${registry_password}" --with-decryption \
+    --query Parameter.Value --output text | docker login ghcr.io -u "${registry_username}" --password-stdin
+}
+retry ghcr_login
 %{ endif ~}
+
+# Compose files of the same version as the image (images before they were bundled: the CDN).
+retry docker pull "$IMAGE"
+CONTAINER=$(docker create "$IMAGE")
+if docker cp "$CONTAINER:/var/www/html/docker-compose.yml" docker-compose.yml &&
+  docker cp "$CONTAINER:/var/www/html/docker-compose.prod.yml" docker-compose.prod.yml; then
+  echo "compose files taken from $IMAGE"
+else
+  curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.yml -o docker-compose.yml
+  curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.prod.yml -o docker-compose.prod.yml
+fi
+docker rm "$CONTAINER" >/dev/null
 
 # Only the first instance runs the database migrations of a fresh install; the others wait for it.
 %{ if wait_for_panel ~}

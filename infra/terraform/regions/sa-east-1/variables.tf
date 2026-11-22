@@ -54,6 +54,24 @@ variable "node_data_volume_gb" {
   default = 1000
 }
 
+variable "control_data_volume_gb" {
+  description = "Data volume of the control node (Prometheus, Loki, registry cache)."
+  type        = number
+  default     = 1000
+}
+
+variable "node_data_volume_iops" {
+  description = "Provisioned IOPS of the node data volumes (gp3, 3000 included)."
+  type        = number
+  default     = 6000
+}
+
+variable "node_data_volume_throughput" {
+  description = "Provisioned throughput (MB/s) of the node data volumes (gp3, 125 included)."
+  type        = number
+  default     = 500
+}
+
 variable "control_instance_type" {
   type    = string
   default = "m6i.2xlarge"

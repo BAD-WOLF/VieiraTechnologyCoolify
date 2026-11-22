@@ -19,6 +19,8 @@ Fluxo do tenant: assinatura paga com Pix ou boleto (Efí Bank), provisionamento 
 
 ## Começo rápido
 
+O caminho mais curto para produção é o `infra/prod/hostrema-prod.sh` (seção *Produção na AWS com um comando*, abaixo): ele faz tudo o que está aqui e em `docs/region-onboarding.md`. Os passos a seguir são o mesmo processo à mão, para instalar fora da AWS ou em partes.
+
 1. No `.env` do control plane, o Hostrema só precisa de `PLATFORM_ENABLED=true`. O resto do `.env` é o padrão do Coolify (`APP_KEY`, banco, Redis e realtime).
 2. Dentro do container, rode `php artisan platform:install --email=voce@empresa.com --url=https://painel.seudominio.com` (por exemplo, `docker exec -it coolify php artisan platform:install ...`). O comando:
    - cria o owner do time root, com o e-mail já verificado (sem `--password`, a senha gerada aparece no fim);
@@ -33,6 +35,53 @@ Fluxo do tenant: assinatura paga com Pix ou boleto (Efí Bank), provisionamento 
 Os planos já vêm com preços e limites (Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta). Para mudar preços, limites e recursos, ou para criar e remover planos, use a aba **Planos** do console (seção *Planos*, abaixo).
 
 A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando a Efí confirma o pagamento.
+
+## Produção na AWS com um comando
+
+```bash
+./infra/prod/hostrema-prod.sh
+```
+
+No Windows, pelo PowerShell: `.\infra\prod\hostrema-prod.ps1`. Ele instala o Ubuntu do WSL na primeira vez e roda o script lá (o Ansible não roda direto no Windows).
+
+O script só pergunta o que precisa vir de você:
+
+- as credenciais da AWS, se esta máquina ainda não tiver (uma chave de acesso de um usuário administrador);
+- o domínio principal (ex.: `hostrema.com.br`): o painel fica em `painel.<domínio>` e as aplicações em `<nome>.apps.<domínio>`;
+- o seu e-mail (owner do painel, alertas e certificados);
+- o tamanho inicial (`inicial`, `padrao` ou `grande`, com as máquinas de cada um na tela);
+- se você quiser, as credenciais e o certificado da Efí Bank. Sem elas, a cobrança começa no modo manual.
+
+O resto ele faz sozinho, nesta ordem:
+
+1. Instala o que faltar nesta máquina (AWS CLI, Terraform, Ansible, jq) em `~/.hostrema/tools`, sem mexer no sistema quando dá.
+2. Cria o bucket do estado do Terraform (versionado, criptografado e com trava). Guarda nele também uma cópia das respostas e senhas, para rodar de outra máquina.
+3. Cria a zona DNS do domínio no Route53. Se o domínio já tem site ou e-mail, copia antes para a zona os registros que estão no ar (raiz, `www`, `mail`, MX, SPF, DMARC e as chaves DKIM mais comuns), para a troca não derrubar nada. Se o domínio estiver registrado fora da AWS (no registro.br, por exemplo), mostra os quatro servidores DNS para trocar no registro e espera a mudança aparecer. É o único passo fora da AWS; num domínio registrado na própria AWS, até isso é automático.
+4. Configura o Amazon SES (domínio verificado com DKIM, DMARC e credenciais SMTP) e pede à AWS o acesso de produção do SES.
+5. Constrói a imagem do painel com o código desta pasta no AWS CodeBuild (enquanto a troca do DNS acontece) e a guarda no Amazon ECR da conta. Só o código vai para a AWS (o que o `.gitignore` exclui, como o `.env`, fica aqui), e esta máquina não precisa de Docker. Numa conta em que o CodeBuild ainda não está liberado, o script usa o Docker desta máquina, se houver.
+6. Cria o painel (`infra/terraform/control-plane`): balanceador com certificado, PostgreSQL Multi-AZ, Redis com failover e as instâncias, que se configuram sozinhas no primeiro boot. Se a preparação de uma instância falhar (rede ou AWS indisponível por um tempo), o script a refaz; se ainda assim o painel não subir, mostra o fim do log dela.
+7. Prepara a plataforma (`platform:install`) e configura tudo o que seria feito no painel (`platform:configure`): domínio das aplicações, tokens internos, e-mail, cobrança, a chave SSH dos nós e o token da API do Ansible.
+8. Cria a região (`infra/terraform/regions/<região>`, ligada ao painel por peering) e prepara os servidores com o Ansible. O Ansible cadastra os nós no painel, e o proxy de cada nó passa a confiar no balanceador de borda da região.
+9. Liga o PROXY protocol da borda e confere o painel, os servidores e a borda.
+
+No fim, o script mostra endereços e senhas (de novo com `./hostrema-prod.sh info`). As respostas e senhas ficam em `~/.hostrema/prod`.
+
+Rodar de novo é seguro: ele só cria o que falta e só muda o que mudou, sem desfazer o que você ajustou no painel. Se o código da aplicação mudou, publica a nova versão no painel, com rollback automático (mudanças só em `infra/`, `docs/` ou `tests/` não geram imagem nova). Antes de criar ou mudar recursos pagos, mostra o plano e pede confirmação (`-y` dispensa).
+
+O SSH do painel e dos servidores só aceita o IP público de quem roda o script. Se o seu IP mudar (internet com IP dinâmico), `up`, `upgrade`, `ssh`, `artisan` e `logs` liberam o IP novo antes de continuar.
+
+| Comando | Para quê |
+| --- | --- |
+| `./hostrema-prod.sh plan` | mostra o que seria criado ou mudado, sem mudar nada |
+| `./hostrema-prod.sh upgrade` | publica no painel a versão atual do código |
+| `./hostrema-prod.sh reconfigure` | muda o domínio, o e-mail, o tamanho ou a Efí, e aplica |
+| `./hostrema-prod.sh info` | endereços, senhas e situação do SES |
+| `./hostrema-prod.sh ssh [host]` | shell no painel ou num servidor da região (`control`, `node-01`...) |
+| `./hostrema-prod.sh artisan <comando>` | comando do Laravel no painel |
+| `./hostrema-prod.sh logs` | logs do painel |
+| `./hostrema-prod.sh destroy` | apaga a instalação (pede para você digitar o domínio) |
+
+Até a AWS liberar o SES (a resposta chega por e-mail, normalmente em até 24 horas), o painel só consegue enviar e-mail para endereços verificados, como o seu. O `info` mostra quando foi liberado. `infra/prod/test/simulate.sh` roda o script inteiro com substitutos da AWS, do Terraform, do SSH e do Ansible, e o CI o executa a cada mudança.
 
 ### Ao atualizar uma instalação existente
 
@@ -103,12 +152,16 @@ Para testar a Efí de verdade, escolha **Efí Bank** em Configurações → Cobr
 | Comando | Para quê |
 | --- | --- |
 | `./hostrema-local.sh rebuild` | reconstrói a imagem depois de mudar o código |
+| `./hostrema-local.sh doctor` | confere Docker, containers, painel, filas, nó, proxy e domínios `*.localhost` |
+| `./hostrema-local.sh test` | roda os testes de navegador neste ambiente (precisa do Node.js) |
 | `./hostrema-local.sh logs [serviço]` | mostra os logs |
 | `./hostrema-local.sh artisan <comando>` | roda um comando do Laravel |
 | `./hostrema-local.sh shell` | abre um shell no container do Hostrema |
 | `./hostrema-local.sh status` | mostra o estado dos containers |
 | `./hostrema-local.sh down` | para tudo sem apagar os dados |
 | `./hostrema-local.sh reset` | apaga todos os dados locais |
+
+Se uma porta já estiver em uso na sua máquina, o `up` troca por outra livre, grava no `.env` e avisa (a 80 das aplicações vai para a 8080, e os endereços ficam `http://<nome>.localhost:8080`). No fim, o painel abre no navegador (`HOSTREMA_NO_OPEN=1` desliga isso).
 
 O ambiente local não tem HTTPS, gVisor, slices por cliente, Loki/Grafana, edge router nem portas públicas de bancos. As aplicações respondem só pelas portas 80 e 443 do nó. Mesmo sem os slices, os containers de um cliente dividem o plano como em produção, então uma stack com vários containers cabe no plano Básico.
 
@@ -272,7 +325,8 @@ Todo compose gerado para um tenant (aplicações, serviços, bancos e previews) 
 - aplica `cap_drop: ALL` + lista mínima de capabilities, `no-new-privileges`, `pids_limit`, CPU e memória dentro da cota (reservados de forma transacional em `platform_allocations`) e logs limitados;
 - restringe bind mounts aos diretórios do recurso (`/data/coolify/{applications,services,databases}/{uuid}`) e bloqueia `docker.sock`;
 - filtra labels do Traefik e do Caddy (só os hosts do recurso, só middlewares seguros) e adiciona `tenant_id`, `tenant_plan` e `coolify.tenantId`;
-- conecta apenas à rede `tenant-{id}`, e os builds deixam de usar `--network host`.
+- conecta apenas à rede `tenant-{id}`, e os builds deixam de usar `--network host`;
+- num compose com redes próprias (`site`, `db`...), prende o Traefik à rede do recurso (`traefik.docker.network`), a que o proxy sempre alcança. Sem isso, o Traefik escolhe uma das redes do container ao acaso e o domínio responde 502 ou 504 de vez em quando.
 
 Também há guardas nos modelos para todas as entradas (UI, API e webhooks): validação de comandos,
 portas, imagens, caminhos, domínios (sem domínio reservado ou de outro tenant), recursos por

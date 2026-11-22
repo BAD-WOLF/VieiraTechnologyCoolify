@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Actions\Platform\ProvisionTenant;
+use App\Actions\Platform\TrustEdgeProxies;
 use App\Http\Controllers\Controller;
 use App\Models\AggregatedUsageHourly;
 use App\Models\AuditLog;
@@ -135,6 +136,13 @@ class PlatformController extends Controller
             'dedicated_team_id' => ['nullable', 'integer'],
             'wildcard_domain' => ['nullable', 'url', 'max:255'],
             'logs_url' => ['nullable', 'url:http,https', 'max:255'],
+            // Networks of the edge routers of the region (the node proxies trust their headers).
+            'trusted_proxies' => ['nullable', 'array', 'max:10'],
+            'trusted_proxies.*' => ['string', 'max:64', function (string $attribute, mixed $value, \Closure $fail) {
+                if (! TrustEdgeProxies::isCidr((string) $value)) {
+                    $fail("{$attribute} must be a network in CIDR notation (e.g. 10.20.0.0/16).");
+                }
+            }],
         ]);
         $server = Server::query()->where('team_id', 0)->where('uuid', $uuid)->first();
         if (! $server) {
@@ -155,6 +163,9 @@ class PlatformController extends Controller
             $server->settings->forceFill(['wildcard_domain' => rtrim($validated['wildcard_domain'], '/')])->save();
         }
         audit_log('platform.node.assigned', $server, ['region' => $region->slug], 0);
+        if (! empty($validated['trusted_proxies'])) {
+            TrustEdgeProxies::dispatch($server, array_values($validated['trusted_proxies']));
+        }
         PlatformTenant::query()->where('platform_region_id', $region->id)->whereNotNull('provisioned_at')->pluck('team_id')
             ->each(fn ($teamId) => ProvisionTenant::dispatch($teamId, $region));
 

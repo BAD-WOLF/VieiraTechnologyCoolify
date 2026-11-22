@@ -573,6 +573,8 @@ it('deploys a Docker Compose project as kept in its repository on the cheapest p
         'destination_type' => StandaloneDocker::class,
     ]);
     $application->docker_compose_raw = file_get_contents(base_path('tests/Fixtures/platform/symfony-demo.docker-compose.yml'));
+    // Domains for the site and for phpMyAdmin, both on stacks with their own networks.
+    $application->docker_compose_domains = json_encode(['nginx' => ['domain' => 'http://symfony.apps.example.com'], 'phpmyadmin' => ['domain' => 'http://pma.apps.example.com']]);
     $application->save();
 
     $application->parse();
@@ -592,6 +594,11 @@ it('deploys a Docker Compose project as kept in its repository on the cheapest p
             'php-fpm' => ['9001'], 'nginx' => ['80'], 'phpmyadmin' => ['80'],
         ])
         ->and($services['nginx']['volumes'])->toBe(["{$directory}:/app/:cached"])
+        // The proxy reaches the routed services through the network of the application, never
+        // through "site" or "mysql" (which would answer 502/504 at random).
+        ->and($services['nginx']['labels'])->toContain("traefik.docker.network={$application->uuid}")
+        ->and($services['phpmyadmin']['labels'])->toContain("traefik.docker.network={$application->uuid}")
+        ->and(collect($services['mysql']['labels'])->filter(fn (string $label) => str_starts_with($label, 'traefik.docker.network'))->all())->toBe([])
         // Four containers share the 0.5 vCPU of the plan on the node.
         ->and(PlatformGate::allocated($world['team']))->toBe(['cpus' => 0.5, 'memory_mb' => 1536, 'containers' => 4])
         ->and(collect($deployment->fresh()->logs ? json_decode($deployment->fresh()->logs, true) : [])->pluck('output')->implode("\n"))

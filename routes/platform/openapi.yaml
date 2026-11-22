@@ -240,6 +240,10 @@ paths:
                 dedicated_team_id: { type: [integer, "null"] }
                 wildcard_domain: { type: string, format: uri }
                 logs_url: { type: string, format: uri, description: "Loki of the region, read by the log history" }
+                trusted_proxies:
+                  type: array
+                  description: "Networks of the edge routers (CIDR): the proxy of the node trusts their X-Forwarded-For and PROXY protocol"
+                  items: { type: string, examples: [10.20.0.0/16] }
       responses:
         "200": { description: "Assigned" }
         "403": { description: "Not the operator" }

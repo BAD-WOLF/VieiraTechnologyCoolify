@@ -84,6 +84,12 @@ if [[ $MODE == rollback ]]; then
   IMAGE=$(<"$PREVIOUS_FILE")
 fi
 echo "current image: ${previous:-upstream default}"
+# Images in Amazon ECR (infra/prod/hostrema-prod.sh): log in with the role of the instance.
+if [[ $IMAGE == *.dkr.ecr.*.amazonaws.com/* ]]; then
+  registry=${IMAGE%%/*}
+  aws ecr get-login-password --region "$(cut -d. -f4 <<<"$registry")" |
+    docker login --username AWS --password-stdin "$registry" >/dev/null
+fi
 echo "pulling $IMAGE"
 docker pull "$IMAGE"
 

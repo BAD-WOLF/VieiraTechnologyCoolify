@@ -149,3 +149,45 @@ it('stores the Loki address of the region when the operator registers a node', f
 
     expect($region->fresh()->logs_url)->toBe('http://10.20.0.10:3100');
 });
+
+it('makes the proxy of a node trust the edge routers of its region', function () {
+    \Illuminate\Support\Facades\Queue::fake();
+    PlatformRegion::create(['slug' => 'sa-east-1', 'name' => 'São Paulo']);
+    $node = Server::forceCreate(['uuid' => (string) new Cuid2, 'name' => 'node-1', 'ip' => '10.20.8.10', 'team_id' => 0, 'private_key_id' => 1]);
+    $operator = User::factory()->create();
+    $root = Team::find(0);
+    $root->members()->attach($operator->id, ['role' => 'owner']);
+    session(['currentTeam' => $root]);
+    $token = $operator->createToken('ansible', ['read', 'write'])->plainTextToken;
+    $url = "/api/v1/platform/servers/{$node->uuid}/region";
+
+    $this->postJson($url, ['region' => 'sa-east-1', 'trusted_proxies' => ['10.20.0.0/16; rm -rf /']], ['Authorization' => 'Bearer '.$token])
+        ->assertUnprocessable()->assertJsonValidationErrors(['trusted_proxies.0']);
+    $this->postJson($url, ['region' => 'sa-east-1', 'trusted_proxies' => ['10.20.0.0/16']], ['Authorization' => 'Bearer '.$token])
+        ->assertOk();
+
+    \Illuminate\Support\Facades\Queue::assertPushed(fn (\Lorisleiva\Actions\Decorators\JobDecorator $job) => $job->getAction() instanceof \App\Actions\Platform\TrustEdgeProxies
+        && $job->getParameters()[1] === ['10.20.0.0/16']);
+});
+
+it('adds the networks of the edge to the entrypoints of Traefik once', function () {
+    $configuration = \Symfony\Component\Yaml\Yaml::dump(['name' => 'coolify-proxy', 'services' => ['traefik' => [
+        'image' => 'traefik:v3.6',
+        'command' => ['--ping=true', '--entrypoints.http.address=:80', '--entrypoints.https.address=:443', '--entrypoints.http.forwardedheaders.trustedips=10.99.0.0/24'],
+    ]]], 12, 2);
+
+    $updated = \App\Actions\Platform\TrustEdgeProxies::withTrustedProxies($configuration, ['10.20.0.0/16', '10.20.0.0/16']);
+    $command = \Symfony\Component\Yaml\Yaml::parse($updated)['services']['traefik']['command'];
+
+    expect($command)->toBe([
+        '--ping=true', '--entrypoints.http.address=:80', '--entrypoints.https.address=:443',
+        '--entrypoints.http.forwardedheaders.trustedips=10.20.0.0/16',
+        '--entrypoints.https.proxyprotocol.trustedips=10.20.0.0/16',
+    ])
+        ->and(\App\Actions\Platform\TrustEdgeProxies::withTrustedProxies($updated, ['10.20.0.0/16']))->toBeNull()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::withTrustedProxies('services: {caddy: {image: caddy}}', ['10.20.0.0/16']))->toBeNull()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::isCidr('10.20.0.0/16'))->toBeTrue()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::isCidr('fd00::/8'))->toBeTrue()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::isCidr('10.20.0.0/33'))->toBeFalse()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::isCidr('10.20.0.0'))->toBeFalse();
+});

@@ -54,7 +54,8 @@
   delay: 15
   no_log: "{{ coolify_no_log }}"
 
-# After the validation, so the tenant networks can be created on the node right away.
+# After the validation, so the tenant networks can be created on the node right away. The proxy
+# of the node also starts trusting the edge routers of the region (the address of the visitor).
 - name: Assign the node to its platform region and wildcard domain
   ansible.builtin.uri:
     url: "{{ coolify_url }}/api/v1/platform/servers/{{ coolify_server_uuid }}/region"
@@ -65,7 +66,7 @@
     body_format: json
     body: >-
       {{ {'region': platform_region, 'region_name': platform_region_name, 'wildcard_domain': platform_apps_wildcard,
-          'logs_url': 'http://' ~ control_private_ip ~ ':3100'}
+          'logs_url': 'http://' ~ control_private_ip ~ ':3100', 'trusted_proxies': [vpc_cidr]}
          | combine({'dedicated_team_id': platform_dedicated_team_id | int} if platform_dedicated_team_id | string | length > 0 else {}) }}
   no_log: "{{ coolify_no_log }}"
 

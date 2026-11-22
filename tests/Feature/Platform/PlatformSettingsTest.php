@@ -495,6 +495,63 @@ it('refuses to install while the platform is off or without an owner e-mail', fu
     expect(User::query()->find(0))->toBeNull();
 });
 
+it('configures settings, e-mail, Efí Bank, the node key and an Ansible token without the panel', function () {
+    $this->artisan('platform:install', ['--email' => 'owner@hostrema.com.br', '--password' => 'owner-pass-1234', '--url' => 'https://painel.hostrema.com.br', '--no-interaction' => true])->assertSuccessful();
+    Http::fake([
+        'https://pix-h.api.efipay.com.br/oauth/token' => Http::response(['access_token' => 'pix-token', 'expires_in' => 3600]),
+        'https://pix-h.api.efipay.com.br/v2/webhook/*' => Http::response(['webhookUrl' => 'x']),
+        'https://cobrancas-h.api.efipay.com.br/v1/authorize' => Http::response(['access_token' => 'charges-token', 'expires_in' => 600]),
+    ]);
+    $key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+    $certificate = openssl_csr_sign(openssl_csr_new(['commonName' => 'efi'], $key), null, $key, 2);
+    openssl_pkcs12_export($certificate, $p12, $key, '');
+    $file = tempnam(sys_get_temp_dir(), 'configure');
+    file_put_contents($file, json_encode([
+        'settings' => ['platform.base_domain' => 'apps.hostrema.com.br', 'platform.edge.proxy_protocol' => true, 'platform.edge.token' => str_repeat('e', 64)],
+        'smtp' => ['host' => 'email-smtp.sa-east-1.amazonaws.com', 'port' => 587, 'encryption' => 'starttls', 'username' => 'AKIAEXAMPLE', 'password' => 'smtp-secret', 'from_address' => 'nao-responda@hostrema.com.br', 'from_name' => 'Hostrema'],
+        'efi' => ['environment' => 'sandbox', 'client_id' => 'Client_Id_x', 'client_secret' => 'Client_Secret_x', 'pix_key' => 'pix@hostrema.com.br', 'certificate_base64' => base64_encode($p12)],
+        'node_key' => true,
+        'api_token' => 'ansible',
+    ]));
+
+    expect(\Illuminate\Support\Facades\Artisan::call('platform:configure', ['--file' => $file, '--json' => true]))->toBe(0);
+    $output = json_decode(trim(\Illuminate\Support\Facades\Artisan::output()), true);
+    unlink($file);
+
+    $settings = InstanceSettings::query()->find(0);
+    PlatformSetting::flushMemo();
+    expect($output['errors'])->toBe([])
+        ->and(config('platform.base_domain'))->toBe('apps.hostrema.com.br')
+        ->and(config('platform.edge.proxy_protocol'))->toBeTrue()
+        ->and($settings->smtp_enabled)->toBeTrue()
+        ->and($settings->smtp_host)->toBe('email-smtp.sa-east-1.amazonaws.com')
+        ->and($settings->smtp_encryption)->toBe('starttls')
+        ->and($settings->smtp_password)->toBe('smtp-secret')
+        ->and($output['efi'])->toMatchArray(['configured' => true, 'pix' => true, 'registered' => ['pix', 'boleto']])
+        ->and(\App\Services\Platform\Efi\EfiSettings::value('client_secret'))->toBe('Client_Secret_x')
+        ->and($output['node_key']['uuid'])->toBe(PrivateKey::query()->where('name', 'Hostrema nodes')->value('uuid'))
+        ->and($output['node_key']['public_key'])->toStartWith('ssh-ed25519 ');
+
+    // The token reads the API as the operator; a second run replaces it and keeps the same key.
+    $this->getJson('/api/v1/servers', ['Authorization' => 'Bearer '.$output['api_token']])->assertOk();
+    expect(\Illuminate\Support\Facades\Artisan::call('platform:configure', ['--node-key' => true, '--api-token' => 'ansible', '--json' => true]))->toBe(0);
+    $again = json_decode(trim(\Illuminate\Support\Facades\Artisan::output()), true);
+    expect($again['node_key']['uuid'])->toBe($output['node_key']['uuid'])
+        ->and(\Laravel\Sanctum\PersonalAccessToken::query()->where('name', 'ansible')->count())->toBe(1)
+        ->and((int) \Laravel\Sanctum\PersonalAccessToken::query()->where('name', 'ansible')->value('team_id'))->toBe(0);
+    app('auth')->forgetGuards();
+    $this->getJson('/api/v1/servers', ['Authorization' => 'Bearer '.$output['api_token']])->assertUnauthorized();
+});
+
+it('refuses unknown or invalid settings and says why', function () {
+    $this->artisan('platform:configure', ['--set' => ['platform.nope=1', 'platform.support_email=not-an-email', 'platform.base_domain=apps.example.com']])
+        ->expectsOutputToContain('Unknown setting platform.nope.')
+        ->assertFailed();
+
+    expect(config('platform.base_domain'))->toBe('apps.example.com')
+        ->and(PlatformConfig::isOverridden('platform.support_email'))->toBeFalse();
+});
+
 it('builds the local test environment with manual payments, Mailpit and a demo customer', function () {
     $this->artisan('platform:install', [
         '--local' => true, '--skip-node' => true, '--password' => 'owner-1234',

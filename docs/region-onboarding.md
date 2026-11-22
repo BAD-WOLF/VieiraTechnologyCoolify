@@ -1,7 +1,8 @@
 # Onboarding de uma região
 
 Runbook da página 2 da wiki: criar uma região deve ser `terraform apply` + `ansible-playbook` + validação.
-O exemplo usa `sa-east-1` (São Paulo).
+O exemplo usa `sa-east-1` (São Paulo). Na AWS, `infra/prod/hostrema-prod.sh` faz todos os passos abaixo sozinho
+(veja `docs/platform.md`, "Produção na AWS com um comando"); este guia é o mesmo processo à mão.
 
 ## Arquitetura da região
 
@@ -126,15 +127,9 @@ Depois rode `systemctl enable --now wg-quick@wg-sa-east-1`.
 
 ### Proxy dos nós (IP real do cliente)
 
-O edge envia `X-Forwarded-For` com o IP do cliente. Para o Traefik dos nós confiar nele, em
-**Servers → <nó> → Proxy → Configuration** acrescente ao `command` do Traefik:
+O edge envia `X-Forwarded-For` com o IP do cliente e, no HTTPS, o PROXY protocol. Ao cadastrar cada nó, o Ansible manda a rede da região (`trusted_proxies`). O painel acrescenta ao Traefik do nó `--entrypoints.http.forwardedheaders.trustedips` e `--entrypoints.https.proxyprotocol.trustedips` com essa rede e reinicia o proxy. Não há nada a editar à mão.
 
-```
-- '--entrypoints.http.forwardedheaders.trustedips=10.20.0.0/16'
-- '--entrypoints.https.proxyprotocol.trustedips=10.20.0.0/16'
-```
-
-Com a segunda linha ativa em todos os nós, ligue `PLATFORM_EDGE_PROXY_PROTOCOL=true` no control plane para preservar o IP também no HTTPS (passthrough).
+Com todos os nós cadastrados, ligue `PLATFORM_EDGE_PROXY_PROTOCOL=true` (Configurações → Tokens internos → PROXY protocol) para preservar o IP também no HTTPS. O `infra/prod/hostrema-prod.sh` faz isso sozinho no fim.
 
 ## 4. Monitoramento
 

@@ -3,6 +3,10 @@
 - name: Region control node
   hosts: control
   become: true
+  # Automatic security updates may hold the apt lock for a while: wait for it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 600
   roles:
     - common
     - docker

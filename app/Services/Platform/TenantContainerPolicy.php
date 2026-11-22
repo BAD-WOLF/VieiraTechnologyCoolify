@@ -262,9 +262,49 @@ class TenantContainerPolicy
             'tenant_id='.$this->context->teamId,
             'tenant_plan='.($this->context->plan !== '' ? $this->context->plan : 'none'),
             'coolify.tenantId='.$this->context->teamId,
-        ]);
+        ], $this->proxyNetworkLabels($service, $result['labels']));
 
         return $this->applyLimits($name, $service);
+    }
+
+    /**
+     * Traefik reaches a container through one of its networks and, without a choice, takes any of
+     * them: a service of a stack with its own networks ("site", "db"...) then answers with 502 or
+     * 504 at random. The proxy always joins the network of the resource (its UUID, or UUID-PR of
+     * a preview), so the routed services are pinned to it.
+     *
+     * @param  array<string, mixed>  $service
+     * @param  array<int, string>  $labels  checked labels, "key=value"
+     * @return array<int, string>
+     */
+    private function proxyNetworkLabels(array $service, array $labels): array
+    {
+        $routed = false;
+        foreach ($labels as $label) {
+            [$key, $value] = array_pad(explode('=', (string) $label, 2), 2, '');
+            $key = strtolower(trim($key));
+            if ($key === 'traefik.docker.network') {
+                return [];
+            }
+            if ($key === 'traefik.enable' && strtolower(trim($value)) === 'true') {
+                $routed = true;
+            }
+        }
+        if (! $routed || array_key_exists('network_mode', $service)) {
+            return [];
+        }
+        $networks = [];
+        foreach ((array) ($service['networks'] ?? []) as $key => $value) {
+            $networks[] = is_int($key) ? (string) $value : (string) $key;
+        }
+        $pattern = '/^'.preg_quote($this->context->resourceUuid, '/').'(-\d+)?$/';
+        foreach ($networks as $network) {
+            if (preg_match($pattern, $network) && in_array($network, $this->context->allowedNetworks, true)) {
+                return ['traefik.docker.network='.$network];
+            }
+        }
+
+        return [];
     }
 
     /**

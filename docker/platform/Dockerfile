@@ -24,10 +24,16 @@ ARG POSTGRES_VERSION=18
 ARG USER_ID=9999
 ARG GROUP_ID=9999
 
+# Registries of the base images. infra/prod/hostrema-prod.sh builds on AWS CodeBuild from the copies
+# on GitHub Packages and Amazon ECR Public: Docker Hub limits anonymous pulls per address, and the
+# addresses of CodeBuild are shared.
+ARG PHP_IMAGE=serversideup/php
+ARG NODE_IMAGE=node
+
 # =================================================================
 # Stage 1: Composer dependencies
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION} AS base
+FROM ${PHP_IMAGE}:${SERVERSIDEUP_PHP_VERSION} AS base
 
 USER root
 
@@ -47,7 +53,7 @@ USER www-data
 # =================================================================
 # Stage 2: Frontend assets
 # =================================================================
-FROM node:24-alpine AS static-assets
+FROM ${NODE_IMAGE}:24-alpine AS static-assets
 
 WORKDIR /app
 COPY package*.json vite.config.js postcss.config.cjs ./
@@ -65,7 +71,7 @@ FROM ghcr.io/coollabsio/coolify:4.0.0 AS minio-client
 # =================================================================
 # Final stage
 # =================================================================
-FROM serversideup/php:${SERVERSIDEUP_PHP_VERSION}
+FROM ${PHP_IMAGE}:${SERVERSIDEUP_PHP_VERSION}
 
 ARG USER_ID
 ARG GROUP_ID
@@ -138,6 +144,8 @@ COPY --chown=www-data:www-data resources/views ./resources/views
 COPY --chown=www-data:www-data artisan artisan
 COPY --chown=www-data:www-data openapi.yaml ./openapi.yaml
 COPY --chown=www-data:www-data changelogs/ ./changelogs/
+# Compose files of this version, used by the control plane instances (Terraform bootstrap).
+COPY --chown=www-data:www-data docker-compose.yml docker-compose.prod.yml ./
 
 RUN composer dump-autoload
 

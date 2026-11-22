@@ -147,7 +147,10 @@ jobs:
           ansible-lint --offline playbooks roles
 
       - name: Shell scripts
-        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits infra/local/hostrema-local.sh infra/local/node/entrypoint.sh
+        run: shellcheck infra/scripts/*.sh infra/ansible/roles/tenant-limits/files/hostrema-tenant-limits infra/local/hostrema-local.sh infra/local/node/entrypoint.sh infra/prod/hostrema-prod.sh infra/prod/test/simulate.sh
+
+      - name: Production installer (simulated AWS, Terraform, SSH and Ansible)
+        run: bash infra/prod/test/simulate.sh
 
       - name: Local test environment (infra/local)
         working-directory: infra/local

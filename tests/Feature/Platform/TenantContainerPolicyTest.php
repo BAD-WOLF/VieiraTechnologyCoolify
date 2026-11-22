@@ -219,6 +219,41 @@ it('exposes the container ports instead of publishing host ports', function () {
         ->and($result['notices'][0])->toContain('host ports (8000:80, 127.0.0.1:8443:443/tcp, 5353:53/udp, 9000-9002:9000-9002) are not published');
 });
 
+it('pins the proxy to the network of the resource for routed services with more networks', function () {
+    $compose = [
+        'services' => [
+            'web' => [
+                'image' => 'nginx:alpine',
+                'networks' => ['site', 'abc123uuid'],
+                'labels' => ['traefik.enable=true', 'traefik.http.routers.http-0-abc123uuid-web.rule=Host(`app.example.com`)'],
+            ],
+            'worker' => ['image' => 'busybox', 'networks' => ['site', 'abc123uuid']],
+            'pinned' => [
+                'image' => 'nginx:alpine',
+                'networks' => ['site' => null, 'tenant-42' => null],
+                'labels' => ['traefik.enable' => 'true', 'traefik.docker.network' => 'tenant-42'],
+            ],
+        ],
+        'networks' => [
+            'site' => null,
+            'abc123uuid' => ['name' => 'abc123uuid', 'external' => true],
+            'tenant-42' => ['name' => 'tenant-42', 'external' => true],
+        ],
+    ];
+    $networkLabels = fn (array $services, string $service) => array_values(array_filter($services[$service]['labels'], fn ($label) => str_starts_with($label, 'traefik.docker.network=')));
+    $services = hardenCompose($compose)['compose']['services'];
+
+    expect($networkLabels($services, 'web'))->toBe(['traefik.docker.network=abc123uuid'])
+        ->and($networkLabels($services, 'worker'))->toBe([])
+        ->and($networkLabels($services, 'pinned'))->toBe(['traefik.docker.network=tenant-42']);
+
+    // A preview joins the network of its pull request.
+    $compose['services']['web']['networks'] = ['site', 'abc123uuid-7'];
+    $compose['networks']['abc123uuid-7'] = ['name' => 'abc123uuid-7', 'external' => true];
+    $services = hardenCompose($compose, ['allowedNetworks' => ['tenant-42', 'abc123uuid', 'abc123uuid-7']])['compose']['services'];
+    expect($networkLabels($services, 'web'))->toBe(['traefik.docker.network=abc123uuid-7']);
+});
+
 it('refuses a plan without CPU or memory', function () {
     $violations = violationsFor(['services' => ['app' => ['image' => 'alpine']]], ['maxCpus' => 0.0, 'maxMemoryMb' => 0, 'defaultCpus' => 0.0, 'defaultMemoryMb' => 0]);
 

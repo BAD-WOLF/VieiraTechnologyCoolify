@@ -65,6 +65,12 @@ variable "domain" {
   default     = ""
 }
 
+variable "load_balancer" {
+  description = "Serve the dashboard through the Application Load Balancer (ACM certificate, Route53) even with a single instance: the instances then configure themselves at boot, like a cluster. infra/prod/hostrema-prod.sh turns it on."
+  type        = bool
+  default     = false
+}
+
 variable "instance_count" {
   description = "1 = single master (recovered by AWS). 2 or more (or any worker_count) = active/active cluster behind an Application Load Balancer, every instance serving the dashboard and the API and, without workers, the queues and the scheduler too (one instance per task)."
   type        = number

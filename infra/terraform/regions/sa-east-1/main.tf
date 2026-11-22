@@ -58,7 +58,10 @@ module "region" {
   node_count                    = var.node_count
   node_instance_type            = var.node_instance_type
   node_data_volume_gb           = var.node_data_volume_gb
+  node_data_volume_iops         = var.node_data_volume_iops
+  node_data_volume_throughput   = var.node_data_volume_throughput
   control_instance_type         = var.control_instance_type
+  control_data_volume_gb        = var.control_data_volume_gb
   public_database_access        = var.public_database_access
   route53_zone_id               = var.route53_zone_id
   apps_domain                   = var.apps_domain
