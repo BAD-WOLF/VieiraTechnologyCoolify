@@ -95,7 +95,10 @@ test('a customer on the cheapest plan deploys a Docker Compose project as it is 
         }));
 
         await test.step('deploys: the project folder is kept and the host ports become internal', () => withToasts(async () => {
-            await page.locator('#application\\.settings\\.is_preserve_repository_enabled').check();
+            // The checkbox of the form components has no id: it is found by its binding.
+            const preserve = page.locator('input[type="checkbox"][wire\\:model="application.settings.is_preserve_repository_enabled"]');
+            await preserve.check();
+            await expect(preserve).toBeChecked();
             await page.getByRole('button', { name: 'Deploy' }).first().click();
             await expect(page.getByText(/Service "php-fpm": host ports .* are not published on the platform/).first()).toBeVisible({ timeout: 5 * 60_000 });
             await expect(page.getByText('Pulling & building required images.').first()).toBeVisible({ timeout: 5 * 60_000 });
