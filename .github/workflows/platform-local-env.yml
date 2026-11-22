@@ -103,6 +103,8 @@ jobs:
           docker compose ps -a
           docker compose logs --tail=300
           docker compose exec -T hostrema-node ps || true
+          # Errors of the dashboard and of the jobs (the Laravel log is a file in the container).
+          docker compose exec -T hostrema sh -c 'tail -n 200 storage/logs/*.log' || true
 
       - name: Clean up
         if: always()

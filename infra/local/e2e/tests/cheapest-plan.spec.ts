@@ -17,6 +17,32 @@ test('a customer on the cheapest plan deploys a Docker Compose project as it is 
     const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL, locale: 'pt-BR' });
     const page = await context.newPage();
     const planErrors = page.getByText(/Não incluído no seu plano|Not included in your plan/);
+    // Errors shown as toasts disappear after a few seconds: keep them for the failure message.
+    const toasts: string[] = [];
+    page.on('response', async (response) => {
+        if (!response.url().includes('/livewire/update')) {
+            return;
+        }
+        try {
+            const body = (await response.json()) as { components?: Array<{ effects?: { dispatches?: Array<{ name: string; params?: unknown }> } }> };
+            for (const component of body.components ?? []) {
+                for (const dispatch of component.effects?.dispatches ?? []) {
+                    if (['error', 'warning'].includes(dispatch.name)) {
+                        toasts.push(`${dispatch.name}: ${JSON.stringify(dispatch.params)}`);
+                    }
+                }
+            }
+        } catch {
+            // Not JSON (a redirect or an error page).
+        }
+    });
+    const withToasts = async (step: () => Promise<void>) => {
+        try {
+            await step();
+        } catch (error) {
+            throw new Error(`${(error as Error).message}\n\nToasts shown so far:\n${toasts.join('\n') || '(none)'}`);
+        }
+    };
 
     try {
         await test.step('signs up and pays the cheapest plan', async () => {
@@ -53,20 +79,22 @@ test('a customer on the cheapest plan deploys a Docker Compose project as it is 
             await page.waitForURL(/\/application\//, { timeout: 60_000 });
         });
 
-        await test.step('changes the compose file from .yaml to .yml and the services load', async () => {
-            // The repository has docker-compose.yml; the default location is /docker-compose.yaml.
+        await test.step('changes the compose file from .yaml to .yml and the services load', () => withToasts(async () => {
+            // The repository has docker-compose.yml; the default location is /docker-compose.yaml,
+            // which the page tries to read first (and reports as not found).
             const location = page.locator('#application\\.docker_compose_location');
+            await expect(location).toBeEnabled({ timeout: 3 * 60_000 });
             await location.fill('/docker-compose.yml');
-            await page.getByRole('button', { name: 'Save' }).first().click();
+            await page.locator('form').filter({ has: location }).getByRole('button', { name: 'Save' }).click();
             await expect(page.getByText('Domains for phpmyadmin')).toBeVisible({ timeout: 3 * 60_000 });
             await expect(page.getByText('Domains for nginx')).toBeVisible();
             await expect(location).toHaveValue('/docker-compose.yml');
             await expect(planErrors).toHaveCount(0);
             await expectBranded(page);
             await screenshot(page, 'cheapest-plan-compose-loaded');
-        });
+        }));
 
-        await test.step('deploys: the project folder is kept and the host ports become internal', async () => {
+        await test.step('deploys: the project folder is kept and the host ports become internal', () => withToasts(async () => {
             await page.locator('#application\\.settings\\.is_preserve_repository_enabled').check();
             await page.getByRole('button', { name: 'Deploy' }).first().click();
             await expect(page.getByText(/Service "php-fpm": host ports .* are not published on the platform/).first()).toBeVisible({ timeout: 5 * 60_000 });
@@ -74,7 +102,7 @@ test('a customer on the cheapest plan deploys a Docker Compose project as it is 
             await expect(page.getByText(/mounts a directory of the project/)).toHaveCount(0);
             await expect(planErrors).toHaveCount(0);
             await screenshot(page, 'cheapest-plan-compose-deploying');
-        });
+        }));
     } finally {
         await context.close();
     }
