@@ -150,6 +150,24 @@ class PlanCatalog
     }
 
     /**
+     * Refusal of a capability the plan of the customer does not include, naming the plans on
+     * sale that include it (the owner can rename plans and change what each one has).
+     */
+    public static function missingFeature(string $feature): string
+    {
+        $label = __(self::FEATURES[$feature]['label'] ?? $feature);
+        $plans = collect(self::public())
+            ->filter(fn (array $plan) => (bool) data_get($plan, "features.{$feature}"))
+            ->map(fn (array $plan) => (string) ($plan['name'] ?? ''))
+            ->filter()
+            ->values();
+
+        return $plans->isEmpty()
+            ? __('":feature" is not part of your plan. Talk to the support to get it.', ['feature' => $label])
+            : __('":feature" is not part of your plan. Plans that include it: :plans.', ['feature' => $label, 'plans' => $plans->implode(', ')]);
+    }
+
+    /**
      * @param  array<string, mixed>  $plan
      */
     public static function isPublic(array $plan): bool

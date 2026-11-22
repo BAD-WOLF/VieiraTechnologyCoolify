@@ -37,6 +37,7 @@ use App\Models\Team;
 use App\Models\TeamInvitation;
 use App\Services\Platform\DestinationPolicy;
 use App\Services\Platform\DomainPolicy;
+use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PlatformBranding;
 use App\Services\Platform\PlatformConfig;
 use App\Services\Platform\PlatformEvents;
@@ -395,7 +396,7 @@ class PlatformServiceProvider extends ServiceProvider
 
     private function registerFeatureGuards(): void
     {
-        $requireFeature = function (Model $model, string $feature, string $message) {
+        $requireFeature = function (Model $model, string $feature) {
             if (! isPlatform()) {
                 return;
             }
@@ -404,34 +405,36 @@ class PlatformServiceProvider extends ServiceProvider
                 return;
             }
             if (! PlatformTenant::forTeam($team)->hasFeature($feature)) {
-                throw PlatformPolicyViolation::single($message, 'Not included in your plan');
+                throw PlatformPolicyViolation::single(PlanCatalog::missingFeature($feature), 'Not included in your plan');
             }
         };
 
-        // Volumes and directories are on every plan: what they hold counts towards the storage quota.
-        ScheduledDatabaseBackup::creating(fn (ScheduledDatabaseBackup $backup) => $requireFeature($backup, 'scheduled_backups', 'Scheduled backups are available from the Professional plan.'));
-        ApplicationPreview::creating(fn (ApplicationPreview $preview) => $requireFeature($preview, 'preview_deployments', 'Preview deployments are available from the Professional plan.'));
+        // Only turning a capability on is checked, so the other settings stay editable after a
+        // downgrade. Volumes and directories are on every plan: what they hold counts towards
+        // the storage quota.
+        ScheduledDatabaseBackup::creating(fn (ScheduledDatabaseBackup $backup) => $requireFeature($backup, 'scheduled_backups'));
+        ApplicationPreview::creating(fn (ApplicationPreview $preview) => $requireFeature($preview, 'preview_deployments'));
         foreach (array_merge(PlatformGate::databaseModels(), [ServiceDatabase::class]) as $database) {
             $database::saving(function (Model $database) use ($requireFeature) {
                 if ($database->isDirty('is_public') && $database->is_public) {
-                    $requireFeature($database, 'public_databases', 'Public databases are available from the Professional plan.');
+                    $requireFeature($database, 'public_databases');
                 }
                 if ($database->isDirty('is_log_drain_enabled') && $database->is_log_drain_enabled) {
-                    $requireFeature($database, 'log_export', 'Log export is available from the Professional plan.');
+                    $requireFeature($database, 'log_export');
                 }
             });
         }
         ApplicationSetting::saving(function (ApplicationSetting $setting) use ($requireFeature) {
             if ($setting->isDirty('is_log_drain_enabled') && $setting->is_log_drain_enabled) {
-                $requireFeature($setting, 'log_export', 'Log export is available from the Professional plan.');
+                $requireFeature($setting, 'log_export');
             }
             if ($setting->isDirty('is_preview_deployments_enabled') && $setting->is_preview_deployments_enabled) {
-                $requireFeature($setting, 'preview_deployments', 'Preview deployments are available from the Professional plan.');
+                $requireFeature($setting, 'preview_deployments');
             }
         });
         ServiceApplication::saving(function (ServiceApplication $application) use ($requireFeature) {
             if ($application->isDirty('is_log_drain_enabled') && $application->is_log_drain_enabled) {
-                $requireFeature($application, 'log_export', 'Log export is available from the Professional plan.');
+                $requireFeature($application, 'log_export');
             }
         });
     }

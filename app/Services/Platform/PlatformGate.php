@@ -85,11 +85,11 @@ class PlatformGate
         }
         $isDatabase = in_array($resource::class, self::databaseModels(), true);
         if ($isDatabase && ! $tenant->hasFeature('databases')) {
-            throw PlatformPolicyViolation::single('Databases are not included in your plan.', 'Plan limit reached');
+            throw PlatformPolicyViolation::single(PlanCatalog::missingFeature('databases'), 'Not included in your plan');
         }
         $isCompose = $resource instanceof Service || ($resource instanceof Application && $resource->build_pack === 'dockercompose');
         if ($isCompose && ! $tenant->hasFeature('docker_compose')) {
-            throw PlatformPolicyViolation::single('Docker Compose stacks are not included in your plan.', 'Plan limit reached');
+            throw PlatformPolicyViolation::single(PlanCatalog::missingFeature('docker_compose'), 'Not included in your plan');
         }
     }
 

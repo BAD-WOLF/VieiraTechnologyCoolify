@@ -287,6 +287,25 @@ it('lets the containers of a node share the plan and refuses resources spread be
     expect(fn () => PlatformGate::harden($second, $compose, $otherNode->id))->toThrow(PlatformPolicyViolation::class, 'Memory quota exceeded (1536 of 1024 MB)');
 });
 
+it('names the plans that include what the plan of the customer lacks, and keeps the other settings editable', function () {
+    $platform = tenancyPlatform();
+    $world = tenancyTenant($platform['node'], 'basic');
+    $application = tenancyApplication($world);
+    config(['platform.plans.pro.name' => 'Turbo']);
+
+    expect(fn () => $application->settings->update(['is_preview_deployments_enabled' => true]))
+        ->toThrow(PlatformPolicyViolation::class, 'Not included in your plan: "Preview deployments" is not part of your plan. Plans that include it: Turbo, Enterprise.');
+
+    config(['platform.plans.pro.features.preview_deployments' => false, 'platform.plans.enterprise.public' => false]);
+    expect(fn () => $application->settings->update(['is_preview_deployments_enabled' => true]))
+        ->toThrow(PlatformPolicyViolation::class, '"Preview deployments" is not part of your plan. Talk to the support to get it.');
+
+    // Turned on before a downgrade: the other settings can still be saved.
+    $application->settings->forceFill(['is_preview_deployments_enabled' => true])->saveQuietly();
+    $application->settings->update(['is_static' => true]);
+    expect($application->settings->fresh()->is_static)->toBeTrue();
+});
+
 it('blocks deployments of suspended tenants', function () {
     $platform = tenancyPlatform();
     $world = tenancyTenant($platform['node']);
