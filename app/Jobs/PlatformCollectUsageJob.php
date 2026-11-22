@@ -18,6 +18,12 @@ class PlatformCollectUsageJob implements ShouldBeUnique, ShouldQueue
 
     public $timeout = 60;
 
+    /**
+     * The unique lock expires on its own: a job lost from the queue (horizon:clear, a Redis
+     * restart) must not stop this job for good.
+     */
+    public int $uniqueFor = 600;
+
     public function handle(): void
     {
         if (! isPlatform()) {

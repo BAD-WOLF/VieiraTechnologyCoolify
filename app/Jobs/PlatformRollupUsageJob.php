@@ -18,6 +18,12 @@ class PlatformRollupUsageJob implements ShouldBeUnique, ShouldQueue
 
     public $timeout = 600;
 
+    /**
+     * The unique lock expires on its own: a job lost from the queue (horizon:clear, a Redis
+     * restart) must not stop this job for good.
+     */
+    public int $uniqueFor = 3600;
+
     public function __construct(public int $hours = 3) {}
 
     public function handle(): void
