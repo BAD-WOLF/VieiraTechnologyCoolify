@@ -36,6 +36,8 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     efiSetUp();
     PlatformConfig::flush();
+    // Error pages (404) are rendered without the front-end build, which CI does not have.
+    $this->withoutVite();
 });
 
 afterEach(function () {
