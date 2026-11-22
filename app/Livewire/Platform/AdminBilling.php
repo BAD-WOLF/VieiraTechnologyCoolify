@@ -9,12 +9,16 @@ use App\Services\Platform\Efi\EfiClient;
 use App\Services\Platform\Efi\EfiException;
 use App\Services\Platform\Efi\EfiSettings;
 use App\Services\Platform\PlatformBilling;
+use App\Services\Platform\PlatformConfig;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
 /**
  * Operator console, "Billing" tab: Efí Bank credentials, the Pix webhook and the invoices (prices
  * are in the Plans tab). Secrets are write-only: they are never sent back to the browser.
+ *
+ * Each environment (Produção, Homologação) keeps its own credentials: choosing one in the form
+ * shows what is saved for it, and saving makes it the one in use.
  */
 class AdminBilling extends Component
 {
@@ -43,8 +47,21 @@ class AdminBilling extends Component
     {
         $this->guard();
         $this->environment = EfiSettings::environment();
-        $this->clientId = (string) EfiSettings::value('client_id');
-        $this->pixKey = (string) EfiSettings::pixKey();
+        $this->loadEnvironment();
+    }
+
+    /**
+     * Another environment chosen in the form: its own saved values replace the ones on screen.
+     */
+    public function updatedEnvironment(): void
+    {
+        $this->guard();
+        if (! in_array($this->environment, EfiSettings::ENVIRONMENTS, true)) {
+            $this->environment = EfiSettings::environment();
+        }
+        $this->reset('clientSecret', 'certificateFile', 'certificatePassword');
+        $this->resetValidation();
+        $this->loadEnvironment();
     }
 
     public function save(): void
@@ -69,59 +86,86 @@ class AdminBilling extends Component
             }
         }
 
-        EfiSettings::store('environment', $this->environment);
-        EfiSettings::store('client_id', trim($this->clientId) ?: null);
-        EfiSettings::store('pix_key', trim($this->pixKey) ?: null);
+        $environment = EfiSettings::normalize($this->environment);
+        EfiSettings::store('environment', $environment);
+        EfiSettings::storeCredential($environment, 'client_id', trim($this->clientId) ?: null);
+        EfiSettings::storeCredential($environment, 'pix_key', trim($this->pixKey) ?: null);
         if (trim($this->clientSecret) !== '') {
-            EfiSettings::store('client_secret', trim($this->clientSecret));
+            EfiSettings::storeCredential($environment, 'client_secret', trim($this->clientSecret));
         }
         if (! is_null($pem)) {
-            EfiSettings::store('certificate', $pem[0]);
-            EfiSettings::store('private_key', $pem[1]);
+            EfiSettings::storeCredential($environment, 'certificate', $pem[0]);
+            EfiSettings::storeCredential($environment, 'private_key', $pem[1]);
         }
         $this->reset('clientSecret', 'certificateFile', 'certificatePassword');
         EfiClient::forgetTokens();
-        audit_log('platform.efi.settings_saved', null, ['environment' => $this->environment, 'certificate' => ! is_null($pem)], 0);
+        audit_log('platform.efi.settings_saved', null, ['environment' => $environment, 'certificate' => ! is_null($pem)], 0);
 
         if (EfiSettings::isConfigured()) {
-            $this->connect();
+            $this->checkConnection(activate: true);
         } else {
             $this->report(true, __('Saved. Fill in the Client ID and the Client Secret of the Efí application to charge.'));
         }
     }
 
     /**
-     * Checks the credentials of each API and registers the Pix webhook: if it works, payments are ready.
+     * Checks the credentials of each API and registers the Pix webhook, without changing how the
+     * invoices are charged.
      */
     public function connect(): void
     {
         $this->guard();
+        $this->checkConnection(activate: false);
+    }
+
+    /**
+     * Connection test of the environment in use. With $activate (Save and connect), a platform that
+     * confirms payments manually starts charging through Efí once the connection works.
+     */
+    private function checkConnection(bool $activate): void
+    {
+        if (! EfiSettings::isConfigured()) {
+            $this->report(false, __('Fill in the Client ID and the Client Secret of the Efí application.'));
+
+            return;
+        }
         try {
             EfiClient::forgetTokens();
             $result = PlatformBilling::registerWebhooks();
-            $labels = [BillingProfile::PIX => 'Pix', BillingProfile::BOLETO => __('Boleto')];
-            $failures = collect($result['errors'])->map(fn (string $error, string $method) => ($labels[$method] ?? $method).': '.$error)->values()->all();
-            if ($result['registered'] === []) {
-                $this->report(false, $failures === [] ? __('Fill in the Client ID and the Client Secret of the Efí application.') : implode(' ', $failures));
-
-                return;
-            }
-            $message = __('Connected to Efí (:env). Ready to charge with :methods.', [
-                'env' => EfiSettings::isSandbox() ? __('sandbox') : __('production'),
-                'methods' => collect($result['registered'])->map(fn (string $method) => $labels[$method] ?? $method)->implode(', '),
-            ]);
-            if (in_array(BillingProfile::PIX, $result['registered'], true)) {
-                $message .= ' '.__('Pix notifications: :url', ['url' => preg_replace('#/[^/]+$#', '/•••', $result['url'])]);
-            } elseif (! EfiSettings::pixReady()) {
-                $message .= ' '.__('For Pix charges, also send the certificate of the application and the Pix key.');
-            }
-            if ($failures !== []) {
-                $message .= ' '.__('Not available: :errors', ['errors' => implode(' ', $failures)]);
-            }
-            $this->report($failures === [], $message);
         } catch (\Throwable $e) {
             $this->report(false, $e->getMessage());
+
+            return;
         }
+        $labels = [BillingProfile::PIX => 'Pix', BillingProfile::BOLETO => __('Boleto')];
+        $failures = collect($result['errors'])->map(fn (string $error, string $method) => ($labels[$method] ?? $method).': '.$error)->values()->all();
+        if ($result['registered'] === []) {
+            $this->report(false, implode(' ', $failures));
+
+            return;
+        }
+        $message = __('Connected to Efí (:env). Ready to charge with :methods.', [
+            'env' => EfiSettings::isSandbox() ? __('sandbox') : __('production'),
+            'methods' => collect($result['registered'])->map(fn (string $method) => $labels[$method] ?? $method)->implode(', '),
+        ]);
+        if (in_array(BillingProfile::PIX, $result['registered'], true)) {
+            $message .= ' '.__('Pix notifications: :url', ['url' => preg_replace('#/[^/]+$#', '/•••', $result['url'])]);
+        } elseif (! EfiSettings::pixReady()) {
+            $message .= ' '.__('For Pix charges, also send the certificate of the application and the Pix key.');
+        }
+        if ($failures !== []) {
+            $message .= ' '.__('Not available: :errors', ['errors' => implode(' ', $failures)]);
+        }
+        if (PlatformBilling::isManual()) {
+            if ($activate) {
+                PlatformConfig::set('platform.billing.provider', PlatformBilling::PROVIDER);
+                audit_log('platform.efi.activated', null, ['environment' => EfiSettings::environment()], 0);
+                $message .= ' '.__('Invoices are now charged through Efí.');
+            } else {
+                $message .= ' '.__('Invoices are still confirmed manually: "Save and connect" makes Efí charge them.');
+            }
+        }
+        $this->report($failures === [], $message);
     }
 
     public function markPaid(string $uuid): void
@@ -197,14 +241,21 @@ class AdminBilling extends Component
             'invoices' => $invoices,
             'enabled' => PlatformBilling::enabled(),
             'manual' => PlatformBilling::isManual(),
-            'configured' => EfiSettings::isConfigured(),
-            'pixReady' => EfiSettings::pixReady(),
-            'hasSecret' => filled(EfiSettings::value('client_secret')),
-            'hasCertificate' => filled(EfiSettings::pem('certificate')),
+            'configured' => EfiSettings::isConfigured($this->environment),
+            'pixReady' => EfiSettings::pixReady($this->environment),
+            'hasSecret' => filled(EfiSettings::credential($this->environment, 'client_secret')),
+            'hasCertificate' => filled(EfiSettings::pem('certificate', $this->environment)),
+            'inUse' => EfiSettings::environment() === EfiSettings::normalize($this->environment),
             'webhookAt' => PlatformSetting::get('efi.webhook_registered_at'),
             'lastWebhookAt' => PlatformSetting::get('efi.last_webhook_at'),
             'sandbox' => EfiSettings::isSandbox(),
         ]);
+    }
+
+    private function loadEnvironment(): void
+    {
+        $this->clientId = (string) EfiSettings::credential($this->environment, 'client_id');
+        $this->pixKey = (string) EfiSettings::pixKey($this->environment);
     }
 
     private function report(bool $ok, string $message): void

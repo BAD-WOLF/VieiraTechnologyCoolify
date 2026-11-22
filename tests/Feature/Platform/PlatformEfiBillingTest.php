@@ -18,6 +18,7 @@ use App\Services\Platform\Efi\EfiException;
 use App\Services\Platform\Efi\EfiSettings;
 use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformBranding;
+use App\Services\Platform\PlatformConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\UploadedFile;
@@ -424,8 +425,8 @@ it('lets the operator store the Efí credentials and certificate encrypted and c
     expect(EfiSettings::value('client_secret'))->toBe('Client_Secret_live')
         ->and(EfiSettings::pem('certificate'))->toBe(trim($made['certificate'])."\n")
         ->and(openssl_x509_check_private_key(EfiSettings::pem('certificate'), EfiSettings::pem('private_key')))->toBeTrue()
-        ->and(DB::table('platform_settings')->where('key', 'efi.client_secret')->value('value'))->not->toContain('Client_Secret_live')
-        ->and(DB::table('platform_settings')->where('key', 'efi.private_key')->value('value'))->not->toContain('PRIVATE KEY')
+        ->and(DB::table('platform_settings')->where('key', 'efi.sandbox.client_secret')->value('value'))->toBeString()->not->toContain('Client_Secret_live')
+        ->and(DB::table('platform_settings')->where('key', 'efi.sandbox.private_key')->value('value'))->toBeString()->not->toContain('PRIVATE KEY')
         ->and(BillingProfile::methods())->toBe([BillingProfile::PIX, BillingProfile::BOLETO])
         ->and(PlatformSetting::get('efi.webhook_registered_at'))->not->toBeNull();
     Http::assertSent(fn (Request $request) => $request->url() === EFI_PIX.'/oauth/token'
@@ -698,4 +699,192 @@ it('moves the customers, invoices and settings of Banco Inter to Efí', function
     efiFake();
     PlatformBilling::reconcileOpen();
     expect($open->fresh()->provider_reference)->toBe('1002');
+});
+
+it('connects Efí while the invoices are confirmed manually and then charges through it', function () {
+    efiFake();
+    PlatformConfig::flush();
+    config(['platform.efi.client_id' => null, 'platform.efi.client_secret' => null]);
+    PlatformConfig::set('platform.billing.provider', 'manual');
+    efiOperator();
+
+    Livewire::test(AdminBilling::class)
+        ->assertSee('Manual payments')
+        ->set('environment', 'sandbox')
+        ->set('clientId', 'Client_Id_homologacao')
+        ->set('clientSecret', 'Client_Secret_homologacao')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('resultOk', true)
+        ->assertDontSee('Fill in the Client ID')
+        ->assertSee('Connected to Efí (sandbox)')
+        ->assertSee('Invoices are now charged through Efí.');
+
+    expect(PlatformBilling::isManual())->toBeFalse()
+        ->and(config('platform.billing.provider'))->toBe(PlatformBilling::PROVIDER)
+        ->and(BillingProfile::methods())->toBe([BillingProfile::BOLETO]);
+    Http::assertSent(fn (Request $request) => $request->url() === EFI_CHARGES.'/v1/authorize'
+        && $request->hasHeader('Authorization', 'Basic '.base64_encode('Client_Id_homologacao:Client_Secret_homologacao')));
+    PlatformConfig::flush();
+});
+
+it('tests the Efí connection without changing how the invoices are charged', function () {
+    efiFake();
+    PlatformConfig::flush();
+    PlatformConfig::set('platform.billing.provider', 'manual');
+    efiOperator();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertSet('resultOk', true)
+        ->assertSee('Connected to Efí (sandbox)')
+        ->assertSee('Invoices are still confirmed manually');
+
+    expect(PlatformBilling::isManual())->toBeTrue()
+        ->and(BillingProfile::methods())->toBe([]);
+    PlatformConfig::flush();
+});
+
+it('keeps the credentials, the certificate and the Pix key of each Efí environment', function () {
+    efiFake();
+    Http::fake([
+        EfiSettings::CHARGES_PRODUCTION_URL.'/v1/authorize' => Http::response(['access_token' => 'charges-live', 'expires_in' => 600]),
+        EfiSettings::PIX_PRODUCTION_URL.'/oauth/token' => Http::response(['access_token' => 'pix-live', 'expires_in' => 3600]),
+        EfiSettings::PIX_PRODUCTION_URL.'/v2/webhook/*' => Http::response(['webhookUrl' => EFI_HOOK]),
+    ]);
+    config(['platform.efi.client_id' => null, 'platform.efi.client_secret' => null]);
+    efiOperator();
+    $production = efiCertificate();
+    $sandbox = efiCertificate('senha');
+
+    Livewire::test(AdminBilling::class)
+        ->set('environment', 'production')
+        ->set('clientId', 'Client_Id_producao')
+        ->set('clientSecret', 'Client_Secret_producao')
+        ->set('pixKey', 'pix@hostrema.com.br')
+        ->set('certificateFile', UploadedFile::fake()->createWithContent('producao.p12', $production['p12']))
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('resultOk', true)
+        // Homologação has credentials of its own: nothing of production shows up there.
+        ->set('environment', 'sandbox')
+        ->assertSet('clientId', '')
+        ->assertSet('pixKey', '')
+        ->assertSee('Needed for Pix')
+        ->assertDontSee('Stored - leave empty to keep')
+        ->set('clientId', 'Client_Id_homologacao')
+        ->set('clientSecret', 'Client_Secret_homologacao')
+        ->set('pixKey', 'teste@hostrema.com.br')
+        ->set('certificateFile', UploadedFile::fake()->createWithContent('homologacao.p12', $sandbox['p12']))
+        ->set('certificatePassword', 'senha')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('resultOk', true)
+        // Back to production: its values come back and its secret is kept when left empty.
+        ->set('environment', 'production')
+        ->assertSet('clientId', 'Client_Id_producao')
+        ->assertSet('pixKey', 'pix@hostrema.com.br')
+        ->assertSee('Stored - leave empty to keep')
+        ->assertSee('Stored - send another one to replace it')
+        ->call('save')
+        ->assertSet('resultOk', true)
+        ->assertSee('Connected to Efí (production)');
+
+    PlatformSetting::flushMemo();
+    expect(EfiSettings::environment())->toBe('production')
+        ->and(EfiSettings::value('client_secret'))->toBe('Client_Secret_producao')
+        ->and(EfiSettings::pixKey())->toBe('pix@hostrema.com.br')
+        ->and(EfiSettings::credential('sandbox', 'client_secret'))->toBe('Client_Secret_homologacao')
+        ->and(EfiSettings::pixKey('sandbox'))->toBe('teste@hostrema.com.br')
+        ->and(EfiSettings::pem('certificate'))->toBe(trim($production['certificate'])."\n")
+        ->and(EfiSettings::pem('certificate', 'sandbox'))->toBe(trim($sandbox['certificate'])."\n")
+        ->and(EfiSettings::pixReady('sandbox'))->toBeTrue();
+    Http::assertSent(fn (Request $request) => $request->url() === EfiSettings::PIX_PRODUCTION_URL.'/oauth/token'
+        && $request->hasHeader('Authorization', 'Basic '.base64_encode('Client_Id_producao:Client_Secret_producao')));
+    Http::assertSent(fn (Request $request) => $request->url() === EFI_PIX.'/oauth/token'
+        && $request->hasHeader('Authorization', 'Basic '.base64_encode('Client_Id_homologacao:Client_Secret_homologacao')));
+    Http::assertNotSent(fn (Request $request) => $request->hasHeader('Authorization', 'Basic '.base64_encode('Client_Id_homologacao:Client_Secret_producao'))
+        || $request->hasHeader('Authorization', 'Basic '.base64_encode('Client_Id_producao:Client_Secret_homologacao')));
+});
+
+it('says what is missing or what Efí refused instead of a generic error', function () {
+    config(['platform.efi.client_id' => null, 'platform.efi.client_secret' => null]);
+    efiOperator();
+
+    Livewire::test(AdminBilling::class)
+        ->call('connect')
+        ->assertSet('resultOk', false)
+        ->assertSee('Fill in the Client ID and the Client Secret of the Efí application.')
+        ->set('environment', 'sandbox')
+        ->set('clientId', 'Client_Id_sem_secret')
+        ->call('save')
+        ->assertSet('resultOk', true)
+        ->assertSee('Saved. Fill in the Client ID and the Client Secret of the Efí application to charge.');
+
+    Http::fake([EFI_CHARGES.'/v1/authorize' => Http::response(['error' => 'invalid_client', 'error_description' => 'Credenciais inválidas'], 401)]);
+    Livewire::test(AdminBilling::class)
+        ->assertSet('environment', 'sandbox')
+        ->assertSet('clientId', 'Client_Id_sem_secret')
+        ->set('clientSecret', 'Client_Secret_errado')
+        ->call('save')
+        ->assertSet('resultOk', false)
+        ->assertSee('Credenciais inválidas')
+        ->assertDontSee('Fill in the Client ID');
+});
+
+it('refuses an unknown Efí environment', function () {
+    efiOperator();
+
+    Livewire::test(AdminBilling::class)
+        ->set('environment', 'staging')
+        ->assertSet('environment', 'sandbox')
+        ->set('clientId', 'x')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(EfiSettings::environment())->toBe('sandbox');
+});
+
+it('moves the Efí credentials saved before to the environment they were saved for', function () {
+    $certificate = efiCertificate();
+    foreach (['environment' => 'sandbox', 'client_id' => 'Client_Id_antigo', 'client_secret' => 'Client_Secret_antigo',
+        'certificate' => $certificate['certificate'], 'private_key' => $certificate['key'], 'pix_key' => 'pix@hostrema.com.br'] as $key => $value) {
+        DB::table('platform_settings')->insert(['key' => "efi.{$key}", 'value' => Crypt::encryptString($value), 'created_at' => now(), 'updated_at' => now()]);
+    }
+    DB::table('platform_settings')->insert(['key' => 'efi.sandbox.client_secret', 'value' => Crypt::encryptString('Client_Secret_novo'), 'created_at' => now(), 'updated_at' => now()]);
+
+    $migration = require database_path('migrations/2025_10_20_000012_keep_efi_credentials_per_environment.php');
+    $migration->up();
+    $migration->up();
+    PlatformSetting::flushMemo();
+
+    expect(DB::table('platform_settings')->whereIn('key', ['efi.client_id', 'efi.client_secret', 'efi.certificate', 'efi.private_key', 'efi.pix_key'])->exists())->toBeFalse()
+        ->and(EfiSettings::credential('sandbox', 'client_id'))->toBe('Client_Id_antigo')
+        ->and(EfiSettings::credential('sandbox', 'client_secret'))->toBe('Client_Secret_novo')
+        ->and(EfiSettings::pixKey('sandbox'))->toBe('pix@hostrema.com.br')
+        ->and(EfiSettings::pem('private_key', 'sandbox'))->toBe(trim($certificate['key'])."\n")
+        ->and(DB::table('platform_settings')->where('key', 'like', 'efi.production.%')->exists())->toBeFalse();
+
+    $migration->down();
+    PlatformSetting::flushMemo();
+    expect(PlatformSetting::get('efi.client_id'))->toBe('Client_Id_antigo')
+        ->and(PlatformSetting::get('efi.client_secret'))->toBe('Client_Secret_novo')
+        ->and(DB::table('platform_settings')->where('key', 'like', 'efi.sandbox.%')->exists())->toBeFalse();
+});
+
+it('reads the EFI_* variables only for the environment they were given for', function () {
+    config(['platform.efi.environment' => 'sandbox', 'platform.efi.client_id' => 'Client_Id_env', 'platform.efi.client_secret' => 'Client_Secret_env']);
+
+    expect(EfiSettings::credential('sandbox', 'client_id'))->toBe('Client_Id_env')
+        ->and(EfiSettings::credential('production', 'client_id'))->toBeNull()
+        ->and(EfiSettings::isConfigured('production'))->toBeFalse()
+        ->and(EfiSettings::isConfigured())->toBeTrue();
+
+    EfiSettings::store('environment', 'production');
+    expect(EfiSettings::isConfigured())->toBeFalse();
+
+    EfiSettings::storeCredential('production', 'client_id', 'Client_Id_console');
+    EfiSettings::storeCredential('production', 'client_secret', 'Client_Secret_console');
+    expect(EfiSettings::value('client_id'))->toBe('Client_Id_console')
+        ->and(EfiSettings::credential('sandbox', 'client_secret'))->toBe('Client_Secret_env');
 });

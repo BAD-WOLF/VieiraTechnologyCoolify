@@ -962,7 +962,7 @@ class PlatformBilling
         $url = EfiSettings::webhookUrl();
         $registered = [];
         $errors = [];
-        foreach (BillingProfile::methods() as $method) {
+        foreach (BillingProfile::configuredMethods() as $method) {
             try {
                 if ($method === BillingProfile::PIX) {
                     self::client()->registerPixWebhook((string) EfiSettings::pixKey(), $url);

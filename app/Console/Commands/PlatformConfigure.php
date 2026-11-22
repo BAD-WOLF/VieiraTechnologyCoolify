@@ -229,18 +229,19 @@ class PlatformConfigure extends Command
                 return [['configured' => false], ['efi: '.$e->getMessage()]];
             }
         }
-        EfiSettings::store('environment', (string) ($efi['environment'] ?? 'production'));
-        EfiSettings::store('client_id', trim((string) $efi['client_id']));
-        EfiSettings::store('client_secret', trim((string) $efi['client_secret']));
+        $environment = EfiSettings::normalize($efi['environment'] ?? 'production');
+        EfiSettings::store('environment', $environment);
+        EfiSettings::storeCredential($environment, 'client_id', trim((string) $efi['client_id']));
+        EfiSettings::storeCredential($environment, 'client_secret', trim((string) $efi['client_secret']));
         if (array_key_exists('pix_key', $efi)) {
-            EfiSettings::store('pix_key', filled($efi['pix_key']) ? trim((string) $efi['pix_key']) : null);
+            EfiSettings::storeCredential($environment, 'pix_key', filled($efi['pix_key']) ? trim((string) $efi['pix_key']) : null);
         }
         if (! is_null($pem)) {
-            EfiSettings::store('certificate', $pem[0]);
-            EfiSettings::store('private_key', $pem[1]);
+            EfiSettings::storeCredential($environment, 'certificate', $pem[0]);
+            EfiSettings::storeCredential($environment, 'private_key', $pem[1]);
         }
         EfiClient::forgetTokens();
-        audit_log('platform.efi.settings_saved', null, ['environment' => (string) ($efi['environment'] ?? 'production'), 'certificate' => ! is_null($pem), 'source' => 'platform:configure'], 0, 'system');
+        audit_log('platform.efi.settings_saved', null, ['environment' => $environment, 'certificate' => ! is_null($pem), 'source' => 'platform:configure'], 0, 'system');
 
         $status = ['configured' => true, 'pix' => EfiSettings::pixReady(), 'registered' => [], 'errors' => []];
         if (PlatformBilling::enabled() && ! PlatformBilling::isManual()) {

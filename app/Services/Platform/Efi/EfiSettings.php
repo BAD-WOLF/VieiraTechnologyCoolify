@@ -15,6 +15,11 @@ use Symfony\Component\Process\Process;
  * The Cobranças API (boleto with Pix) needs only the Client ID and Client Secret of the Efí
  * application; the Pix API also needs the certificate of the application (mutual TLS) and a Pix
  * key of the account.
+ *
+ * Efí gives each environment of an application (Produção and Homologação) its own Client ID,
+ * Client Secret and certificate: they are kept per environment ("efi.{environment}.{key}"), so
+ * switching between them never mixes the credentials of one with the other. The EFI_* variables
+ * belong to the environment of EFI_ENVIRONMENT.
  */
 class EfiSettings
 {
@@ -28,8 +33,19 @@ class EfiSettings
 
     public const KEYS = ['environment', 'client_id', 'client_secret', 'certificate', 'private_key', 'pix_key', 'webhook_token'];
 
-    public static function value(string $key): ?string
+    public const ENVIRONMENTS = ['production', 'sandbox'];
+
+    /** Values that belong to one environment of the Efí application. */
+    public const CREDENTIALS = ['client_id', 'client_secret', 'certificate', 'private_key', 'pix_key'];
+
+    /**
+     * A setting; credentials are read for the given environment, or the one in use.
+     */
+    public static function value(string $key, ?string $environment = null): ?string
     {
+        if (in_array($key, self::CREDENTIALS, true)) {
+            return self::credential($environment ?? self::environment(), $key);
+        }
         $stored = PlatformSetting::get("efi.{$key}");
         if (filled($stored)) {
             return (string) $stored;
@@ -39,14 +55,54 @@ class EfiSettings
         return filled($configured) ? (string) $configured : null;
     }
 
+    /**
+     * A credential of one environment: the one saved in the console, or the EFI_* variable when the
+     * variables are for that environment.
+     */
+    public static function credential(string $environment, string $key): ?string
+    {
+        $environment = self::normalize($environment);
+        $stored = PlatformSetting::get("efi.{$environment}.{$key}");
+        if (filled($stored)) {
+            return (string) $stored;
+        }
+        if (self::normalize(config('platform.efi.environment')) !== $environment) {
+            return null;
+        }
+        $configured = config("platform.efi.{$key}");
+
+        return filled($configured) ? (string) $configured : null;
+    }
+
+    /**
+     * Saves a setting; a credential goes to the environment in use.
+     */
     public static function store(string $key, ?string $value): void
     {
-        PlatformSetting::put("efi.{$key}", $value);
+        if (in_array($key, self::CREDENTIALS, true)) {
+            self::storeCredential(self::environment(), $key, $value);
+
+            return;
+        }
+        PlatformSetting::put("efi.{$key}", $key === 'environment' && filled($value) ? self::normalize($value) : $value);
+    }
+
+    public static function storeCredential(string $environment, string $key, ?string $value): void
+    {
+        if (! in_array($key, self::CREDENTIALS, true)) {
+            throw new \InvalidArgumentException("{$key} is not a credential of an Efí environment.");
+        }
+        PlatformSetting::put('efi.'.self::normalize($environment).".{$key}", $value);
+    }
+
+    public static function normalize(mixed $environment): string
+    {
+        return $environment === 'sandbox' ? 'sandbox' : 'production';
     }
 
     public static function environment(): string
     {
-        return self::value('environment') === 'sandbox' ? 'sandbox' : 'production';
+        return self::normalize(self::value('environment'));
     }
 
     public static function isSandbox(): bool
@@ -67,25 +123,26 @@ class EfiSettings
     /**
      * Boletos can be issued (Cobranças API).
      */
-    public static function isConfigured(): bool
+    public static function isConfigured(?string $environment = null): bool
     {
-        return filled(self::value('client_id')) && filled(self::value('client_secret'));
+        return filled(self::value('client_id', $environment)) && filled(self::value('client_secret', $environment));
     }
 
     /**
      * Pix charges can be issued (Pix API: certificate and Pix key).
      */
-    public static function pixReady(): bool
+    public static function pixReady(?string $environment = null): bool
     {
-        return self::isConfigured() && filled(self::pixKey()) && filled(self::pem('certificate')) && filled(self::pem('private_key'));
+        return self::isConfigured($environment) && filled(self::pixKey($environment))
+            && filled(self::pem('certificate', $environment)) && filled(self::pem('private_key', $environment));
     }
 
     /**
      * Certificate or key as PEM, accepting a PEM text, a base64 encoded PEM or a file path.
      */
-    public static function pem(string $key): ?string
+    public static function pem(string $key, ?string $environment = null): ?string
     {
-        $value = trim((string) self::value($key));
+        $value = trim((string) self::value($key, $environment));
         if ($value === '') {
             return null;
         }
@@ -241,9 +298,9 @@ class EfiSettings
     /**
      * Pix key of the Efí account (CPF/CNPJ, e-mail, phone or random key) that receives the Pix.
      */
-    public static function pixKey(): ?string
+    public static function pixKey(?string $environment = null): ?string
     {
-        $key = trim((string) self::value('pix_key'));
+        $key = trim((string) self::value('pix_key', $environment));
 
         return $key !== '' ? $key : null;
     }

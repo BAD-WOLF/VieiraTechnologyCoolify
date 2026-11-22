@@ -227,7 +227,6 @@
     "Invoice issued. Pay with Pix or boleto to activate the plan.": "Fatura emitida. Pague com Pix ou boleto para ativar o plano.",
     "Invoice preview (usage so far)": "Prévia da fatura (uso até agora)",
     "Invoices": "Faturas",
-    "Invoices are issued without the bank. Confirm each payment with \"Mark as paid\" below. To charge by Pix and boleto automatically, choose Efí Bank in Settings > Billing and fill in the credentials.": "As faturas são emitidas sem o banco. Confirme cada pagamento com \"Marcar como paga\" abaixo. Para cobrar por Pix e boleto automaticamente, escolha o Efí Bank em Configurações > Cobrança e preencha as credenciais.",
     "Issue a new charge": "Emitir nova cobrança",
     "It is shown only once.": "Ele aparece só uma vez.",
     "It is shown only once. Generating a new token revokes this one.": "Ele aparece só uma vez. Gerar um novo token revoga este.",
@@ -655,5 +654,11 @@
     "yearly": "anual",
     "your token": "seu token",
     "{region} is replaced by the region slug.": "{region} é trocado pelo identificador da região.",
-    "{region} is replaced by the region slug. Each region registered by Ansible already has its own.": "{region} é trocado pelo identificador da região. Cada região registrada pelo Ansible já tem o seu."
+    "{region} is replaced by the region slug. Each region registered by Ansible already has its own.": "{region} é trocado pelo identificador da região. Cada região registrada pelo Ansible já tem o seu.",
+    "Invoices are issued without the bank. Confirm each payment with \"Mark as paid\" below. To charge by Pix and boleto automatically, fill in the Efí credentials below and click \"Save and connect\".": "As faturas são emitidas sem o banco. Confirme cada pagamento em \"Marcar como paga\", abaixo. Para cobrar por Pix e boleto automaticamente, preencha as credenciais da Efí abaixo e clique em \"Salvar e conectar\".",
+    "Each environment keeps its own Client ID, Client Secret, certificate and Pix key.": "Cada ambiente guarda o próprio Client ID, Client Secret, certificado e chave Pix.",
+    "This is the environment in use.": "Este é o ambiente em uso.",
+    "Saving makes this environment the one in use.": "Ao salvar, este passa a ser o ambiente em uso.",
+    "Invoices are now charged through Efí.": "As faturas agora são cobradas pela Efí.",
+    "Invoices are still confirmed manually: \"Save and connect\" makes Efí charge them.": "As faturas continuam com confirmação manual: \"Salvar e conectar\" passa a cobrá-las pela Efí."
 }

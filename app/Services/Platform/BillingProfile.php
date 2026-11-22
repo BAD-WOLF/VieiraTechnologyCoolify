@@ -28,7 +28,22 @@ class BillingProfile
      */
     public static function methods(): array
     {
-        if (! PlatformBilling::enabled() || PlatformBilling::isManual() || ! Efi\EfiSettings::isConfigured()) {
+        if (! PlatformBilling::enabled() || PlatformBilling::isManual()) {
+            return [];
+        }
+
+        return self::configuredMethods();
+    }
+
+    /**
+     * What the Efí credentials of the environment in use allow, whatever the payment provider is:
+     * what the connection test of the console checks.
+     *
+     * @return array<int, string>
+     */
+    public static function configuredMethods(): array
+    {
+        if (! Efi\EfiSettings::isConfigured()) {
             return [];
         }
 

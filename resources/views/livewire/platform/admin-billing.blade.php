@@ -5,7 +5,7 @@
         </x-callout>
     @elseif ($manual)
         <x-callout type="info" title="{{ __('Manual payments') }}">
-            {{ __('Invoices are issued without the bank. Confirm each payment with "Mark as paid" below. To charge by Pix and boleto automatically, choose Efí Bank in Settings > Billing and fill in the credentials.') }}
+            {{ __('Invoices are issued without the bank. Confirm each payment with "Mark as paid" below. To charge by Pix and boleto automatically, fill in the Efí credentials below and click "Save and connect".') }}
         </x-callout>
     @endif
     @if ($result)
@@ -27,7 +27,8 @@
             </div>
         </div>
         <div class="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            <x-forms.select id="environment" label="{{ __('Environment') }}">
+            <x-forms.select id="environment" wire:model.live="environment" label="{{ __('Environment') }}"
+                helper="{{ __('Each environment keeps its own Client ID, Client Secret, certificate and Pix key.') }} {{ $inUse ? __('This is the environment in use.') : __('Saving makes this environment the one in use.') }}">
                 <option value="production">{{ __('Production') }}</option>
                 <option value="sandbox">{{ __('Sandbox (tests)') }}</option>
             </x-forms.select>
