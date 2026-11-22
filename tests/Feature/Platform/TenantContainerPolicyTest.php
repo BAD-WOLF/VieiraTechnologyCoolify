@@ -270,3 +270,86 @@ it('parses memory units', function () {
         ->and($policy->memoryToMb('0'))->toBe(0)
         ->and($policy->memoryToMb('garbage'))->toBe(0);
 });
+
+it('rejects more ways for a service to reach the host or other resources', function (array $service, string $expected) {
+    $violations = violationsFor(['services' => ['app' => array_merge(['image' => 'alpine'], $service)]]);
+
+    expect(implode(' | ', $violations))->toContain($expected);
+})->with([
+    'network from a variable' => [['networks' => ['${NETWORK}']], 'network names can not use variables'],
+    'volume that is not a definition' => [['volumes' => [42]], 'invalid volume definition'],
+    'undeclared foreign named volume' => [['volumes' => ['shared-data:/data']], 'named volume "shared-data" must be declared or belong to this resource'],
+    'unknown volume type' => [['volumes' => [['type' => 'npipe', 'source' => 'pipe', 'target' => '/pipe']]], 'volume type "npipe" is not allowed'],
+    'host path from a variable' => [['volumes' => [['type' => 'bind', 'source' => '${HOME}', 'target' => '/home']]], 'Host paths can not use variables'],
+    'build that is not a definition' => [['build' => 42], 'invalid build definition'],
+    'build context from a variable' => [['build' => ['context' => '${CONTEXT}']], 'build context can not use variables'],
+    'Dockerfile outside of the context' => [['build' => ['context' => '.', 'dockerfile' => '../../Dockerfile']], 'the Dockerfile must be a path inside the build context'],
+    'absolute Dockerfile' => [['build' => ['context' => '.', 'dockerfile' => '/etc/Dockerfile']], 'the Dockerfile must be a path inside the build context'],
+    'local build cache' => [['build' => ['context' => '.', 'cache_from' => ['type=local,src=/var/lib/docker']]], 'local build caches are not allowed'],
+    'additional build context on the host' => [['build' => ['context' => '.', 'additional_contexts' => ['root' => '/']]], 'additional context root "/" must stay inside the project'],
+    'env file from a variable' => [['env_file' => [['path' => '${ENV_FILE}']]], 'env_file can not use variables'],
+    'proxy label for a foreign domain' => [['labels' => ['traefik.http.routers.https-0-abc123uuid.rule=Host(`victim.com`)']], 'Service "app": Domain "victim.com" is not one of your domains.'],
+]);
+
+it('rejects more top-level definitions that leave the resource', function (array $compose, string $expected) {
+    $violations = violationsFor(array_merge(['services' => ['app' => ['image' => 'alpine']]], $compose));
+
+    expect(implode(' | ', $violations))->toContain($expected);
+})->with([
+    'external config' => [['configs' => ['cfg' => ['external' => true]]], 'External or driver based configs ("cfg") are not allowed.'],
+    'secret from a driver' => [['secrets' => ['key' => ['driver' => 'vault']]], 'External or driver based secrets ("key") are not allowed.'],
+    'service that is not a definition' => [['services' => ['app' => 'alpine']], 'Service "app" is not a valid definition.'],
+    'external network named inside external' => [['networks' => ['net' => ['external' => ['name' => 'tenant-7']]]], 'Network "tenant-7" does not belong to your team.'],
+    'external volume named inside external' => [['volumes' => ['data' => ['external' => ['name' => 'victim-data']]]], 'Volume "data" must belong to this resource.'],
+    'declared volume with a foreign name' => [['services' => ['app' => ['image' => 'alpine', 'volumes' => ['data:/data']]], 'volumes' => ['data' => ['name' => 'victim-data']]], 'Service "app": volume "data" must belong to this resource.'],
+]);
+
+it('accepts extension keys, disabled options, remote builds and keeps only a coherent memory reservation', function () {
+    $services = hardenCompose(['services' => [
+        'web' => [
+            'image' => 'nginx', 'x-coolify' => ['note' => 'mine'],
+            'privileged' => false, 'devices' => [], 'gpus' => null, 'oom_kill_disable' => 'false',
+            'mem_limit' => '1g', 'mem_reservation' => '8g',
+            'build' => ['context' => 'https://github.com/acme/web.git#main', 'additional_contexts' => [
+                'base' => 'docker-image://alpine:3', 'deps' => 'service:worker', 'assets' => './assets',
+            ]],
+        ],
+        'worker' => ['image' => 'busybox', 'mem_limit' => '1g', 'mem_reservation' => '256m', 'build' => 'git@github.com:acme/worker.git'],
+    ]])['compose']['services'];
+
+    expect($services['web'])->not->toHaveKeys(['privileged', 'devices', 'gpus', 'oom_kill_disable', 'mem_reservation'])
+        ->and($services['web']['x-coolify'])->toBe(['note' => 'mine'])
+        ->and($services['web']['mem_limit'])->toBe('1024m')
+        ->and($services['worker']['mem_reservation'])->toBe('256m');
+});
+
+it('keeps the log drain of the platform and bounds every other logging driver', function () {
+    $services = hardenCompose(['services' => [
+        'drained' => ['image' => 'nginx', 'logging' => generate_fluentd_configuration()],
+        'elsewhere' => ['image' => 'nginx', 'logging' => ['driver' => 'fluentd', 'options' => ['fluentd-address' => 'tcp://10.0.0.5:24224']]],
+        'syslog' => ['image' => 'nginx', 'logging' => ['driver' => 'syslog', 'options' => ['syslog-address' => 'udp://10.0.0.5:514']]],
+    ]])['compose']['services'];
+
+    expect($services['drained']['logging'])->toBe(generate_fluentd_configuration())
+        ->and($services['elsewhere']['logging']['driver'])->toBe('json-file')
+        ->and($services['syslog']['logging'])->toBe(['driver' => 'json-file', 'options' => ['max-size' => '10m', 'max-file' => '3']]);
+});
+
+it('drops host ports it can not read, and pins the proxy only to a network of the resource', function () {
+    $result = hardenCompose(['services' => [
+        'web' => ['image' => 'nginx', 'ports' => [['target' => '${PORT}'], null]],
+        'site' => ['image' => 'nginx', 'networks' => ['site'], 'labels' => ['traefik.enable=true']],
+    ], 'networks' => ['site' => null]]);
+
+    expect($result['compose']['services']['web'])->not->toHaveKeys(['ports', 'expose'])
+        ->and($result['notices'])->toHaveCount(1)
+        ->and(collect($result['compose']['services']['site']['labels'])->filter(fn ($label) => str_starts_with($label, 'traefik.docker.network=')))->toHaveCount(0);
+});
+
+it('parses memory units up to terabytes', function () {
+    $policy = new TenantContainerPolicy(platformContext());
+
+    expect($policy->memoryToMb('1t'))->toBe(1048576)
+        ->and($policy->memoryToMb('2048k'))->toBe(2)
+        ->and($policy->memoryToMb('1048576b'))->toBe(1);
+});

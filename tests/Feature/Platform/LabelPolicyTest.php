@@ -87,3 +87,30 @@ it('accepts key-value maps and shared middlewares with the canonical definition'
 
     expect($result['violations'])->toBe([]);
 });
+
+it('rejects router and service options with unsafe values', function (string $label, string $expected) {
+    expect(implode(' | ', labelPolicy()->check([$label])['violations']))->toContain($expected);
+})->with([
+    'tls that is not a boolean' => ['traefik.http.routers.https-0-abc123uuid.tls=maybe', 'Router tls must be true or false.'],
+    'certificate resolver with spaces' => ['traefik.http.routers.https-0-abc123uuid.tls.certresolver=le resolver', 'Invalid value for router tls.certresolver.'],
+    'tls options from another provider' => ['traefik.http.routers.https-0-abc123uuid.tls.options=default;x', 'Invalid value for router tls.options.'],
+    'service port that is not a number' => ['traefik.http.services.https-0-abc123uuid.loadbalancer.server.port=80a', 'Service port must be numeric.'],
+    'service scheme' => ['traefik.http.services.https-0-abc123uuid.loadbalancer.server.scheme=ftp', 'Service scheme must be http, https or h2c.'],
+    'Host matcher without a domain' => ['traefik.http.routers.https-0-abc123uuid.rule=Host()', 'Router Host() matcher has no domain.'],
+    'chain with a foreign middleware' => ['traefik.http.middlewares.chain-abc123uuid.chain.middlewares=auth-victimuuid', 'must contain the resource UUID'],
+]);
+
+it('accepts flag labels, safe router and service options and chains of own and shared middlewares', function () {
+    $result = labelPolicy()->check([
+        'traefik.enable',
+        'traefik.http.routers.https-0-abc123uuid.tls=true',
+        'traefik.http.routers.https-0-abc123uuid.tls.certresolver=letsencrypt',
+        'traefik.http.services.https-0-abc123uuid.loadbalancer.server.scheme=h2c',
+        'traefik.http.services.https-0-abc123uuid.loadbalancer.passhostheader=true',
+        'traefik.http.middlewares.chain-abc123uuid.chain.middlewares=gzip,redirect-to-https,auth-abc123uuid,headers@file',
+        'caddy_0=app.example.com, www.app.example.com,',
+    ]);
+
+    expect($result['violations'])->toBe([])
+        ->and($result['labels'][0])->toBe('traefik.enable=');
+});

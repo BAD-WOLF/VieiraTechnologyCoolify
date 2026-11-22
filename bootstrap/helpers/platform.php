@@ -184,7 +184,7 @@ function audit_log(string $action, ?Model $subject = null, array $metadata = [],
         if ($impersonator) {
             $metadata = array_merge($metadata, ['impersonated_by' => $impersonator]);
         }
-        AuditLog::create([
+        $write = fn () => AuditLog::create([
             'team_id' => $team instanceof Team ? $team->id : $team,
             'user_id' => $user?->id,
             'actor_type' => $actorType ?? ($impersonator ? 'operator' : ($user ? (request()?->bearerToken() ? 'api' : 'user') : 'system')),
@@ -195,6 +195,9 @@ function audit_log(string $action, ?Model $subject = null, array $metadata = [],
             'user_agent' => $request ? str((string) $request->userAgent())->limit(250, '')->value() : null,
             'metadata' => $metadata ?: null,
         ]);
+        // Inside a transaction a failed insert aborts it (PostgreSQL): a savepoint keeps the audited action going.
+        $connection = (new AuditLog)->getConnection();
+        $connection->transactionLevel() > 0 ? $connection->transaction($write) : $write();
     } catch (\Throwable $e) {
         report($e);
     }
