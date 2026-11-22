@@ -111,6 +111,11 @@ it('serves the log history through the API only for resources of the token team'
         ->assertOk()->assertJsonCount(3, 'lines')->assertJsonPath('lines.0.line', 'first line');
     $this->getJson('/api/v1/platform/logs?resource_uuid='.$other['application']->uuid, $headers)->assertNotFound();
     $this->getJson('/api/v1/platform/logs?resource_uuid='.$world['application']->uuid.'&range=1y', $headers)->assertUnprocessable();
+
+    // A region without a log history answers why, instead of an empty list.
+    $world['region']->update(['logs_url' => null]);
+    $this->getJson('/api/v1/platform/logs?resource_uuid='.$world['application']->uuid, $headers)
+        ->assertUnprocessable()->assertJsonPath('message', 'The log history of this region is not configured yet.');
 });
 
 it('shows the log history page with the team resources only', function () {

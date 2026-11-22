@@ -597,9 +597,15 @@ it('turns the usage of an invoice into a CSV with the lines and the hourly usage
         ->and($to->equalTo($withoutWindow->period_end))->toBeTrue();
 });
 
-it('answers 404 to Efí notifications with a wrong token', function () {
-    $this->postJson('/api/v1/billing/webhooks/efi/wrong-token/pix', ['pix' => []])->assertNotFound();
-    $this->postJson('/api/v1/billing/webhooks/efi/wrong-token/charges', ['notification' => 'x'])->assertNotFound();
+it('answers 404 to Efí notifications with a wrong token, and changes nothing', function () {
+    $invoice = openInvoice(efiTenant(), ['provider_reference' => '1002']);
+
+    $this->postJson('/api/v1/billing/webhooks/efi/tokenErrado1234567890abcd/pix', ['pix' => [['txid' => $invoice->provider_reference, 'valor' => '149.90']]])->assertNotFound();
+    $this->postJson('/api/v1/billing/webhooks/efi/tokenErrado1234567890abcd/charges', ['notification' => 'abc'])->assertNotFound();
+    $this->postJson('/api/v1/billing/webhooks/efi/curto/charges', ['notification' => 'abc'])->assertNotFound();
+
+    expect($invoice->fresh()->status)->toBe(PlatformInvoice::STATUS_OPEN);
+    Http::assertNothingSent();
 });
 
 it('sends DELETE requests and refuses unknown HTTP methods in the Efí client', function () {
