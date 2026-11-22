@@ -693,3 +693,33 @@ it('has a Portuguese translation for every text of the platform screens', functi
 
     expect($missing)->toBe([]);
 });
+
+it('never lets an operator access as itself, another operator or while already accessing, and ends a lost access', function () {
+    $operator = User::factory()->create();
+    Team::find(0)->members()->attach($operator->id, ['role' => 'owner']);
+    $customer = User::factory()->create();
+    $colleague = User::factory()->create();
+    Team::find(0)->members()->attach($colleague->id, ['role' => 'admin']);
+    $this->actingAs($operator);
+    session(['currentTeam' => Team::find(0)]);
+
+    expect(\App\Services\Platform\Impersonation::canImpersonate($operator, $operator))->toBeFalse()
+        ->and(\App\Services\Platform\Impersonation::canImpersonate(null, $customer))->toBeFalse()
+        ->and(\App\Services\Platform\Impersonation::canImpersonate($operator, $colleague))->toBeFalse()
+        ->and(\App\Services\Platform\Impersonation::canImpersonate($operator, $customer))->toBeTrue();
+    session([\App\Services\Platform\Impersonation::SESSION_KEY => $operator->id]);
+    expect(\App\Services\Platform\Impersonation::canImpersonate($operator, $customer))->toBeFalse();
+    config(['platform.enabled' => false]);
+    session()->forget(\App\Services\Platform\Impersonation::SESSION_KEY);
+    expect(\App\Services\Platform\Impersonation::canImpersonate($operator, $customer))->toBeFalse();
+    config(['platform.enabled' => true]);
+
+    // Nothing to end without an access; an access whose operator is gone logs out.
+    $this->actingAs($customer);
+    \App\Services\Platform\Impersonation::stop();
+    expect(auth()->id())->toBe($customer->id);
+    session([\App\Services\Platform\Impersonation::SESSION_KEY => 987654]);
+    \App\Services\Platform\Impersonation::stop();
+    expect(auth()->check())->toBeFalse()
+        ->and(session()->has(\App\Services\Platform\Impersonation::SESSION_KEY))->toBeFalse();
+});

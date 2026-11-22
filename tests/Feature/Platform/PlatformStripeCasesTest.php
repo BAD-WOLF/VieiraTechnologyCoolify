@@ -359,3 +359,37 @@ it('mirrors every final state of a Stripe invoice on the usage invoices attached
     expect($invoice->fresh())->status->toBe(PlatformInvoice::STATUS_VOID)
         ->and($invoice->fresh()->metadata['amount_refunded'])->toBe(700);
 });
+
+it('opens the Stripe customer portal for owners and admins of a customer with a Stripe account', function () {
+    $stripe = stripeFake(['/v1/billing_portal/sessions' => ['id' => 'bps_1', 'object' => 'billing_portal.session', 'url' => 'https://billing.stripe.com/p/session/bps_1']]);
+    $tenant = stripeTenant();
+    $owner = $tenant->team->members()->first() ?? User::factory()->create();
+    if (! $tenant->team->members()->whereKey($owner->id)->exists()) {
+        $tenant->team->members()->attach($owner->id, ['role' => 'owner']);
+    }
+    $this->actingAs($owner);
+    session(['currentTeam' => $tenant->team]);
+
+    Livewire::test(\App\Livewire\Platform\Billing::class)->call('portal')->assertRedirect('https://billing.stripe.com/p/session/bps_1');
+    expect(collect($stripe->requests)->firstWhere('path', '/v1/billing_portal/sessions')['params'])->toMatchArray(['customer' => 'cus_hostrema'.$tenant->team_id, 'return_url' => route('subscription.show')]);
+
+    // Without a Stripe customer there is no portal; a Stripe failure is shown, not thrown.
+    \App\Models\Subscription::query()->where('team_id', $tenant->team_id)->update(['stripe_customer_id' => null]);
+    session(['currentTeam' => $tenant->team->fresh()]);
+    \Illuminate\Support\Facades\Cache::forget('team:'.$owner->id);
+    Livewire::test(\App\Livewire\Platform\Billing::class)->call('portal')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'No billing account found. Choose a plan first.');
+    \App\Models\Subscription::query()->where('team_id', $tenant->team_id)->update(['stripe_customer_id' => 'cus_sem_portal']);
+    session(['currentTeam' => $tenant->team->fresh()]);
+    \Illuminate\Support\Facades\Cache::forget('team:'.$owner->id);
+    stripeFake();
+    Livewire::test(\App\Livewire\Platform\Billing::class)->call('portal')
+        ->assertDispatched('error', fn (string $event, array $params) => str_contains((string) $params[0], 'No such route: /v1/billing_portal/sessions'));
+
+    $member = User::factory()->create();
+    $tenant->team->members()->attach($member->id, ['role' => 'member']);
+    $this->actingAs($member);
+    Livewire::test(\App\Livewire\Platform\Billing::class)->call('portal')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Only team owners and admins can manage the subscription.')
+        ->assertNoRedirect();
+});

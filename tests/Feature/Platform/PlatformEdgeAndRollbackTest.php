@@ -196,3 +196,54 @@ it('renders policy violations as JSON for API clients and denies the tenant term
     config(['platform.tenant_terminal' => true]);
     expect(\Illuminate\Support\Facades\Gate::forUser($user)->check('canAccessTerminal'))->toBe($user->isAdmin() || $user->isOwner());
 });
+
+it('routes previews and one-click services too, with the PROXY protocol when the nodes expect it', function () {
+    config(['platform.edge.proxy_protocol' => true]);
+    $region = PlatformRegion::create(['slug' => 'sa-east-1', 'name' => 'São Paulo', 'is_default' => true]);
+    $node = edgeNode($region, '10.0.1.10');
+    $world = edgeWorld($node);
+    $application = edgeApplication($world, 'https://shop.apps.example.com');
+    \App\Models\ApplicationPreview::forceCreate(['uuid' => (string) new Cuid2, 'application_id' => $application->id, 'pull_request_id' => 3,
+        'pull_request_html_url' => 'https://github.com/acme/shop/pull/3', 'fqdn' => 'https://pr-3.shop.apps.example.com']);
+    $service = \App\Models\Service::withoutEvents(fn () => \App\Models\Service::forceCreate([
+        'uuid' => (string) new Cuid2, 'name' => 'uptime', 'docker_compose_raw' => "services:\n  web:\n    image: 'nginx:alpine'\n",
+        'environment_id' => $world['environment']->id, 'server_id' => $node->id,
+        'destination_id' => $world['destination']->id, 'destination_type' => StandaloneDocker::class,
+    ]));
+    \App\Models\ServiceApplication::forceCreate(['uuid' => (string) new Cuid2, 'name' => 'web', 'image' => 'nginx:alpine', 'service_id' => $service->id, 'fqdn' => 'https://uptime.apps.example.com']);
+    $hidden = edgeNode($region, '10.0.1.11');
+    Server::query()->whereKey($hidden->id)->update(['ip' => '']);
+    edgeApplication(edgeWorld($hidden->fresh()), 'https://sem-endereco.apps.example.com');
+
+    $config = EdgeRouter::configFor($region);
+    $rules = collect($config['http']['routers'])->pluck('rule');
+
+    expect($rules->all())->toContain('Host(`pr-3.shop.apps.example.com`)', 'Host(`uptime.apps.example.com`)', 'Host(`shop.apps.example.com`)')
+        // A node without an address can not receive traffic.
+        ->and($rules->join(' '))->not->toContain('sem-endereco')
+        ->and(collect($config['tcp']['services'])->first()['loadBalancer']['proxyProtocol'])->toBe(['version' => 2])
+        ->and(EdgeRouter::configFor(PlatformRegion::create(['slug' => 'vazia', 'name' => 'Vazia'])))->toBe(['http' => ['routers' => [], 'services' => []], 'tcp' => ['routers' => [], 'services' => []]]);
+});
+
+it('trusts the edge routers on a Traefik node and leaves other proxies alone', function () {
+    $region = PlatformRegion::create(['slug' => 'sa-east-1', 'name' => 'São Paulo', 'is_default' => true]);
+    $node = edgeNode($region, '10.0.1.10');
+    $node->proxy->set('type', 'TRAEFIK');
+    $node->save();
+    $configuration = "services:\n  traefik:\n    image: 'traefik:v3.1'\n    command:\n      - '--entrypoints.http.address=:80'\n      - '--entrypoints.https.address=:443'\n";
+    \App\Actions\Proxy\GetProxyConfiguration::mock()->shouldReceive('handle')->andReturn($configuration);
+    $saved = null;
+    \App\Actions\Proxy\SaveProxyConfiguration::mock()->shouldReceive('handle')->andReturnUsing(function ($server, $yaml) use (&$saved) {
+        $saved = $yaml;
+    });
+    \App\Actions\Proxy\StartProxy::mock()->shouldReceive('handle')->once();
+
+    expect(\App\Actions\Platform\TrustEdgeProxies::run($node, ['10.20.0.0/16']))->toBeTrue()
+        ->and($saved)->toContain('--entrypoints.http.forwardedheaders.trustedips=10.20.0.0/16', '--entrypoints.https.proxyprotocol.trustedips=10.20.0.0/16')
+        ->and(\App\Models\AuditLog::query()->where('action', 'platform.node.edge_trusted')->exists())->toBeTrue()
+        ->and(\App\Actions\Platform\TrustEdgeProxies::withTrustedProxies("services: [\n", ['10.20.0.0/16']))->toBeNull();
+
+    $node->proxy->set('type', 'CADDY');
+    $node->save();
+    expect(\App\Actions\Platform\TrustEdgeProxies::run($node->fresh(), ['10.20.0.0/16']))->toBeFalse();
+});
