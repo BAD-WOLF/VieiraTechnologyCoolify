@@ -49,7 +49,13 @@ it('renders the plans with quotas and features', function () {
         ->assertSee('Profissional')
         ->assertSee('Enterprise')
         ->assertSee('Current plan')
-        ->assertSee('Persistent volumes')
+        // Every limit and capability comes with its explanation.
+        ->assertSee('vCPU')
+        ->assertSee('Processing power for all your containers together')
+        ->assertSee('Database backups')
+        ->assertSee('Persistent volumes, project directories and local database backups')
+        ->assertSee('Not included in this plan.')
+        ->assertDontSee('Persistent volumes are available')
         ->call('setInterval', 'yearly')
         ->assertSet('interval', 'yearly');
 });
@@ -71,7 +77,7 @@ it('renders plan and usage with invoices for tenants', function () {
         ->assertSee('Usage')
         ->assertSee('Invoice preview')
         ->assertSee('12,34');
-    Livewire::test(UsageSummary::class)->assertSee('Profissional')->assertSee('CPU (reserved)');
+    Livewire::test(UsageSummary::class)->assertSee('Profissional')->assertSee('CPU (in use)');
 });
 
 it('shows the reason when a tenant is blocked', function () {
@@ -98,7 +104,7 @@ it('restricts the operator console to the root team', function () {
 it('renders the integrations page with webhooks, logs, traces and the API document', function () {
     $user = uiTenantUser('pro');
     $team = $user->teams()->first();
-    \App\Models\Subscription::create(['team_id' => $team->id, 'stripe_customer_id' => 'inter', 'stripe_invoice_paid' => true]);
+    \App\Models\Subscription::create(['team_id' => $team->id, 'stripe_invoice_paid' => true]);
     $team->forceFill(['show_boarding' => false])->save();
     \Illuminate\Support\Facades\Cache::forget('team:'.$user->id);
     session(['currentTeam' => $team->fresh()]);

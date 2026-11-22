@@ -17,6 +17,18 @@ class TenantLimits
         return (bool) config('platform.container.tenant_slices', true);
     }
 
+    /**
+     * Whether the containers of a tenant on a node share its plan: each one may use up to the
+     * whole plan and the tenant slice caps the total, so the limits declared by the containers
+     * do not add up against the plan (see PlatformGate::effective). Off, every container limit
+     * counts in full. Production keeps it with the slices; the local environment, whose node can
+     * not run slices, keeps it to behave like production.
+     */
+    public static function sharesPlan(): bool
+    {
+        return (bool) config('platform.container.shared_plan', true);
+    }
+
     public static function sliceName(int $teamId): string
     {
         return "tenant-{$teamId}.slice";

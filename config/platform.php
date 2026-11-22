@@ -86,7 +86,7 @@ return [
     'plans' => [
         'basic' => [
             'name' => 'Básico',
-            'description' => 'Isolated containers with CPU/RAM quotas, managed SSL, basic logs and limited deployments.',
+            'description' => 'Applications, databases and Docker Compose stacks with managed SSL, persistent storage and database backups.',
             // Prices in BRL (e.g. 49.90). Can be changed in the operator console (Billing tab).
             'price_monthly' => env('PLATFORM_BASIC_PRICE_MONTHLY', '49.90'),
             'price_yearly' => env('PLATFORM_BASIC_PRICE_YEARLY', '499.00'),
@@ -111,8 +111,7 @@ return [
             ],
             'features' => [
                 'databases' => true,
-                'persistent_volumes' => false,
-                'scheduled_backups' => false,
+                'scheduled_backups' => true,
                 'log_export' => false,
                 'preview_deployments' => false,
                 'public_databases' => false,
@@ -125,7 +124,7 @@ return [
 
         'pro' => [
             'name' => 'Profissional',
-            'description' => 'More CPU/RAM, persistent volumes, log export and scheduled backups.',
+            'description' => 'More CPU, memory and storage, preview deployments, public databases, log export and traces.',
             // Prices in BRL (e.g. 49.90). Can be changed in the operator console (Billing tab).
             'price_monthly' => env('PLATFORM_PRO_PRICE_MONTHLY', '149.90'),
             'price_yearly' => env('PLATFORM_PRO_PRICE_YEARLY', '1499.00'),
@@ -150,7 +149,6 @@ return [
             ],
             'features' => [
                 'databases' => true,
-                'persistent_volumes' => true,
                 'scheduled_backups' => true,
                 'log_export' => true,
                 'preview_deployments' => true,
@@ -189,7 +187,6 @@ return [
             ],
             'features' => [
                 'databases' => true,
-                'persistent_volumes' => true,
                 'scheduled_backups' => true,
                 'log_export' => true,
                 'preview_deployments' => true,
@@ -227,6 +224,10 @@ return [
         // hostrema-tenant-limits (infra/ansible/roles/tenant-limits) caps the slice with the plan
         // (CPU, memory, processes, disk I/O) and the tenant bridge with the plan bandwidth.
         'tenant_slices' => (bool) env('PLATFORM_TENANT_SLICES', true),
+        // The containers of a customer share the plan on each node: each one may use up to the
+        // whole plan (the slice caps the total), so their declared limits do not add up against
+        // it. Turn it off together with the slices to count every container limit in full.
+        'shared_plan' => (bool) env('PLATFORM_SHARED_PLAN', true),
         'log_max_size' => env('PLATFORM_CONTAINER_LOG_MAX_SIZE', '10m'),
         'log_max_file' => (string) env('PLATFORM_CONTAINER_LOG_MAX_FILE', '3'),
         // Sandboxed OCI runtime for tenant containers on the shared nodes (recommended: "runsc",
@@ -248,9 +249,11 @@ return [
     |--------------------------------------------------------------------------
     */
     /*
-     * Billing. "inter": Banco Inter (boleto + Pix, "Bolepix") through the Inter API; credentials
-     * are entered in the operator console (/admin/platform, Billing tab) or through the INTER_*
-     * variables below. "stripe": Stripe subscriptions (previous integration).
+     * Billing. "efi": Efí Bank (Pix with a due date, or boleto with Pix) through the Efí APIs, which
+     * also work for accounts without CNPJ ("Efí Pro"); credentials are entered in the operator
+     * console (/admin/platform, Billing tab) or through the EFI_* variables below. "manual": the
+     * same invoices, paid by Pix or transfer and confirmed by the owner. "stripe": Stripe
+     * subscriptions (previous integration).
      */
     /*
      * OpenTelemetry for tenant applications: OTLP endpoint of each region ({region} is replaced by
@@ -320,10 +323,10 @@ return [
     ],
 
     'billing' => [
-        'provider' => env('PLATFORM_BILLING_PROVIDER', 'inter'),
+        'provider' => env('PLATFORM_BILLING_PROVIDER', 'efi'),
         // Days to pay a new or renewal invoice; the tenant keeps working meanwhile.
         'due_days' => (int) env('PLATFORM_BILLING_DUE_DAYS', 5),
-        // Days after the due date until Inter cancels an unpaid boleto (0-60).
+        // Days after the due date until an unpaid charge is written off (boleto: 0-120; Pix: 0-60).
         'cancel_after_days' => (int) env('PLATFORM_BILLING_CANCEL_AFTER_DAYS', 30),
         'fine_percent' => (float) env('PLATFORM_BILLING_FINE_PERCENT', 2),
         'interest_percent_month' => (float) env('PLATFORM_BILLING_INTEREST_PERCENT_MONTH', 1),
@@ -335,22 +338,21 @@ return [
         'allow_simulated_payments' => (bool) env('PLATFORM_BILLING_ALLOW_SIMULATED_PAYMENTS', false),
     ],
 
-    'inter' => [
-        'environment' => env('INTER_ENVIRONMENT', 'production'),
-        'client_id' => env('INTER_CLIENT_ID'),
-        'client_secret' => env('INTER_CLIENT_SECRET'),
-        // Certificate (.crt) and private key (.key) of the Inter application: file path, PEM or base64.
-        'certificate' => env('INTER_CERTIFICATE'),
-        'private_key' => env('INTER_PRIVATE_KEY'),
-        // Only needed when the Inter application is linked to more than one checking account.
-        'conta_corrente' => env('INTER_CONTA_CORRENTE'),
-        // Pix key of the account. With it, invoices are Pix charges with a due date and the
-        // customer gives only name, CPF/CNPJ and e-mail; without it every invoice is a boleto with
-        // Pix ("Bolepix"), which the bank only registers with the payer's address.
-        'pix_key' => env('INTER_PIX_KEY'),
-        // Secret part of the webhook URL (generated and stored automatically when empty).
-        'webhook_token' => env('INTER_WEBHOOK_TOKEN'),
-        'timeout' => (int) env('INTER_TIMEOUT', 30),
+    'efi' => [
+        // "production" or "sandbox" (homologação).
+        'environment' => env('EFI_ENVIRONMENT', 'production'),
+        // Credentials of the Efí application (API > Aplicações), with "API Cobranças" and "API Pix".
+        'client_id' => env('EFI_CLIENT_ID'),
+        'client_secret' => env('EFI_CLIENT_SECRET'),
+        // Certificate of the application (API Pix only, mutual TLS): PEM of the .p12, file path or base64.
+        'certificate' => env('EFI_CERTIFICATE'),
+        'private_key' => env('EFI_PRIVATE_KEY'),
+        // Pix key of the account. With it (and the certificate), invoices are Pix charges with a due
+        // date; without it every invoice is a boleto with a Pix QR code.
+        'pix_key' => env('EFI_PIX_KEY'),
+        // Secret part of the notification URLs (generated and stored automatically when empty).
+        'webhook_token' => env('EFI_WEBHOOK_TOKEN'),
+        'timeout' => (int) env('EFI_TIMEOUT', 30),
     ],
 
     /*

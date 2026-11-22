@@ -137,6 +137,27 @@ it('warns at 80% and soft-throttles tenants above their storage quota', function
         ->and($tenant->fresh()->blockReason())->toContain('100%');
 });
 
+it('counts what the containers use when they share the plan, and what they reserve otherwise', function () {
+    $tenant = billingTenant('basic');
+    config(['platform.plans.basic.quotas.cpus' => 0.5, 'platform.plans.basic.quotas.memory_mb' => 1536, 'platform.metering.interval_minutes' => 5]);
+    $server = Server::forceCreate(['uuid' => (string) new Cuid2, 'name' => 'node', 'ip' => '10.1.1.2', 'team_id' => 0, 'private_key_id' => 1]);
+    // A stack of four containers declared with 0.5 vCPU and 512 MB each, on one node.
+    \App\Models\PlatformAllocation::create(['team_id' => $tenant->team_id, 'resource_type' => 'App\\Models\\Application', 'resource_id' => 1, 'server_id' => $server->id, 'pull_request_id' => 0, 'cpus' => 2.0, 'memory_mb' => 2048, 'containers' => 4]);
+    UsageEvent::insert([
+        ['team_id' => $tenant->team_id, 'metric' => UsageEvent::METRIC_CPU_SECONDS, 'value' => 60, 'recorded_at' => now()->subMinute(), 'created_at' => now()],
+        ['team_id' => $tenant->team_id, 'metric' => UsageEvent::METRIC_MEMORY_BYTE_SECONDS, 'value' => 300 * 314_572_800, 'recorded_at' => now()->subMinute(), 'created_at' => now()],
+    ]);
+
+    $snapshot = \App\Services\Platform\TenantUsage::snapshot($tenant);
+    expect($snapshot['cpus'])->toBe(['used' => 0.2, 'limit' => 0.5, 'percent' => 40.0])
+        ->and($snapshot['memory_mb']['used'])->toBe(300)
+        ->and(TenantLifecycle::evaluate($tenant)->status)->toBe(PlatformTenant::STATUS_ACTIVE);
+
+    config(['platform.container.shared_plan' => false]);
+    expect(\App\Services\Platform\TenantUsage::snapshot($tenant->fresh())['cpus']['used'])->toBe(2.0)
+        ->and(TenantLifecycle::evaluate($tenant->fresh())->status)->toBe(PlatformTenant::STATUS_LIMITED);
+});
+
 it('parses docker output into usage events per tenant', function () {
     $tenant = billingTenant();
     $region = PlatformRegion::create(['slug' => 'sa-east-1', 'name' => 'São Paulo']);
@@ -155,6 +176,8 @@ it('parses docker output into usage events per tenant', function () {
         "volume\tres123uuid_data\t2000000000",
         "volume\tsomeone-else\t5000",
         "dir\tres123uuid\t1000000",
+        "backup\tmaria-s-team-{$tenant->team_id}\t3000000",
+        "backup\troot-team-0\t999",
     ]);
     $sample = UsageCollector::parse($output);
 
@@ -163,8 +186,14 @@ it('parses docker output into usage events per tenant', function () {
         ->and($sample['containers']['abc']['tenant'])->toBe($tenant->team_id)
         ->and($sample['containers']['def']['tenant'])->toBeNull();
 
-    $events = collect(UsageCollector::events($sample, $server, 300, now()->toDateTimeString()))->keyBy('metric');
+    $all = collect(UsageCollector::events($sample, $server, 300, now()->toDateTimeString()));
+    $backups = $all->where('metric', 'storage_bytes')->whereNull('resource_id');
+    $events = $all->reject(fn (array $event) => $event['metric'] === 'storage_bytes' && is_null($event['resource_id']))->keyBy('metric');
 
+    // Local database backups count towards the storage of their team.
+    expect($backups)->toHaveCount(1)
+        ->and($backups->first()['team_id'])->toBe($tenant->team_id)
+        ->and($backups->first()['value'])->toBe(3_000_000.0);
     expect($events)->toHaveCount(4)
         ->and($events['cpu_seconds']['value'])->toBe(150.0)
         ->and($events['memory_byte_seconds']['value'])->toBe(268435456.0 * 300)

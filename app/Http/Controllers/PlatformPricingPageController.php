@@ -13,12 +13,12 @@ class PlatformPricingPageController extends Controller
     public function __invoke(): View
     {
         abort_unless(isPlatform(), 404);
-        $plans = collect(PlanCatalog::all())->map(fn (array $plan, string $key) => [
+        $plans = collect(PlanCatalog::public())->map(fn (array $plan, string $key) => [
             'id' => $key,
             'name' => $plan['name'],
             'description' => $plan['description'] ?? '',
-            'quotas' => $plan['quotas'],
-            'features' => $plan['features'],
+            'definition' => $plan,
+            'highlighted' => (bool) ($plan['highlighted'] ?? false),
             'contact_sales' => (bool) ($plan['contact_sales'] ?? false),
             'monthly' => PlanCatalog::displayPrice($key, PlanCatalog::INTERVAL_MONTHLY),
             'yearly' => PlanCatalog::displayPrice($key, PlanCatalog::INTERVAL_YEARLY),

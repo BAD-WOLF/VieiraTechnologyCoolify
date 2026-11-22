@@ -166,7 +166,7 @@ class PlatformServiceProvider extends ServiceProvider
     /**
      * Coolify (cloud mode) opens the dashboard only to teams whose subscription record is paid, and
      * reads that record only when the subscription provider is "stripe". The platform keeps the
-     * record in sync with its own billing (Banco Inter or Stripe), so the check must read it
+     * record in sync with its own billing (Efí Bank, manual or Stripe), so the check must read it
      * whatever the provider; otherwise every paying tenant is sent back to /subscription/new.
      */
     public static function alignSubscriptionProvider(): void
@@ -408,17 +408,7 @@ class PlatformServiceProvider extends ServiceProvider
             }
         };
 
-        LocalPersistentVolume::creating(function (LocalPersistentVolume $volume) use ($requireFeature) {
-            if (in_array($volume->resource_type, PlatformGate::databaseModels(), true) || $volume->resource_type === ServiceDatabase::class) {
-                return;
-            }
-            $requireFeature($volume, 'persistent_volumes', 'Persistent volumes are available from the Professional plan.');
-        });
-        LocalFileVolume::creating(function (LocalFileVolume $volume) use ($requireFeature) {
-            if ($volume->is_directory && $volume->resource_type === Application::class) {
-                $requireFeature($volume, 'persistent_volumes', 'Directory mounts are available from the Professional plan.');
-            }
-        });
+        // Volumes and directories are on every plan: what they hold counts towards the storage quota.
         ScheduledDatabaseBackup::creating(fn (ScheduledDatabaseBackup $backup) => $requireFeature($backup, 'scheduled_backups', 'Scheduled backups are available from the Professional plan.'));
         ApplicationPreview::creating(fn (ApplicationPreview $preview) => $requireFeature($preview, 'preview_deployments', 'Preview deployments are available from the Professional plan.'));
         foreach (array_merge(PlatformGate::databaseModels(), [ServiceDatabase::class]) as $database) {

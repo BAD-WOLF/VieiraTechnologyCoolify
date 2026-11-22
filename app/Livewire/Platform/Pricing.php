@@ -2,21 +2,21 @@
 
 namespace App\Livewire\Platform;
 
-use App\Livewire\Platform\Concerns\ManagesInterInvoices;
+use App\Livewire\Platform\Concerns\ManagesInvoices;
 use App\Models\PlatformInvoice;
 use App\Services\Platform\BillingProfile;
-use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\StripeBilling;
 use Livewire\Component;
 
 /**
- * Plan selection (Básico, Profissional, Enterprise). Banco Inter: the invoice of the first period
- * is paid with Pix or boleto right here; Stripe: redirects to Stripe Checkout.
+ * Plan selection. Efí (or manual billing): the invoice of the first period is paid with Pix or
+ * boleto right here; Stripe: redirects to Stripe Checkout.
  */
 class Pricing extends Component
 {
-    use ManagesInterInvoices;
+    use ManagesInvoices;
 
     public string $interval = PlanCatalog::INTERVAL_MONTHLY;
 
@@ -25,7 +25,7 @@ class Pricing extends Component
     public function mount(): void
     {
         $tenant = platformTenant();
-        if ($tenant && InterBilling::enabled()) {
+        if ($tenant && PlatformBilling::enabled()) {
             $this->loadProfile($tenant);
             $this->editingProfile = false;
             if ($tenant->billing_interval) {
@@ -50,10 +50,15 @@ class Pricing extends Component
 
                 return null;
             }
-            if (! InterBilling::enabled()) {
+            if (! PlanCatalog::isSelfServe($plan, $this->interval)) {
+                $this->dispatch('error', __('This plan is not available for self-service checkout.'));
+
+                return null;
+            }
+            if (! PlatformBilling::enabled()) {
                 return redirect()->away(StripeBilling::checkoutUrl(currentTeam(), auth()->user(), $plan, $this->interval));
             }
-            if (! InterBilling::ready()) {
+            if (! PlatformBilling::ready()) {
                 $this->dispatch('error', __('Payments are not available yet. Please contact support.'));
 
                 return null;
@@ -65,7 +70,7 @@ class Pricing extends Component
 
                 return null;
             }
-            $result = InterBilling::subscribe($tenant, $plan, $this->interval);
+            $result = PlatformBilling::subscribe($tenant, $plan, $this->interval);
             $this->selectedPlan = null;
             $this->dispatch('success', $result['message']);
             if (in_array($result['action'], ['scheduled', 'kept', 'upgraded'], true)) {
@@ -93,28 +98,31 @@ class Pricing extends Component
         if (! $this->canManageBilling()) {
             return;
         }
-        InterBilling::cancelInvoice($this->teamInvoice($uuid));
+        PlatformBilling::cancelInvoice($this->teamInvoice($uuid));
     }
 
     public function render()
     {
         $tenant = platformTenant();
-        $inter = InterBilling::enabled();
-        $plans = collect(PlanCatalog::all())->map(function (array $plan, string $key) {
-            return [
-                'id' => $key,
-                'name' => $plan['name'],
-                'description' => $plan['description'] ?? '',
-                'quotas' => $plan['quotas'],
-                'features' => $plan['features'],
-                'contact_sales' => (bool) ($plan['contact_sales'] ?? false),
-                'self_serve' => PlanCatalog::isSelfServe($key, $this->interval),
-                'price' => PlanCatalog::displayPrice($key, $this->interval),
-            ];
-        })->values();
-        $pending = $inter && $tenant ? PlatformInvoice::query()
+        $invoicing = PlatformBilling::enabled();
+        // Public plans, and the customer's own plan when the owner keeps it hidden.
+        $plans = collect(PlanCatalog::all())
+            ->filter(fn (array $plan, string $key) => PlanCatalog::isPublic($plan) || $key === $tenant?->plan)
+            ->map(function (array $plan, string $key) {
+                return [
+                    'id' => $key,
+                    'name' => $plan['name'],
+                    'description' => $plan['description'] ?? '',
+                    'definition' => $plan,
+                    'highlighted' => (bool) ($plan['highlighted'] ?? false),
+                    'contact_sales' => (bool) ($plan['contact_sales'] ?? false),
+                    'self_serve' => PlanCatalog::isSelfServe($key, $this->interval),
+                    'price' => PlanCatalog::displayPrice($key, $this->interval),
+                ];
+            })->values();
+        $pending = $invoicing && $tenant ? PlatformInvoice::query()
             ->where('team_id', $tenant->team_id)
-            ->where('provider', InterBilling::PROVIDER)
+            ->where('provider', PlatformBilling::PROVIDER)
             ->where('status', PlatformInvoice::STATUS_OPEN)
             ->whereIn('type', [PlatformInvoice::TYPE_SUBSCRIPTION, PlatformInvoice::TYPE_UPGRADE])
             ->latest('id')
@@ -126,14 +134,13 @@ class Pricing extends Component
 
         return view('livewire.platform.pricing', [
             'plans' => $plans,
-            'currentPlan' => InterBilling::enabled() && $tenant && ! InterBilling::hasActivePlan($tenant) ? null : $tenant?->plan,
+            'currentPlan' => PlatformBilling::enabled() && $tenant && ! PlatformBilling::hasActivePlan($tenant) ? null : $tenant?->plan,
             'pendingPlan' => $tenant?->pending_plan,
             'salesUrl' => config('platform.sales_url') ?: (config('platform.support_email') ? 'mailto:'.config('platform.support_email') : null),
-            'inter' => $inter,
+            'invoicing' => $invoicing,
             'pendingInvoice' => $pending,
             'paidInvoice' => $paid,
             'qr' => self::pixQrSvg(data_get($pending?->payment_details, 'pix_copia_e_cola')),
-            'states' => BillingProfile::STATES,
         ]);
     }
 }

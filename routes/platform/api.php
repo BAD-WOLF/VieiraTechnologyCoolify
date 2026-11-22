@@ -4,7 +4,7 @@ use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\PlatformWebhooksController;
 use App\Http\Controllers\Api\RollbackController;
 use App\Http\Controllers\PlatformEdgeController;
-use App\Http\Controllers\PlatformInterWebhookController;
+use App\Http\Controllers\PlatformEfiWebhookController;
 use App\Http\Controllers\PlatformMetricsController;
 use App\Http\Controllers\PlatformOpenApiController;
 use App\Http\Controllers\PlatformOtlpAuthController;
@@ -25,9 +25,11 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('/v1/billing/webhooks/stripe', [StripeWebhook::class, 'events']);
-Route::post('/v1/billing/webhooks/inter/{token}', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
-// Pix notifications go to the registered URL followed by "/pix" (standard of the Banco Central).
-Route::post('/v1/billing/webhooks/inter/{token}/pix', PlatformInterWebhookController::class)->where('token', '[A-Za-z0-9]{20,100}');
+// Efí: Pix notifications go to the registered URL followed by "/pix" (the address itself gets the
+// test notification of the registration); boletos post a notification token to ".../charges".
+Route::post('/v1/billing/webhooks/efi/{token}', [PlatformEfiWebhookController::class, 'pix'])->where('token', '[A-Za-z0-9]{20,100}');
+Route::post('/v1/billing/webhooks/efi/{token}/pix', [PlatformEfiWebhookController::class, 'pix'])->where('token', '[A-Za-z0-9]{20,100}');
+Route::post('/v1/billing/webhooks/efi/{token}/charges', [PlatformEfiWebhookController::class, 'charges'])->where('token', '[A-Za-z0-9]{20,100}');
 Route::get('/v1/platform/metrics', PlatformMetricsController::class);
 Route::get('/v1/platform/openapi.json', PlatformOpenApiController::class)->name('platform.openapi');
 Route::get('/v1/platform/edge/{region}', PlatformEdgeController::class)->where('region', '[a-z0-9-]+');

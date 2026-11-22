@@ -1,13 +1,13 @@
 <?php
 
-namespace App\Services\Platform\Inter;
+namespace App\Services\Platform\Efi;
 
 use Illuminate\Http\Client\Response;
 
 /**
- * Error returned by the Banco Inter API (message safe to show to the operator).
+ * Error returned by the Efí APIs (message safe to show to the operator).
  */
-class InterException extends \RuntimeException
+class EfiException extends \RuntimeException
 {
     public ?int $status = null;
 
@@ -18,9 +18,11 @@ class InterException extends \RuntimeException
     {
         $body = (array) $response->json();
         $parts = array_filter([
-            data_get($body, 'title'),
-            data_get($body, 'detail'),
-            data_get($body, 'error_description') ?? data_get($body, 'error'),
+            data_get($body, 'title') ?? data_get($body, 'nome'),
+            data_get($body, 'detail') ?? data_get($body, 'mensagem'),
+            is_string(data_get($body, 'error_description')) ? data_get($body, 'error_description') : (is_string(data_get($body, 'error')) ? data_get($body, 'error') : null),
+            // Cobranças API: {"error": "validation_error", "error_description": {"property": "/payment/...", "message": "..."}}
+            is_array(data_get($body, 'error_description')) ? trim(data_get($body, 'error_description.property', '').': '.data_get($body, 'error_description.message', ''), ': ') : null,
         ]);
         foreach ((array) data_get($body, 'violacoes', []) as $violation) {
             $parts[] = trim(data_get($violation, 'propriedade', '').': '.data_get($violation, 'razao', ''), ': ');

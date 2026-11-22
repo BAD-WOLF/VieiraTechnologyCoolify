@@ -159,29 +159,29 @@ class PlatformGate
 
         DB::transaction(function () use ($tenant, $team, $resource, $serverId, $pullRequestId, $result) {
             PlatformTenant::query()->whereKey($tenant->id)->lockForUpdate()->first();
-            $others = PlatformAllocation::query()
-                ->where('team_id', $team->id)
-                ->where(function ($query) use ($resource, $serverId, $pullRequestId) {
-                    $query->where('resource_type', '!=', $resource->getMorphClass())
-                        ->orWhere('resource_id', '!=', $resource->getKey())
-                        ->orWhere('server_id', '!=', $serverId)
-                        ->orWhere('pull_request_id', '!=', $pullRequestId);
-                })
-                ->selectRaw('COALESCE(SUM(cpus), 0) as cpus, COALESCE(SUM(memory_mb), 0) as memory_mb, COALESCE(SUM(containers), 0) as containers')
-                ->first();
+            $perServer = self::reservedPerServer($team->id, function ($query) use ($resource, $serverId, $pullRequestId) {
+                $query->where('resource_type', '!=', $resource->getMorphClass())
+                    ->orWhere('resource_id', '!=', $resource->getKey())
+                    ->orWhere('server_id', '!=', $serverId)
+                    ->orWhere('pull_request_id', '!=', $pullRequestId);
+            });
+            $perServer[$serverId] ??= ['cpus' => 0.0, 'memory_mb' => 0, 'containers' => 0];
+            $perServer[$serverId]['cpus'] += $result['cpus'];
+            $perServer[$serverId]['memory_mb'] += $result['memory_mb'];
+            $perServer[$serverId]['containers'] += $result['containers'];
             $quotas = $tenant->quotas();
+            $total = self::effective($perServer, $quotas);
+            $servers = count(array_filter($perServer, fn (array $reserved) => $reserved['containers'] > 0));
+            $where = $servers > 1 ? sprintf(' on %d servers: run them on the same server, where they share the plan, or lower their limits', $servers) : '';
             $violations = [];
-            $cpus = (float) $others->cpus + $result['cpus'];
-            $memory = (int) $others->memory_mb + $result['memory_mb'];
-            $containers = (int) $others->containers + $result['containers'];
-            if ($quotas['cpus'] > 0 && $cpus > (float) $quotas['cpus'] + 0.0001) {
-                $violations[] = sprintf('CPU quota exceeded (%.2f of %.2f vCPU).', $cpus, $quotas['cpus']);
+            if ($quotas['cpus'] > 0 && $total['cpus'] > (float) $quotas['cpus'] + 0.0001) {
+                $violations[] = sprintf('CPU quota exceeded (%.2f of %.2f vCPU%s).', $total['cpus'], $quotas['cpus'], $where);
             }
-            if ($quotas['memory_mb'] > 0 && $memory > (int) $quotas['memory_mb']) {
-                $violations[] = "Memory quota exceeded ({$memory} of {$quotas['memory_mb']} MB).";
+            if ($quotas['memory_mb'] > 0 && $total['memory_mb'] > (int) $quotas['memory_mb']) {
+                $violations[] = "Memory quota exceeded ({$total['memory_mb']} of {$quotas['memory_mb']} MB{$where}).";
             }
-            if ($quotas['containers'] > 0 && $containers > (int) $quotas['containers']) {
-                $violations[] = "Container quota exceeded ({$containers} of {$quotas['containers']}).";
+            if ($quotas['containers'] > 0 && $total['containers'] > (int) $quotas['containers']) {
+                $violations[] = "Container quota exceeded ({$total['containers']} of {$quotas['containers']}).";
             }
             if (count($violations) > 0) {
                 throw new PlatformPolicyViolation($violations, 'Plan quota exceeded (stop another resource, lower its limits or upgrade your plan)');
@@ -202,7 +202,105 @@ class PlatformGate
             );
         });
 
+        self::logNotices($resource, $pullRequestId, [...$result['notices'], ...self::projectMountNotices($resource, $result['compose'])]);
+
         return $result['compose'];
+    }
+
+    /**
+     * A compose file that mounts directories of the project (".:/app", "./src:/app/src") only finds
+     * the files of the repository there when Coolify keeps them after the build.
+     *
+     * @param  array<string, mixed>  $compose
+     * @return array<int, string>
+     */
+    private static function projectMountNotices(Model $resource, array $compose): array
+    {
+        if (! $resource instanceof Application || $resource->build_pack !== 'dockercompose' || (bool) $resource->settings?->is_preserve_repository_enabled) {
+            return [];
+        }
+        $directory = base_configuration_dir()."/applications/{$resource->uuid}";
+        $directories = $resource->fileStorages()->where('is_directory', true)->pluck('fs_path')->all();
+        $notices = [];
+        foreach ((array) data_get($compose, 'services', []) as $name => $service) {
+            foreach ((array) data_get($service, 'volumes', []) as $volume) {
+                $source = is_string($volume) ? (string) parseDockerVolumeString($volume)['source'] : (string) data_get($volume, 'source', '');
+                if (($source === $directory || str_starts_with($source, $directory.'/')) && in_array($source, $directories, true)) {
+                    $notices[] = "Service \"{$name}\" mounts a directory of the project: turn on \"Preserve Repository During Deployment\" so the files of your repository are there.";
+
+                    continue 2;
+                }
+            }
+        }
+
+        return $notices;
+    }
+
+    /**
+     * What the hardening changed goes into the log of the deployment running for the resource.
+     *
+     * @param  array<int, string>  $notices
+     */
+    private static function logNotices(Model $resource, int $pullRequestId, array $notices): void
+    {
+        if ($notices === [] || ! $resource instanceof Application) {
+            return;
+        }
+        $deployment = ApplicationDeploymentQueue::query()
+            ->where('application_id', $resource->id)
+            ->where('pull_request_id', $pullRequestId)
+            ->where('status', \App\Enums\ApplicationDeploymentStatus::IN_PROGRESS->value)
+            ->latest('id')
+            ->first();
+        foreach ($notices as $notice) {
+            $deployment?->addLogEntry($notice);
+        }
+    }
+
+    /**
+     * Reservations of a team per server.
+     *
+     * @param  (callable(\Illuminate\Database\Eloquent\Builder<PlatformAllocation>): mixed)|null  $filter
+     * @return array<int, array{cpus: float, memory_mb: int, containers: int}>
+     */
+    public static function reservedPerServer(int $teamId, ?callable $filter = null): array
+    {
+        $rows = PlatformAllocation::query()
+            ->where('team_id', $teamId)
+            ->when($filter, fn ($query) => $query->where($filter))
+            ->groupBy('server_id')
+            ->selectRaw('server_id, COALESCE(SUM(cpus), 0) as cpus, COALESCE(SUM(memory_mb), 0) as memory_mb, COALESCE(SUM(containers), 0) as containers')
+            ->get();
+        $perServer = [];
+        foreach ($rows as $row) {
+            $perServer[(int) $row->server_id] = ['cpus' => (float) $row->cpus, 'memory_mb' => (int) $row->memory_mb, 'containers' => (int) $row->containers];
+        }
+
+        return $perServer;
+    }
+
+    /**
+     * What reservations count against the plan. The containers of a tenant on a node share one
+     * slice capped at the plan (hostrema-tenant-limits), so they may each use up to the whole plan
+     * and a node never counts for more than the plan; only resources spread over several nodes add
+     * up beyond it. With "shared_plan" off every container limit counts in full.
+     *
+     * @param  array<int, array{cpus: float, memory_mb: int, containers: int}>  $perServer
+     * @param  array<string, float|int>  $quotas
+     * @return array{cpus: float, memory_mb: int, containers: int}
+     */
+    public static function effective(array $perServer, array $quotas): array
+    {
+        $capped = TenantLimits::sharesPlan();
+        $total = ['cpus' => 0.0, 'memory_mb' => 0, 'containers' => 0];
+        foreach ($perServer as $reserved) {
+            $total['cpus'] += $capped && (float) $quotas['cpus'] > 0 ? min($reserved['cpus'], (float) $quotas['cpus']) : $reserved['cpus'];
+            $total['memory_mb'] += $capped && (int) $quotas['memory_mb'] > 0 ? min($reserved['memory_mb'], (int) $quotas['memory_mb']) : $reserved['memory_mb'];
+            $total['containers'] += $reserved['containers'];
+        }
+        $total['cpus'] = round($total['cpus'], 3);
+
+        return $total;
     }
 
     /**
@@ -226,22 +324,15 @@ class PlatformGate
     }
 
     /**
-     * Current reservations of a team.
+     * Current reservations of a team, as counted against its plan (see effective()).
      *
+     * @param  array<string, float|int>|null  $quotas
      * @return array{cpus: float, memory_mb: int, containers: int}
      */
-    public static function allocated(Team|int $team): array
+    public static function allocated(Team|int $team, ?array $quotas = null): array
     {
         $teamId = $team instanceof Team ? $team->id : $team;
-        $totals = PlatformAllocation::query()
-            ->where('team_id', $teamId)
-            ->selectRaw('COALESCE(SUM(cpus), 0) as cpus, COALESCE(SUM(memory_mb), 0) as memory_mb, COALESCE(SUM(containers), 0) as containers')
-            ->first();
 
-        return [
-            'cpus' => round((float) $totals->cpus, 3),
-            'memory_mb' => (int) $totals->memory_mb,
-            'containers' => (int) $totals->containers,
-        ];
+        return self::effective(self::reservedPerServer($teamId), $quotas ?? PlatformTenant::forTeam($teamId)->quotas());
     }
 }

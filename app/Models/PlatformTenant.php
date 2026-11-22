@@ -9,11 +9,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PlatformTenant extends Model
 {
     /**
-     * Never serialized (API responses, Livewire): payer data and the hash of the OTLP token.
+     * Never serialized (API responses, Livewire): payer data, the hash of the OTLP token and the
+     * notes of the operator.
      *
      * @var list<string>
      */
-    protected $hidden = ['billing_profile', 'otlp_token_hash'];
+    protected $hidden = ['billing_profile', 'otlp_token_hash', 'operator_notes'];
 
     public const STATUS_PENDING = 'pending';
 
@@ -55,6 +56,7 @@ class PlatformTenant extends Model
             'provisioned_at' => 'datetime',
             'billing_profile' => 'encrypted:array',
             'cancel_at_period_end' => 'boolean',
+            'billing_exempt' => 'boolean',
             'otlp_token_created_at' => 'datetime',
         ];
     }

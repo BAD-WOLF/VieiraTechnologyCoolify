@@ -28,6 +28,10 @@ class PlatformRequireTwoFactor
         if (! $user instanceof User || ! isPlatform() || filled($user->two_factor_confirmed_at) || ! self::requiredFor($user)) {
             return $next($request);
         }
+        // An operator (with two factors) accessing the dashboard as a customer.
+        if ($request->hasSession() && \App\Services\Platform\Impersonation::active()) {
+            return $next($request);
+        }
         if ($request->is(...self::ALLOWED_PATHS) || $request->expectsJson()) {
             return $next($request);
         }

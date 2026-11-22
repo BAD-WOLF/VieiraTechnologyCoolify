@@ -11,10 +11,21 @@
                 <a class="button" href="{{ route('login') }}">{{ __('Login') }}</a>
             </div>
         </div>
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div @class([
+            'grid grid-cols-1 gap-6',
+            'lg:grid-cols-2' => count($plans) === 2 || count($plans) >= 4,
+            'lg:grid-cols-3' => count($plans) === 3,
+            'xl:grid-cols-4' => count($plans) >= 4,
+        ])>
             @foreach ($plans as $plan)
-                <div class="flex flex-col gap-4 p-6 border rounded-sm dark:border-coolgray-300 border-neutral-200">
+                <div @class([
+                    'flex flex-col gap-4 p-6 border rounded-sm dark:border-coolgray-300 border-neutral-200',
+                    'ring-2 ring-warning' => $plan['highlighted'],
+                ])>
                     <div>
+                        @if ($plan['highlighted'])
+                            <div class="pb-1 text-xs font-bold uppercase text-warning">{{ __('Recommended') }}</div>
+                        @endif
                         <h2 class="text-2xl font-semibold dark:text-white">{{ $plan['name'] }}</h2>
                         <p class="mt-2 text-sm dark:text-neutral-400">{{ __($plan['description']) }}</p>
                     </div>
@@ -28,32 +39,7 @@
                             <div class="text-xl font-bold">{{ __('Custom pricing') }}</div>
                         @endif
                     </div>
-                    <ul class="flex flex-col gap-1 text-sm dark:text-neutral-300">
-                        <li><strong class="dark:text-white">{{ rtrim(rtrim(number_format($plan['quotas']['cpus'], 2, '.', ''), '0'), '.') }}</strong> vCPU</li>
-                        <li><strong class="dark:text-white">{{ round($plan['quotas']['memory_mb'] / 1024, 1) }} GB</strong> {{ __('RAM') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['storage_gb'] }} GB</strong> {{ __('storage') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['resources'] }}</strong> {{ __('applications, databases or services') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['containers'] }}</strong> {{ __('Containers') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['egress_gb'] }} GB</strong> {{ __('egress included') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['deployments_per_day'] > 0 ? $plan['quotas']['deployments_per_day'] : __('Unlimited') }}</strong> {{ __('deployments per day') }}</li>
-                        <li><strong class="dark:text-white">{{ $plan['quotas']['custom_domains'] > 0 ? $plan['quotas']['custom_domains'] : __('Unlimited') }}</strong> {{ __('Custom domains') }}</li>
-                    </ul>
-                    <ul class="flex flex-col gap-1 text-sm">
-                        @foreach ([
-                            'persistent_volumes' => __('Persistent volumes'),
-                            'scheduled_backups' => __('Scheduled backups'),
-                            'log_export' => __('Log export'),
-                            'preview_deployments' => __('Preview deployments'),
-                            'public_databases' => __('Public databases'),
-                            'dedicated_server' => __('Dedicated nodes (VM isolation)'),
-                            'sso' => __('SSO (SAML/OIDC)'),
-                            'traces' => __('Application traces (OpenTelemetry)'),
-                        ] as $feature => $label)
-                            <li @class(['flex gap-2', 'dark:text-white' => $plan['features'][$feature] ?? false, 'line-through dark:text-neutral-600 text-neutral-400' => ! ($plan['features'][$feature] ?? false)])>
-                                <span>{{ ($plan['features'][$feature] ?? false) ? '✓' : '✗' }}</span>{{ $label }}
-                            </li>
-                        @endforeach
-                    </ul>
+                    @include('platform.partials.plan-details', ['plan' => $plan['definition']])
                     <div class="flex-1"></div>
                     @if ($plan['contact_sales'] && $salesUrl)
                         <a class="w-full button" href="{{ $salesUrl }}">{{ __('Talk to sales') }}</a>
@@ -64,8 +50,8 @@
             @endforeach
         </div>
         <p class="pt-8 text-xs text-center dark:text-neutral-400">
-            {{ __('CPU and memory are hard limits of the plan. Egress and storage above the plan are billed on the next invoice.') }}
-            {{ __('Payment with Pix or boleto (Banco Inter). Upgrades are charged proportionally; downgrades apply on the next renewal.') }}
+            {{ __('Move the pointer over the info icon of each item to see what it means.') }}
+            {{ __('Upgrades are charged proportionally; downgrades apply on the next renewal.') }}
         </p>
         @if ($termsUrl || $privacyUrl)
             <p class="flex justify-center gap-4 pt-2 text-xs">

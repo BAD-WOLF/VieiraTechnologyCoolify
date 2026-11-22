@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\PlatformBrandLogoController;
+use App\Http\Controllers\PlatformImpersonationController;
 use App\Http\Controllers\PlatformPricingPageController;
 use App\Http\Middleware\CheckForcePasswordReset;
 use App\Http\Middleware\DecideWhatToDoWithUser;
@@ -30,6 +31,12 @@ Route::get('/pricing', PlatformPricingPageController::class)->name('platform.pri
 Route::get('/platform/brand/logo.svg', PlatformBrandLogoController::class)
     ->withoutMiddleware([StartSession::class, ShareErrorsFromSession::class, VerifyCsrfToken::class, CheckForcePasswordReset::class, DecideWhatToDoWithUser::class, PlatformRequireTwoFactor::class])
     ->name('platform.brand.logo');
+
+// Whatever the state of the customer's account (unpaid, e-mail not verified), the operator can go back.
+Route::post('/platform/impersonation/stop', [PlatformImpersonationController::class, 'stop'])
+    ->middleware(['auth'])
+    ->withoutMiddleware([DecideWhatToDoWithUser::class, CheckForcePasswordReset::class, PlatformRequireTwoFactor::class])
+    ->name('platform.impersonation.stop');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/platform/onboarding', Onboarding::class)->name('platform.onboarding');

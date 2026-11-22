@@ -3,48 +3,56 @@
 namespace App\Services\Platform;
 
 use App\Actions\Platform\ProvisionTenant;
-use App\Jobs\PlatformInterSyncInvoiceJob;
+use App\Jobs\PlatformSyncInvoiceJob;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
 use App\Models\Subscription;
-use App\Services\Platform\Inter\InterClient;
-use App\Services\Platform\Inter\InterSettings;
+use App\Services\Platform\Efi\EfiClient;
+use App\Services\Platform\Efi\EfiSettings;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
- * Subscriptions charged through Banco Inter: a Pix charge with a due date (when the operator set
- * the Pix key of the account) or, for customers who choose it, a boleto with Pix ("Bolepix").
+ * Subscriptions of the platform charged through Efí Bank: a Pix charge with a due date (when the
+ * owner set the Pix key and the certificate of the Efí application) or, for customers who choose
+ * it, a boleto with a Pix QR code ("Bolix"). Without Efí, the "manual" provider issues the same
+ * invoices and the owner confirms each payment.
  *
- * - Checkout: an invoice for the first period is issued as an Inter charge; the plan starts when it is paid.
+ * - Checkout: an invoice for the first period is issued as an Efí charge; the plan starts when it is paid.
  * - Renewal: at the end of each period an invoice with the next period and the usage overage of the
  *   closed period is issued, due in `platform.billing.due_days`; unpaid invoices make the tenant
  *   past due and TenantLifecycle suspends it after 7 days and stops it after 30 days.
  * - Upgrades are charged pro rata and applied when paid; downgrades and interval changes apply on
- *   the next renewal; cancellation ends the subscription at the end of the period.
- * - Payment confirmation comes from the Inter webhook (re-checked through the API, never trusted
- *   as is) and from a periodic reconciliation of the open invoices.
+ *   the next renewal; cancellation ends the subscription at the end of the period. Courtesy
+ *   accounts renew without invoices.
+ * - Payment confirmation comes from the Efí notifications (re-checked through the API, never
+ *   trusted as is) and from a periodic reconciliation of the open invoices.
  */
-class InterBilling
+class PlatformBilling
 {
-    public const PROVIDER = 'inter';
+    public const PROVIDER = 'efi';
 
     /**
-     * Status of a Bolepix charge (situacao) or of a Pix charge (status) once it is paid.
+     * Status of a boleto (Cobranças API) or of a Pix charge (status of the cobv) once it is paid.
      */
-    public const PAID_STATUSES = ['RECEBIDO', 'MARCADO_RECEBIDO', 'CONCLUIDA'];
+    public const PAID_STATUSES = ['paid', 'settled', 'CONCLUIDA'];
 
-    public const VOID_STATUSES = ['CANCELADO', 'EXPIRADO', 'FALHA_EMISSAO', 'REMOVIDA_PELO_USUARIO_RECEBEDOR', 'REMOVIDA_PELO_PSP'];
+    public const VOID_STATUSES = ['canceled', 'expired', 'REMOVIDA_PELO_USUARIO_RECEBEDOR', 'REMOVIDA_PELO_PSP'];
+
+    /**
+     * Boleto not paid by its due date (it can still be paid until it is written off).
+     */
+    public const OVERDUE_STATUSES = ['unpaid'];
 
     /**
      * How an invoice was issued at the bank (metadata "rail").
      */
     public const RAIL_PIX = 'pix';
 
-    public const RAIL_BOLEPIX = 'bolepix';
+    public const RAIL_BOLETO = 'boleto';
 
     private const MAX_ISSUE_ATTEMPTS = 5;
 
@@ -66,7 +74,7 @@ class InterBilling
 
     public static function ready(): bool
     {
-        return self::enabled() && (self::isManual() || InterSettings::isConfigured());
+        return self::enabled() && (self::isManual() || EfiSettings::isConfigured());
     }
 
     public static function allowsSimulatedPayments(): bool
@@ -74,21 +82,14 @@ class InterBilling
         return self::enabled() && (bool) config('platform.billing.allow_simulated_payments', false);
     }
 
-    public static function client(): InterClient
+    public static function client(): EfiClient
     {
-        return app(InterClient::class);
+        return app(EfiClient::class);
     }
 
     public static function priceCents(?string $plan, ?string $interval): ?int
     {
-        if (! PlanCatalog::exists($plan)) {
-            return null;
-        }
-        $interval = $interval === PlanCatalog::INTERVAL_YEARLY ? PlanCatalog::INTERVAL_YEARLY : PlanCatalog::INTERVAL_MONTHLY;
-        // Settings > Plans (or the Billing tab) override the config; older consoles stored "price.*".
-        $legacy = PlatformConfig::isOverridden("platform.plans.{$plan}.price_{$interval}") ? null : PlatformSetting::get("price.{$plan}.{$interval}");
-
-        return self::toCents(filled($legacy) ? $legacy : data_get(PlanCatalog::get($plan), "price_{$interval}"));
+        return PlanCatalog::priceCents($plan, $interval);
     }
 
     /**
@@ -260,7 +261,7 @@ class InterBilling
     }
 
     /**
-     * Registers the invoice at Banco Inter (boleto + Pix). The payment data arrives asynchronously.
+     * Registers the invoice at Efí: a Pix charge, or a boleto with Pix for customers who chose it.
      */
     public static function issue(PlatformInvoice $invoice): PlatformInvoice
     {
@@ -279,28 +280,46 @@ class InterBilling
         if (BillingProfile::methodOf($tenant) === BillingProfile::PIX) {
             return self::issuePix($invoice, $tenant);
         }
+
+        return self::issueBoleto($invoice, $tenant);
+    }
+
+    /**
+     * Boleto with a Pix QR code ("Bolix", API Cobranças): name, CPF/CNPJ and phone of the payer,
+     * no address. The barcode, the Pix code and the PDF come back at once.
+     */
+    private static function issueBoleto(PlatformInvoice $invoice, PlatformTenant $tenant): PlatformInvoice
+    {
         $billing = (array) config('platform.billing', []);
+        $configurations = [
+            // 200 = 2%; up to 10%.
+            'fine' => (int) round(min(10, max(0, (float) ($billing['fine_percent'] ?? 0))) * 100),
+            // Per day: 33 = 0,033% (1% a month); up to 0,33% a day.
+            'interest' => (int) round(min(0.33, max(0, (float) ($billing['interest_percent_month'] ?? 0)) / 30) * 1000),
+        ];
         $payload = [
-            'seuNumero' => $invoice->number,
-            'valorNominal' => round($invoice->amount_cents / 100, 2),
-            'dataVencimento' => $invoice->due_date->toDateString(),
-            'numDiasAgenda' => max(0, min(60, (int) ($billing['cancel_after_days'] ?? 30))),
-            'pagador' => BillingProfile::payer($tenant),
-            'mensagem' => [
-                'linha1' => Str::limit(config('platform.name').' - '.self::describe($invoice), 78, ''),
-                'linha2' => Str::limit(__('Period').': '.$invoice->period_start->format('d/m/Y').' - '.$invoice->period_end->format('d/m/Y'), 78, ''),
+            'items' => [[
+                'name' => Str::limit(config('platform.name').' - '.self::describe($invoice), 255, ''),
+                'value' => (int) $invoice->amount_cents,
+                'amount' => 1,
+            ]],
+            'metadata' => [
+                'custom_id' => (string) $invoice->number,
+                'notification_url' => EfiSettings::notificationUrl(),
+            ],
+            'payment' => [
+                'banking_billet' => [
+                    'expire_at' => $invoice->due_date->toDateString(),
+                    'customer' => BillingProfile::boletoCustomer($tenant),
+                    'configurations' => array_merge($configurations, ['days_to_write_off' => max(0, min(120, (int) ($billing['cancel_after_days'] ?? 30)))]),
+                    'message' => Str::limit(__('Period').': '.$invoice->period_start->format('d/m/Y').' - '.$invoice->period_end->format('d/m/Y').' - '.$invoice->number, 100, ''),
+                ],
             ],
         ];
-        if (($fine = (float) ($billing['fine_percent'] ?? 0)) > 0) {
-            $payload['multa'] = ['codigo' => 'PERCENTUAL', 'taxa' => round($fine, 2)];
-        }
-        if (($interest = (float) ($billing['interest_percent_month'] ?? 0)) > 0) {
-            $payload['mora'] = ['codigo' => 'TAXAMENSAL', 'taxa' => round($interest, 2)];
-        }
 
         $metadata = (array) $invoice->metadata;
         try {
-            $code = self::client()->createCharge($payload);
+            $data = self::client()->createBoleto($payload);
         } catch (\Throwable $e) {
             $metadata['issue_attempts'] = (int) ($metadata['issue_attempts'] ?? 0) + 1;
             $metadata['issue_error'] = Str::limit($e->getMessage(), 500);
@@ -308,21 +327,41 @@ class InterBilling
             audit_log('platform.invoice.issue_failed', $invoice, ['error' => $metadata['issue_error']], $invoice->team_id, 'system');
             throw $e;
         }
-        $metadata['references'] = array_values(array_unique([...(array) ($metadata['references'] ?? []), $code]));
-        $metadata['rail'] = self::RAIL_BOLEPIX;
+        $chargeId = (string) $data['charge_id'];
+        $metadata['references'] = array_values(array_unique([...(array) ($metadata['references'] ?? []), $chargeId]));
+        $metadata['rail'] = self::RAIL_BOLETO;
         unset($metadata['issue_error'], $metadata['issue_attempts']);
         $invoice->forceFill([
             'provider' => self::PROVIDER,
-            'provider_reference' => $code,
-            'provider_status' => 'EM_PROCESSAMENTO',
+            'provider_reference' => $chargeId,
+            'provider_status' => (string) ($data['status'] ?? 'waiting'),
             'status' => PlatformInvoice::STATUS_OPEN,
-            'payment_details' => null,
+            'payment_details' => self::boletoDetails($data),
             'metadata' => $metadata,
+            'synced_at' => now(),
         ])->save();
-        audit_log('platform.invoice.issued', $invoice, ['reference' => $code], $invoice->team_id, 'system');
-        PlatformInterSyncInvoiceJob::dispatch($invoice->id)->delay(now()->addSeconds(5));
+        audit_log('platform.invoice.issued', $invoice, ['reference' => $chargeId, 'rail' => self::RAIL_BOLETO], $invoice->team_id, 'system');
+        self::notifyIssued($invoice);
 
         return $invoice;
+    }
+
+    /**
+     * Payment data of a boleto from the answers of the Cobranças API ("data" of the one-step
+     * charge or of the charge itself).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, string>
+     */
+    private static function boletoDetails(array $data): array
+    {
+        $billet = (array) (data_get($data, 'payment.banking_billet') ?? []);
+
+        return array_filter([
+            'linha_digitavel' => data_get($data, 'barcode') ?? data_get($billet, 'barcode'),
+            'pix_copia_e_cola' => data_get($data, 'pix.qrcode') ?? data_get($billet, 'pix.qrcode'),
+            'boleto_url' => data_get($data, 'pdf.charge') ?? data_get($billet, 'pdf.charge') ?? data_get($data, 'billet_link') ?? data_get($billet, 'link') ?? data_get($data, 'link'),
+        ], fn ($value) => is_string($value) && $value !== '');
     }
 
     /**
@@ -336,11 +375,11 @@ class InterBilling
         $value = ['original' => number_format($invoice->amount_cents / 100, 2, '.', '')];
         if (($fine = (float) ($billing['fine_percent'] ?? 0)) > 0) {
             // Modalidade 2: percentage of the value.
-            $value['multa'] = ['modalidade' => '2', 'valorPerc' => number_format($fine, 2, '.', '')];
+            $value['multa'] = ['modalidade' => 2, 'valorPerc' => number_format($fine, 2, '.', '')];
         }
         if (($interest = (float) ($billing['interest_percent_month'] ?? 0)) > 0) {
             // Modalidade 3: percentage per month, calendar days.
-            $value['juros'] = ['modalidade' => '3', 'valorPerc' => number_format($interest, 2, '.', '')];
+            $value['juros'] = ['modalidade' => 3, 'valorPerc' => number_format($interest, 2, '.', '')];
         }
         $payload = [
             'calendario' => [
@@ -349,7 +388,7 @@ class InterBilling
             ],
             'devedor' => BillingProfile::debtor($tenant),
             'valor' => $value,
-            'chave' => (string) InterSettings::pixKey(),
+            'chave' => (string) EfiSettings::pixKey(),
             'solicitacaoPagador' => Str::limit(config('platform.name').' - '.self::describe($invoice).' - '.$invoice->number, 140, ''),
         ];
 
@@ -446,9 +485,9 @@ class InterBilling
     }
 
     /**
-     * Reads the charge from Banco Inter and applies its status to the invoice.
+     * Reads the charge from Efí and applies its status to the invoice.
      */
-    public static function sync(PlatformInvoice $invoice): PlatformInvoice
+    public static function sync(PlatformInvoice $invoice, ?int $amountPaidCents = null): PlatformInvoice
     {
         if (blank($invoice->provider_reference)) {
             return $invoice;
@@ -457,15 +496,8 @@ class InterBilling
             return self::syncPix($invoice);
         }
         $data = self::client()->charge($invoice->provider_reference);
-        $charge = (array) data_get($data, 'cobranca', []);
-        $status = (string) data_get($charge, 'situacao', '');
-        $details = array_filter([
-            'linha_digitavel' => data_get($data, 'boleto.linhaDigitavel'),
-            'codigo_barras' => data_get($data, 'boleto.codigoBarras'),
-            'nosso_numero' => data_get($data, 'boleto.nossoNumero'),
-            'txid' => data_get($data, 'pix.txid'),
-            'pix_copia_e_cola' => data_get($data, 'pix.pixCopiaECola'),
-        ], fn ($value) => filled($value));
+        $status = (string) data_get($data, 'status', '');
+        $details = self::boletoDetails($data);
         $hadDetails = self::hasPaymentData($invoice);
         $invoice->forceFill([
             'provider_status' => $status !== '' ? $status : $invoice->provider_status,
@@ -474,22 +506,18 @@ class InterBilling
         ])->save();
 
         if (in_array($status, self::PAID_STATUSES, true)) {
-            self::markPaid(
-                $invoice,
-                self::toCents(data_get($charge, 'valorTotalRecebido')) ?? $invoice->amount_cents,
-                data_get($charge, 'origemRecebimento'),
-                self::parseDate(data_get($charge, 'dataSituacao')),
-            );
+            // The amount received (with fine and interest) comes with the notification.
+            self::markPaid($invoice, $amountPaidCents ?? $invoice->amount_cents, $status === 'settled' ? 'MANUAL' : 'BOLETO');
         } elseif (in_array($status, self::VOID_STATUSES, true) && $invoice->status === PlatformInvoice::STATUS_OPEN) {
             $invoice->forceFill([
                 'status' => PlatformInvoice::STATUS_VOID,
-                'metadata' => array_merge((array) $invoice->metadata, ['void_reason' => $status, 'motivo' => data_get($charge, 'motivoCancelamento')]),
+                'metadata' => array_merge((array) $invoice->metadata, ['void_reason' => $status]),
             ])->save();
             audit_log('platform.invoice.void', $invoice, ['status' => $status], $invoice->team_id, 'system');
         } elseif (! $hadDetails && $details !== [] && $invoice->status === PlatformInvoice::STATUS_OPEN) {
             self::notifyIssued($invoice->fresh());
         }
-        if ($status === 'ATRASADO') {
+        if (in_array($status, self::OVERDUE_STATUSES, true)) {
             self::flagOverdue($invoice->fresh());
         }
 
@@ -684,6 +712,11 @@ class InterBilling
 
             return null;
         }
+        if ($tenant->billing_exempt) {
+            self::renewWithoutCharge($tenant);
+
+            return null;
+        }
         $start = CarbonImmutable::instance($tenant->current_period_end);
         $existing = PlatformInvoice::query()
             ->where('team_id', $tenant->team_id)
@@ -726,6 +759,24 @@ class InterBilling
         }
 
         return $invoice;
+    }
+
+    /**
+     * Courtesy accounts (see the operator console): the period moves on without an invoice.
+     */
+    public static function renewWithoutCharge(PlatformTenant $tenant): void
+    {
+        $interval = $tenant->billing_interval ?: PlanCatalog::INTERVAL_MONTHLY;
+        $start = CarbonImmutable::instance($tenant->current_period_end ?? now());
+        $plan = PlanCatalog::exists($tenant->pending_plan) ? $tenant->pending_plan : $tenant->plan;
+        $tenant->update([
+            'plan' => $plan,
+            'current_period_start' => $start,
+            'current_period_end' => self::periodEnd($start, $interval),
+            'pending_plan' => null,
+            'pending_interval' => null,
+        ]);
+        audit_log('platform.subscription.renewed_without_charge', $tenant, ['plan' => $plan], $tenant->team_id, 'system');
     }
 
     public static function endSubscription(PlatformTenant $tenant): void
@@ -798,7 +849,7 @@ class InterBilling
 
                     return;
                 }
-                PlatformInterSyncInvoiceJob::dispatch($invoice->id);
+                PlatformSyncInvoiceJob::dispatch($invoice->id);
                 $count++;
             });
 
@@ -806,44 +857,49 @@ class InterBilling
     }
 
     /**
-     * Webhook of the Inter charges: only the codes are used, the status is read from the API.
+     * Pix notifications of the key (standard of the Banco Central): {"pix": [{"txid": ...}]}. Only
+     * the txid is used; the charge is read again from the Pix API.
      *
      * @param  array<mixed>  $payload
      */
     public static function handleWebhook(array $payload): int
     {
         $count = 0;
-        // Pix of the key (standard of the Banco Central): {"pix": [{"txid": ..., "endToEndId": ...}]}.
-        if (! array_is_list($payload) && is_array($payload['pix'] ?? null)) {
-            foreach ($payload['pix'] as $pix) {
-                $txid = (string) data_get($pix, 'txid', '');
-                $invoice = $txid === '' ? null : PlatformInvoice::query()->where('provider', self::PROVIDER)->where('provider_reference', $txid)->first();
-                if ($invoice) {
-                    PlatformInterSyncInvoiceJob::dispatch($invoice->id);
-                    $count++;
-                }
-            }
-            PlatformSetting::put('inter.last_webhook_at', now()->toIso8601String());
-
-            return $count;
-        }
-        $items = array_is_list($payload) ? $payload : (array) ($payload['cobrancas'] ?? [$payload]);
-        foreach ($items as $item) {
-            $code = (string) data_get($item, 'codigoSolicitacao', '');
-            $number = (string) data_get($item, 'seuNumero', '');
-            $invoice = PlatformInvoice::query()->where('provider', self::PROVIDER)
-                ->where(function ($query) use ($code, $number) {
-                    $query->when($code !== '', fn ($query) => $query->orWhere('provider_reference', $code))
-                        ->when($number !== '', fn ($query) => $query->orWhere('number', $number));
-                })
-                ->when($code === '' && $number === '', fn ($query) => $query->whereRaw('1 = 0'))
-                ->first();
+        foreach ((array) ($payload['pix'] ?? []) as $pix) {
+            $txid = (string) data_get($pix, 'txid', '');
+            $invoice = $txid === '' ? null : PlatformInvoice::query()->where('provider', self::PROVIDER)->where('provider_reference', $txid)->first();
             if ($invoice) {
-                PlatformInterSyncInvoiceJob::dispatch($invoice->id);
+                PlatformSyncInvoiceJob::dispatch($invoice->id);
                 $count++;
             }
         }
-        PlatformSetting::put('inter.last_webhook_at', now()->toIso8601String());
+        PlatformSetting::put('efi.last_webhook_at', now()->toIso8601String());
+
+        return $count;
+    }
+
+    /**
+     * Notification of the boletos: Efí posts only a token; the changes it stands for are read
+     * from the Cobranças API, and each charge again before its invoice changes.
+     */
+    public static function handleChargeNotification(string $token): int
+    {
+        $count = 0;
+        $charges = [];
+        foreach (self::client()->notification($token) as $change) {
+            $chargeId = (string) data_get($change, 'identifiers.charge_id', '');
+            if ($chargeId !== '') {
+                $charges[$chargeId] = data_get($change, 'status.current') === 'paid' && is_numeric(data_get($change, 'value')) ? (int) data_get($change, 'value') : ($charges[$chargeId] ?? null);
+            }
+        }
+        foreach ($charges as $chargeId => $value) {
+            $invoice = PlatformInvoice::query()->where('provider', self::PROVIDER)->where('provider_reference', (string) $chargeId)->first();
+            if ($invoice) {
+                PlatformSyncInvoiceJob::dispatch($invoice->id, 0, $value);
+                $count++;
+            }
+        }
+        PlatformSetting::put('efi.last_webhook_at', now()->toIso8601String());
 
         return $count;
     }
@@ -896,49 +952,52 @@ class InterBilling
     }
 
     /**
-     * Registers the webhook of the boleto charges and, with a Pix key, the Pix webhook of the key.
+     * Checks the credentials and registers the Pix webhook of the key. Boletos need no
+     * registration: each one carries its notification address.
      *
      * @return array{url: string, registered: array<int, string>, errors: array<string, string>}
      */
     public static function registerWebhooks(): array
     {
-        $url = InterSettings::webhookUrl();
+        $url = EfiSettings::webhookUrl();
         $registered = [];
         $errors = [];
         foreach (BillingProfile::methods() as $method) {
             try {
-                $method === BillingProfile::PIX
-                    ? self::client()->registerPixWebhook((string) InterSettings::pixKey(), $url)
-                    : self::client()->registerWebhook($url);
+                if ($method === BillingProfile::PIX) {
+                    self::client()->registerPixWebhook((string) EfiSettings::pixKey(), $url);
+                } else {
+                    self::client()->token(EfiClient::API_CHARGES, true);
+                }
                 $registered[] = $method;
             } catch (\Throwable $e) {
                 $errors[$method] = $e->getMessage();
             }
         }
-        if ($registered !== []) {
-            PlatformSetting::put('inter.webhook_registered_at', now()->toIso8601String());
-            PlatformSetting::put('inter.webhook_registered_url', $url);
-            audit_log('platform.inter.webhook_registered', null, ['url' => preg_replace('#/[^/]+$#', '/***', $url), 'methods' => $registered], 0);
+        if (in_array(BillingProfile::PIX, $registered, true)) {
+            PlatformSetting::put('efi.webhook_registered_at', now()->toIso8601String());
+            PlatformSetting::put('efi.webhook_registered_url', $url);
+            audit_log('platform.efi.webhook_registered', null, ['url' => preg_replace('#/[^/]+$#', '/***', $url)], 0);
         }
 
         return ['url' => $url, 'registered' => $registered, 'errors' => $errors];
     }
 
     /**
-     * Sandbox only: the boleto charges are paid through the sandbox API; Pix charges have no
-     * payment endpoint there, so their confirmation is recorded directly.
+     * Sandbox only: a boleto is settled through the API; Pix charges have no payment endpoint
+     * there, so their confirmation is recorded directly.
      */
     public static function simulatePayment(PlatformInvoice $invoice, string $actorType = 'user'): void
     {
-        if (! InterSettings::isSandbox() || blank($invoice->provider_reference)) {
-            throw new \RuntimeException(__('Payments can only be simulated with the manual provider or the Inter sandbox.'));
+        if (! EfiSettings::isSandbox() || blank($invoice->provider_reference)) {
+            throw new \RuntimeException(__('Payments can only be simulated with the manual provider or the Efí sandbox.'));
         }
         if (self::isPix($invoice)) {
             self::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), $actorType);
 
             return;
         }
-        self::client()->simulatePayment((string) $invoice->provider_reference, 'PIX');
+        self::client()->settleCharge((string) $invoice->provider_reference);
         self::sync($invoice);
     }
 

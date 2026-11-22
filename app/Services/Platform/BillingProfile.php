@@ -9,34 +9,30 @@ use Illuminate\Validation\Rule;
 /**
  * Payer details of a tenant, stored encrypted in platform_tenants.billing_profile.
  *
- * Pix needs only the name and the CPF/CNPJ. The address is asked only from customers who pay with
- * boleto, because the bank registers a boleto only with the payer's address.
+ * Efí needs only the name and the CPF/CNPJ (and a phone number for boletos): the address of the
+ * customer is never asked.
  */
 class BillingProfile
 {
-    public const STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
-
-    public const FIELDS = ['name', 'document', 'email', 'phone', 'payment_method', 'zip', 'street', 'number', 'complement', 'district', 'city', 'state'];
-
-    public const ADDRESS_FIELDS = ['zip', 'street', 'number', 'complement', 'district', 'city', 'state'];
+    public const FIELDS = ['name', 'document', 'email', 'phone', 'payment_method'];
 
     public const PIX = 'pix';
 
     public const BOLETO = 'boleto';
 
     /**
-     * Payment methods the customer can choose: Pix needs the Pix key of the operator, the boleto
-     * comes with the Inter charges API.
+     * Payment methods the customer can choose: Pix needs the Pix key and the certificate of the
+     * Efí application, the boleto (with a Pix QR code) only its credentials.
      *
      * @return array<int, string>
      */
     public static function methods(): array
     {
-        if (! InterBilling::enabled() || InterBilling::isManual()) {
+        if (! PlatformBilling::enabled() || PlatformBilling::isManual() || ! Efi\EfiSettings::isConfigured()) {
             return [];
         }
 
-        return filled(Inter\InterSettings::pixKey()) ? [self::PIX, self::BOLETO] : [self::BOLETO];
+        return Efi\EfiSettings::pixReady() ? [self::PIX, self::BOLETO] : [self::BOLETO];
     }
 
     /**
@@ -57,7 +53,10 @@ class BillingProfile
         return self::method(data_get($tenant->billing_profile, 'payment_method'));
     }
 
-    public static function needsAddress(?string $chosen): bool
+    /**
+     * Boletos are registered with a phone number of the payer.
+     */
+    public static function needsPhone(?string $chosen): bool
     {
         return self::method($chosen) === self::BOLETO;
     }
@@ -67,8 +66,6 @@ class BillingProfile
      */
     public static function rules(string $prefix = '', ?string $method = null): array
     {
-        $address = self::needsAddress($method);
-
         return [
             $prefix.'name' => ['required', 'string', 'max:100'],
             $prefix.'document' => ['required', 'string', 'max:20', function (string $attribute, mixed $value, \Closure $fail) {
@@ -77,15 +74,12 @@ class BillingProfile
                 }
             }],
             $prefix.'email' => ['required', 'email', 'max:100'],
-            $prefix.'phone' => ['nullable', 'string', 'max:20'],
+            $prefix.'phone' => [self::needsPhone($method) ? 'required' : 'nullable', 'string', 'max:20', function (string $attribute, mixed $value, \Closure $fail) {
+                if (filled($value) && ! in_array(strlen(self::localPhone((string) $value)), [10, 11], true)) {
+                    $fail(__('Type the phone number with the area code, e.g. (11) 98888-7777.'));
+                }
+            }],
             $prefix.'payment_method' => ['nullable', Rule::in([self::PIX, self::BOLETO])],
-            $prefix.'zip' => [$address ? 'required' : 'nullable', 'regex:/^\d{5}-?\d{3}$/'],
-            $prefix.'street' => [$address ? 'required' : 'nullable', 'string', 'max:90'],
-            $prefix.'number' => ['nullable', 'string', 'max:10'],
-            $prefix.'complement' => ['nullable', 'string', 'max:30'],
-            $prefix.'district' => ['nullable', 'string', 'max:60'],
-            $prefix.'city' => [$address ? 'required' : 'nullable', 'string', 'max:60'],
-            $prefix.'state' => [$address ? 'required' : 'nullable', Rule::in(self::STATES)],
         ];
     }
 
@@ -113,51 +107,43 @@ class BillingProfile
     {
         $profile = collect(self::FIELDS)->mapWithKeys(fn (string $field) => [$field => trim((string) ($data[$field] ?? ''))])->all();
         $profile['document'] = self::digits($profile['document']);
-        $profile['zip'] = self::digits($profile['zip']);
-        $profile['state'] = strtoupper($profile['state']);
         $profile['payment_method'] = self::method($profile['payment_method']) ?? '';
-        if (! self::needsAddress($profile['payment_method']) && blank($profile['street'])) {
-            // An address typed halfway is useless: kept only for boleto payers.
-            foreach (self::ADDRESS_FIELDS as $field) {
-                $profile[$field] = '';
-            }
-        }
         $tenant->update(['billing_profile' => $profile]);
         audit_log('platform.billing_profile.updated', $tenant, ['fields' => array_keys(array_filter($profile))], $tenant->team_id);
     }
 
     /**
-     * Payer ("pagador") of the Inter charge.
+     * Customer of an Efí boleto: name and CPF, or company name and CNPJ, with e-mail and phone.
      *
-     * @return array<string, string>
+     * @return array<string, mixed>
      */
-    public static function payer(PlatformTenant $tenant): array
+    public static function boletoCustomer(PlatformTenant $tenant): array
     {
         $profile = self::of($tenant);
         $document = self::digits($profile['document']);
-        $phone = self::digits($profile['phone']);
-        if (strlen($phone) > 11 && str_starts_with($phone, '55')) {
-            $phone = substr($phone, 2);
+        $name = Str::limit($profile['name'], 255, '');
+        $customer = strlen($document) === 14
+            ? ['juridical_person' => ['corporate_name' => $name, 'cnpj' => $document]]
+            : ['name' => $name, 'cpf' => $document];
+        if (filled($profile['email'])) {
+            $customer['email'] = Str::limit($profile['email'], 255, '');
         }
-        $payer = [
-            'cpfCnpj' => $document,
-            'tipoPessoa' => strlen($document) === 14 ? 'JURIDICA' : 'FISICA',
-            'nome' => Str::limit($profile['name'], 100, ''),
-            'endereco' => Str::limit($profile['street'], 90, ''),
-            'numero' => Str::limit($profile['number'], 10, ''),
-            'complemento' => Str::limit($profile['complement'], 30, ''),
-            'bairro' => Str::limit($profile['district'], 60, ''),
-            'cidade' => Str::limit($profile['city'], 60, ''),
-            'uf' => strtoupper($profile['state']),
-            'cep' => self::digits($profile['zip']),
-            'email' => Str::limit($profile['email'], 100, ''),
-        ];
-        if (strlen($phone) >= 10) {
-            $payer['ddd'] = substr($phone, 0, 2);
-            $payer['telefone'] = substr($phone, 2);
+        $phone = self::localPhone($profile['phone']);
+        if (in_array(strlen($phone), [10, 11], true)) {
+            $customer['phone_number'] = $phone;
         }
 
-        return array_filter($payer, fn (string $value) => $value !== '');
+        return $customer;
+    }
+
+    /**
+     * Phone with the area code, without the country code: "(11) 98888-7777" -> "11988887777".
+     */
+    public static function localPhone(?string $phone): string
+    {
+        $digits = self::digits($phone);
+
+        return strlen($digits) > 11 && str_starts_with($digits, '55') ? substr($digits, 2) : $digits;
     }
 
     /**

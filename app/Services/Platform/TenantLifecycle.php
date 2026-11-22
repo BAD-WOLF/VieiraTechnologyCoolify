@@ -117,7 +117,7 @@ class TenantLifecycle
         if (($snapshot['storage_gb']['percent'] ?? 0) >= 100) {
             return true;
         }
-        foreach (['cpus', 'memory_mb', 'containers', 'resources'] as $key) {
+        foreach (array_diff(TenantUsage::hardLimits(), ['storage_gb']) as $key) {
             if (($snapshot[$key]['percent'] ?? 0) > 100) {
                 return true;
             }

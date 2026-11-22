@@ -12,8 +12,9 @@ use Illuminate\Support\Facades\Cache;
  * Metering of tenant containers on a node (wiki 8: instrumentation -> usage_events).
  *
  * One SSH round trip per node collects container ownership (label set by the platform hardening),
- * docker stats (CPU %, memory, network tx) and, once per hour, storage per volume/directory.
- * Samples are converted into usage events per tenant and resource.
+ * docker stats (CPU %, memory, network tx) and, once per hour, storage per volume/directory and
+ * the local database backups of each team. Samples are converted into usage events per tenant
+ * and resource.
  */
 class UsageCollector
 {
@@ -39,17 +40,20 @@ class UsageCollector
             $commands[] = 'echo '.self::STORAGE_MARKER;
             $commands[] = 'for v in $(docker volume ls -q); do p=$(docker volume inspect -f \'{{.Mountpoint}}\' "$v" 2>/dev/null); s=$(du -sb "$p" 2>/dev/null | cut -f1); printf \'volume\t%s\t%s\n\' "$v" "${s:-0}"; done';
             $commands[] = "for d in {$base}/applications/* {$base}/services/* {$base}/databases/*; do [ -d \"\$d\" ] && printf 'dir\\t%s\\t%s\\n' \"\$(basename \"\$d\")\" \"\$(du -sb \"\$d\" 2>/dev/null | cut -f1)\"; done; true";
+            // Database backups kept on the node, one directory per team ("<team-slug>-<team id>").
+            $backups = backup_dir().'/databases';
+            $commands[] = "for d in {$backups}/*; do [ -d \"\$d\" ] && printf 'backup\\t%s\\t%s\\n' \"\$(basename \"\$d\")\" \"\$(du -sb \"\$d\" 2>/dev/null | cut -f1)\"; done; true";
         }
 
         return $commands;
     }
 
     /**
-     * @return array{containers: array<string, array{name: string, tenant: ?int}>, stats: array<string, array{cpu_percent: float, memory_bytes: int, net_tx_bytes: int}>, volumes: array<string, int>, directories: array<string, int>}
+     * @return array{containers: array<string, array{name: string, tenant: ?int}>, stats: array<string, array{cpu_percent: float, memory_bytes: int, net_tx_bytes: int}>, volumes: array<string, int>, directories: array<string, int>, backups: array<string, int>}
      */
     public static function parse(?string $output): array
     {
-        $result = ['containers' => [], 'stats' => [], 'volumes' => [], 'directories' => []];
+        $result = ['containers' => [], 'stats' => [], 'volumes' => [], 'directories' => [], 'backups' => []];
         $section = null;
         foreach (preg_split('/\r\n|\n|\r/', (string) $output) as $line) {
             $line = trim($line);
@@ -77,6 +81,8 @@ class UsageCollector
                     $result['volumes'][$parts[1]] = $bytes;
                 } elseif ($parts[0] === 'dir') {
                     $result['directories'][$parts[1]] = $bytes;
+                } elseif ($parts[0] === 'backup') {
+                    $result['backups'][$parts[1]] = $bytes;
                 }
             }
         }
@@ -125,7 +131,7 @@ class UsageCollector
     }
 
     /**
-     * @param  array{containers: array<string, array{name: string, tenant: ?int}>, stats: array<string, array{cpu_percent: float, memory_bytes: int, net_tx_bytes: int}>, volumes: array<string, int>, directories: array<string, int>}  $sample
+     * @param  array{containers: array<string, array{name: string, tenant: ?int}>, stats: array<string, array{cpu_percent: float, memory_bytes: int, net_tx_bytes: int}>, volumes: array<string, int>, directories: array<string, int>, backups?: array<string, int>}  $sample
      * @return array<int, array<string, mixed>>
      */
     public static function events(array $sample, Server $server, int $interval, string $recordedAt): array
@@ -160,6 +166,11 @@ class UsageCollector
             $resource = $resources[$uuid] ?? null;
             if ($resource) {
                 $add($resource['team_id'], $resource, UsageEvent::METRIC_STORAGE_BYTES, (float) $bytes);
+            }
+        }
+        foreach ($sample['backups'] ?? [] as $directory => $bytes) {
+            if (preg_match('/-(\d+)$/', (string) $directory, $matches) && (int) $matches[1] > 0) {
+                $add((int) $matches[1], null, UsageEvent::METRIC_STORAGE_BYTES, (float) $bytes);
             }
         }
 

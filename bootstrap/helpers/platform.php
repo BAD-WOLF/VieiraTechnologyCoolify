@@ -179,10 +179,15 @@ function audit_log(string $action, ?Model $subject = null, array $metadata = [],
             $team = $user ? currentTeam() : null;
         }
         $request = app()->runningInConsole() ? null : request();
+        // Actions taken while an operator accesses the dashboard as the customer.
+        $impersonator = $user ? \App\Services\Platform\Impersonation::impersonatorId() : null;
+        if ($impersonator) {
+            $metadata = array_merge($metadata, ['impersonated_by' => $impersonator]);
+        }
         AuditLog::create([
             'team_id' => $team instanceof Team ? $team->id : $team,
             'user_id' => $user?->id,
-            'actor_type' => $actorType ?? ($user ? (request()?->bearerToken() ? 'api' : 'user') : 'system'),
+            'actor_type' => $actorType ?? ($impersonator ? 'operator' : ($user ? (request()?->bearerToken() ? 'api' : 'user') : 'system')),
             'action' => $action,
             'subject_type' => $subject ? $subject->getMorphClass() : null,
             'subject_id' => $subject?->getKey(),

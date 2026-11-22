@@ -125,7 +125,6 @@ it('rejects workloads that could escape the sandbox', function (array $service, 
     'absolute traversal' => [['volumes' => ['/data/coolify/services/abc123uuid/../victim:/data']], 'outside of this resource'],
     'variable bind' => [['volumes' => ['${HOST_DIR}:/data']], 'volume'],
     'long syntax bind' => [['volumes' => [['type' => 'bind', 'source' => '/root', 'target' => '/r']]], 'outside of this resource'],
-    'host ports' => [['ports' => ['80:80']], 'publishing host ports'],
     'seccomp off' => [['security_opt' => ['seccomp=unconfined']], 'security option'],
     'apparmor off' => [['security_opt' => ['apparmor:unconfined']], 'security option'],
     'kernel sysctl' => [['sysctls' => ['kernel.panic' => 1]], 'sysctl kernel.panic'],
@@ -203,6 +202,21 @@ it('escapes compose interpolation in labels so tenant variables can not change p
 
     expect($result['compose']['services']['web']['labels'])
         ->toContain('traefik.http.middlewares.0-abc123uuid-to-www.redirectregex.replacement=$${1}://www.$${2}');
+});
+
+it('exposes the container ports instead of publishing host ports', function () {
+    $result = hardenCompose(['services' => [
+        'web' => ['image' => 'nginx', 'ports' => ['8000:80', '127.0.0.1:8443:443/tcp', '5353:53/udp', '9000-9002:9000-9002'], 'expose' => ['3000']],
+        'api' => ['image' => 'api', 'ports' => [['target' => 8080, 'published' => 18080, 'protocol' => 'tcp'], '${PORT}:${PORT}']],
+        'plain' => ['image' => 'plain', 'ports' => [80]],
+    ]]);
+
+    expect($result['compose']['services']['web'])->not->toHaveKey('ports')
+        ->and($result['compose']['services']['web']['expose'])->toBe(['3000', '80', '443', '53/udp', '9000-9002'])
+        ->and($result['compose']['services']['api']['expose'])->toBe(['8080'])
+        ->and($result['compose']['services']['plain']['expose'])->toBe(['80'])
+        ->and($result['notices'])->toHaveCount(3)
+        ->and($result['notices'][0])->toContain('host ports (8000:80, 127.0.0.1:8443:443/tcp, 5353:53/udp, 9000-9002:9000-9002) are not published');
 });
 
 it('refuses a plan without CPU or memory', function () {

@@ -11,8 +11,8 @@
                 {{ $tenant->planName() }} · {{ __(str($tenant->status)->replace('_', ' ')->title()->value()) }}
                 · {{ __('Region') }}: {{ $tenant->region?->name ?? '—' }}
             </div>
-            @include('livewire.platform.partials.usage-bar', ['label' => __('CPU (reserved)'), 'item' => $snapshot['cpus'], 'unit' => 'vCPU'])
-            @include('livewire.platform.partials.usage-bar', ['label' => __('Memory (reserved)'), 'item' => $snapshot['memory_mb'], 'unit' => 'MB'])
+            @include('livewire.platform.partials.usage-bar', ['label' => \App\Services\Platform\TenantLimits::sharesPlan() ? __('CPU (in use)') : __('CPU (reserved)'), 'item' => $snapshot['cpus'], 'unit' => 'vCPU'])
+            @include('livewire.platform.partials.usage-bar', ['label' => \App\Services\Platform\TenantLimits::sharesPlan() ? __('Memory (in use)') : __('Memory (reserved)'), 'item' => $snapshot['memory_mb'], 'unit' => 'MB'])
             @include('livewire.platform.partials.usage-bar', ['label' => __('Resources'), 'item' => $snapshot['resources']])
             @include('livewire.platform.partials.usage-bar', ['label' => __('Storage'), 'item' => $snapshot['storage_gb'], 'unit' => 'GB'])
         </div>

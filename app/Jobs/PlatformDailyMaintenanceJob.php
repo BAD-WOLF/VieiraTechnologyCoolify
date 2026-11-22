@@ -5,7 +5,7 @@ namespace App\Jobs;
 use App\Actions\Platform\ProvisionTenant;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformTenant;
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\StripeBilling;
 use App\Services\Platform\UsageAggregator;
 use App\Services\Platform\Webhooks;
@@ -50,8 +50,8 @@ class PlatformDailyMaintenanceJob implements ShouldBeUnique, ShouldQueue
 
     private function reconcile(PlatformTenant $tenant): void
     {
-        // With Banco Inter the usage overage is part of the renewal invoice (InterBilling::renew).
-        if (InterBilling::enabled() || $tenant->billing_provider === InterBilling::PROVIDER) {
+        // With Efí or manual billing the usage overage is part of the renewal invoice (PlatformBilling::renew).
+        if (PlatformBilling::enabled() || $tenant->billing_provider === PlatformBilling::PROVIDER) {
             return;
         }
         $periodEnd = $tenant->current_period_start;

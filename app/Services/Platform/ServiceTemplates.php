@@ -26,7 +26,7 @@ class ServiceTemplates
     /**
      * Bump when the rewrites or the checks change, so cached catalogs are rebuilt.
      */
-    private const VERSION = 1;
+    private const VERSION = 2;
 
     private const CACHE_KEY = 'platform:service-templates';
 
@@ -123,6 +123,13 @@ class ServiceTemplates
         }
         [$adapted, $changed] = self::adapt($compose);
         $violations = self::violations($adapted);
+        // A template without a web entry is only reachable through the host ports it publishes
+        // (game servers, mail, SSH): without them it would deploy and never be reachable.
+        foreach ((array) data_get($adapted, 'services', []) as $name => $service) {
+            if (is_array($service) && ! empty($service['ports'])) {
+                $violations[] = "Service \"{$name}\": publishing host ports is not available on the platform (only services reached through a domain are offered).";
+            }
+        }
         if (count($violations) > 0) {
             return ['compose' => $encodedCompose, 'reason' => $violations[0]];
         }

@@ -5,21 +5,20 @@ namespace App\Livewire\Platform\Concerns;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformTenant;
 use App\Services\Platform\BillingProfile;
-use App\Services\Platform\Inter\InterSettings;
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\Efi\EfiSettings;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\InvoiceUsageExport;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use BaconQrCode\Renderer\ImageRenderer;
 use BaconQrCode\Renderer\RendererStyle\RendererStyle;
 use BaconQrCode\Writer;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\RateLimiter;
 
 /**
- * Tenant actions on Banco Inter invoices and the billing profile (Pricing and Billing pages).
- * Downloads go through Livewire actions, so they also work before the plan is active.
+ * Tenant actions on the invoices (Efí or manual) and the billing profile (Pricing and Billing
+ * pages). Downloads go through Livewire actions, so they also work before the plan is active.
  */
-trait ManagesInterInvoices
+trait ManagesInvoices
 {
     /** @var array<string, string> */
     public array $profile = [];
@@ -61,9 +60,9 @@ trait ManagesInterInvoices
                     return;
                 }
                 // A charge of the other method is replaced, so the customer pays the way just chosen.
-                $issuedAs = InterBilling::isPix($invoice) ? BillingProfile::PIX : (InterBilling::isBoleto($invoice) ? BillingProfile::BOLETO : null);
+                $issuedAs = PlatformBilling::isPix($invoice) ? BillingProfile::PIX : (PlatformBilling::isBoleto($invoice) ? BillingProfile::BOLETO : null);
                 if (! is_null($method) && ! is_null($issuedAs) && $issuedAs !== $method) {
-                    InterBilling::reissue($invoice);
+                    PlatformBilling::reissue($invoice);
                 }
             });
         $this->editingProfile = false;
@@ -71,7 +70,7 @@ trait ManagesInterInvoices
     }
 
     /**
-     * Pay an open invoice with the other method: boleto asks for the address first.
+     * Pay an open invoice with the other method: boleto asks for the phone number first.
      */
     public function payWith(string $method): void
     {
@@ -97,9 +96,9 @@ trait ManagesInterInvoices
     {
         try {
             $invoice = $this->teamInvoice($uuid);
-            if ($invoice->provider === InterBilling::PROVIDER && filled($invoice->provider_reference)
+            if ($invoice->provider === PlatformBilling::PROVIDER && filled($invoice->provider_reference)
                 && RateLimiter::attempt('platform-invoice-refresh:'.$invoice->id, 6, fn () => true, 60)) {
-                InterBilling::sync($invoice);
+                PlatformBilling::sync($invoice);
             }
         } catch (\Throwable $e) {
             handleError($e, $this);
@@ -114,12 +113,12 @@ trait ManagesInterInvoices
     {
         try {
             $invoice = $this->teamInvoice($uuid);
-            if ($invoice->status !== PlatformInvoice::STATUS_OPEN || $invoice->provider !== InterBilling::PROVIDER || blank($invoice->provider_reference)) {
+            if ($invoice->status !== PlatformInvoice::STATUS_OPEN || $invoice->provider !== PlatformBilling::PROVIDER || blank($invoice->provider_reference)) {
                 return;
             }
-            $seconds = InterBilling::hasPaymentData($invoice) ? 20 : 5;
+            $seconds = PlatformBilling::hasPaymentData($invoice) ? 20 : 5;
             if (RateLimiter::attempt('platform-invoice-check:'.$invoice->id, 1, fn () => true, $seconds)) {
-                InterBilling::sync($invoice);
+                PlatformBilling::sync($invoice);
             }
         } catch (\Throwable $e) {
             report($e);
@@ -143,16 +142,14 @@ trait ManagesInterInvoices
     {
         try {
             $invoice = $this->teamInvoice($uuid);
-            if ($invoice->provider !== InterBilling::PROVIDER || ! InterBilling::isBoleto($invoice)) {
+            $url = (string) data_get($invoice->payment_details, 'boleto_url', '');
+            if ($invoice->provider !== PlatformBilling::PROVIDER || ! PlatformBilling::isBoleto($invoice) || ! str_starts_with($url, 'https://')) {
                 $this->dispatch('error', __('The boleto is not available yet.'));
 
                 return null;
             }
-            $pdf = Cache::remember('platform:inter:pdf:'.$invoice->provider_reference, 600, fn () => base64_encode(InterBilling::client()->chargePdf($invoice->provider_reference)));
 
-            return response()->streamDownload(function () use ($pdf) {
-                echo base64_decode($pdf);
-            }, 'boleto-'.$invoice->number.'.pdf', ['Content-Type' => 'application/pdf']);
+            return redirect()->away($url);
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -166,21 +163,21 @@ trait ManagesInterInvoices
     }
 
     /**
-     * Tests only (Settings > Billing): pays a manual invoice, or an Inter sandbox charge.
+     * Tests only (Settings > Billing): pays a manual invoice, or an Efí sandbox charge.
      */
     public function simulatePayment(string $uuid): void
     {
-        if (! $this->canManageBilling() || ! InterBilling::allowsSimulatedPayments()) {
+        if (! $this->canManageBilling() || ! PlatformBilling::allowsSimulatedPayments()) {
             return;
         }
         try {
             $invoice = $this->teamInvoice($uuid);
-            if (InterBilling::isManualInvoice($invoice)) {
-                InterBilling::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), 'user');
-            } elseif (filled($invoice->provider_reference) && InterSettings::isSandbox()) {
-                InterBilling::simulatePayment($invoice);
+            if (PlatformBilling::isManualInvoice($invoice)) {
+                PlatformBilling::markPaid($invoice, $invoice->amount_cents, 'SIMULATED', now(), 'user');
+            } elseif (filled($invoice->provider_reference) && EfiSettings::isSandbox()) {
+                PlatformBilling::simulatePayment($invoice);
             } else {
-                $this->dispatch('error', __('Payments can only be simulated with the manual provider or the Inter sandbox.'));
+                $this->dispatch('error', __('Payments can only be simulated with the manual provider or the Efí sandbox.'));
 
                 return;
             }
@@ -196,7 +193,7 @@ trait ManagesInterInvoices
             return;
         }
         try {
-            InterBilling::reissue($this->teamInvoice($uuid));
+            PlatformBilling::reissue($this->teamInvoice($uuid));
             $this->dispatch('success', __('A new charge was issued.'));
         } catch (\Throwable $e) {
             handleError($e, $this);

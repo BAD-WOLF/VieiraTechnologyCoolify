@@ -5,6 +5,7 @@ use App\Livewire\Project\New\DockerImage;
 use App\Livewire\Project\New\PublicGitRepository;
 use App\Livewire\Project\New\SimpleDockerfile;
 use App\Models\Application;
+use App\Models\ApplicationDeploymentQueue;
 use App\Models\Environment;
 use App\Models\GithubApp;
 use App\Models\InstanceSettings;
@@ -18,7 +19,7 @@ use App\Models\StandaloneDocker;
 use App\Models\Team;
 use App\Models\User;
 use App\Services\Platform\DomainPolicy;
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\ServiceTemplates;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -102,7 +103,7 @@ function journeyWorld(): array
     $team->forceFill(['show_boarding' => false])->save();
     $tenant = PlatformTenant::forTeam($team);
     $tenant->update(['plan' => 'pro', 'status' => PlatformTenant::STATUS_ACTIVE, 'current_period_end' => now()->addMonth(), 'provisioned_at' => now()]);
-    InterBilling::syncCoolifySubscription($tenant->fresh());
+    PlatformBilling::syncCoolifySubscription($tenant->fresh());
     $destination = StandaloneDocker::withoutEvents(fn () => StandaloneDocker::forceCreate([
         'uuid' => (string) new Cuid2,
         'name' => "tenant-{$team->id}",
@@ -507,3 +508,46 @@ function journeyCoolifyMentions(string $html): array
 
     return array_values(array_unique($mentions));
 }
+
+it('deploys a Docker Compose project as kept in its repository on the cheapest plan', function () {
+    // github.com/clemdesign/docker-symfony-demo: a named volume for MySQL, the project mounted
+    // into PHP and nginx ("."), ports published for local use and four services.
+    $world = journeyWorld();
+    $world['tenant']->update(['plan' => 'basic']);
+    $application = Application::create([
+        'name' => 'symfony-demo',
+        'git_repository' => 'https://github.com/clemdesign/docker-symfony-demo',
+        'git_branch' => 'master',
+        'build_pack' => 'dockercompose',
+        'docker_compose_location' => '/docker-compose.yml',
+        'ports_exposes' => '80',
+        'environment_id' => $world['environment']->id,
+        'destination_id' => $world['destination']->id,
+        'destination_type' => StandaloneDocker::class,
+    ]);
+    $application->docker_compose_raw = file_get_contents(base_path('tests/Fixtures/platform/symfony-demo.docker-compose.yml'));
+    $application->save();
+
+    $application->parse();
+    $directory = base_configuration_dir()."/applications/{$application->uuid}";
+    expect($application->persistentStorages()->pluck('name')->all())->toContain("{$application->uuid}_db-data")
+        ->and($application->fileStorages()->where('is_directory', true)->pluck('fs_path')->all())->toBe([$directory]);
+
+    $deployment = ApplicationDeploymentQueue::create([
+        'application_id' => $application->id, 'deployment_uuid' => (string) new Cuid2, 'pull_request_id' => 0,
+        'status' => 'in_progress', 'server_id' => $world['node']->id, 'application_name' => $application->name,
+    ]);
+    $compose = PlatformGate::harden($application->fresh(), Yaml::parse((string) $application->fresh()->docker_compose), $world['node']->id);
+    $services = collect($compose['services']);
+
+    expect($services->filter(fn (array $service) => array_key_exists('ports', $service))->keys()->all())->toBe([])
+        ->and($services->map(fn (array $service) => $service['expose'] ?? [])->all())->toMatchArray([
+            'php-fpm' => ['9001'], 'nginx' => ['80'], 'phpmyadmin' => ['80'],
+        ])
+        ->and($services['nginx']['volumes'])->toBe(["{$directory}:/app/:cached"])
+        // Four containers share the 0.5 vCPU of the plan on the node.
+        ->and(PlatformGate::allocated($world['team']))->toBe(['cpus' => 0.5, 'memory_mb' => 1536, 'containers' => 4])
+        ->and(collect($deployment->fresh()->logs ? json_decode($deployment->fresh()->logs, true) : [])->pluck('output')->implode("\n"))
+        ->toContain('host ports (9000:9001) are not published on the platform')
+        ->toContain('Service "php-fpm" mounts a directory of the project: turn on "Preserve Repository During Deployment"');
+});

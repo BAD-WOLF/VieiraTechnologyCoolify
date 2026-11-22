@@ -9,9 +9,10 @@ use App\Exceptions\PlatformPolicyViolation;
  *
  * It rejects what would let a workload escape its sandbox or reach other tenants (privileged mode,
  * host namespaces, devices, host bind mounts outside the resource directory, foreign networks,
- * host ports, proxy label hijacking, unknown compose features) and then hardens what is left:
- * CPU/memory/PIDs limits from the plan, "cap_drop: ALL" plus a minimal capability set,
- * no-new-privileges, bounded json-file logging, OOM priority and tenant labels.
+ * proxy label hijacking, unknown compose features) and then hardens what is left: host ports
+ * become exposed container ports (services are reached through their domains), CPU/memory/PIDs
+ * limits from the plan, "cap_drop: ALL" plus a minimal capability set, no-new-privileges, bounded
+ * json-file logging, OOM priority and tenant labels.
  */
 class TenantContainerPolicy
 {
@@ -54,7 +55,6 @@ class TenantContainerPolicy
         'use_api_socket' => 'the Docker API socket',
         'provider' => 'provider services',
         'isolation' => 'isolation technology',
-        'ports' => 'publishing host ports (expose your service through a domain instead)',
     ];
 
     private const STRIPPED_SERVICE_KEYS = [
@@ -73,6 +73,13 @@ class TenantContainerPolicy
      * @var array<int, string>
      */
     private array $violations = [];
+
+    /**
+     * What the hardening changed that the customer should know about (deployment log).
+     *
+     * @var array<int, string>
+     */
+    private array $notices = [];
 
     /**
      * Checking a one-click template or a compose file before Coolify parses it: container names,
@@ -106,11 +113,13 @@ class TenantContainerPolicy
      * Validate and harden a compose definition. Throws when the definition is not acceptable.
      *
      * @param  array<string, mixed>  $compose
-     * @return array{compose: array<string, mixed>, cpus: float, memory_mb: int, containers: int}
+     * @return array{compose: array<string, mixed>, cpus: float, memory_mb: int, containers: int, per_container: array<int, array{cpus: float, memory_mb: int}>, notices: array<int, string>}
      */
     public function apply(array $compose): array
     {
         $this->violations = [];
+        $this->notices = [];
+        $perContainer = [];
         $compose = convertToArray($compose);
         $serviceNames = array_keys((array) data_get($compose, 'services', []));
 
@@ -157,6 +166,9 @@ class TenantContainerPolicy
             $totalCpus += (float) $service['cpus'] * $replicas;
             $totalMemory += $this->memoryToMb($service['mem_limit']) * $replicas;
             $containers += $replicas;
+            for ($replica = 0; $replica < $replicas; $replica++) {
+                $perContainer[] = ['cpus' => (float) $service['cpus'], 'memory_mb' => $this->memoryToMb($service['mem_limit'])];
+            }
             $services[$name] = $service;
         }
         $compose['services'] = $services;
@@ -170,6 +182,8 @@ class TenantContainerPolicy
             'cpus' => round($totalCpus, 3),
             'memory_mb' => $totalMemory,
             'containers' => $containers,
+            'per_container' => $perContainer,
+            'notices' => $this->notices,
         ];
     }
 
@@ -213,6 +227,9 @@ class TenantContainerPolicy
         foreach (self::STRIPPED_SERVICE_KEYS as $key) {
             unset($service[$key]);
         }
+        if (array_key_exists('ports', $service)) {
+            $service = $this->exposeInsteadOfPublishing($name, $service);
+        }
 
         $this->checkNamespaces($name, $service, $serviceNames);
         $this->checkCapabilities($name, $service);
@@ -248,6 +265,70 @@ class TenantContainerPolicy
         ]);
 
         return $this->applyLimits($name, $service);
+    }
+
+    /**
+     * Host ports are never published on shared nodes (they would collide between customers and
+     * bypass the proxy). The container ports stay exposed to the stack, its proxy and its domains,
+     * so a compose file that publishes ports for local development deploys unchanged.
+     *
+     * @param  array<string, mixed>  $service
+     * @return array<string, mixed>
+     */
+    private function exposeInsteadOfPublishing(string $name, array $service): array
+    {
+        $exposed = array_values(array_filter(array_map(fn ($port) => is_scalar($port) ? (string) $port : null, (array) ($service['expose'] ?? []))));
+        $published = [];
+        foreach ((array) $service['ports'] as $port) {
+            $containerPort = $this->containerPort($port);
+            if (! is_null($containerPort)) {
+                $exposed[] = $containerPort;
+            }
+            $published[] = is_array($port) ? json_encode($port) : (string) $port;
+        }
+        unset($service['ports']);
+        $exposed = array_values(array_unique($exposed));
+        if ($exposed !== []) {
+            $service['expose'] = $exposed;
+        }
+        if ($published !== []) {
+            $this->notices[] = "Service \"{$name}\": host ports (".implode(', ', $published).') are not published on the platform; reach the service through a domain.';
+        }
+
+        return $service;
+    }
+
+    /**
+     * Port inside the container of a "ports" entry: "8000:80", "127.0.0.1:8000:80/udp", "80",
+     * "8000-8010:80-90" or the long syntax. Null when it can not be read (variables).
+     */
+    private function containerPort(mixed $port): ?string
+    {
+        if (is_array($port)) {
+            $target = data_get($port, 'target');
+            $protocol = strtolower((string) data_get($port, 'protocol', 'tcp'));
+            if (! is_scalar($target) || ! preg_match('/^\d{1,5}(-\d{1,5})?$/', (string) $target)) {
+                return null;
+            }
+
+            return $target.($protocol !== '' && $protocol !== 'tcp' ? "/{$protocol}" : '');
+        }
+        if (! is_scalar($port)) {
+            return null;
+        }
+        $value = trim((string) $port);
+        $protocol = '';
+        if (str_contains($value, '/')) {
+            [$value, $protocol] = explode('/', $value, 2);
+            $protocol = strtolower(trim($protocol));
+        }
+        $segments = explode(':', $value);
+        $container = trim((string) end($segments));
+        if (! preg_match('/^\d{1,5}(-\d{1,5})?$/', $container)) {
+            return null;
+        }
+
+        return $container.($protocol !== '' && $protocol !== 'tcp' ? "/{$protocol}" : '');
     }
 
     /**

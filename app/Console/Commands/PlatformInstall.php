@@ -14,8 +14,8 @@ use App\Models\PrivateKey;
 use App\Models\Server;
 use App\Models\Team;
 use App\Models\User;
-use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformConfig;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
@@ -130,7 +130,7 @@ class PlatformInstall extends Command
         $this->table(['', ''], $this->summary);
         $this->line($local
             ? 'Next: open the dashboard, sign up as a new customer (or use the demo account) and deploy an application to http://<name>.localhost.'
-            : 'Next: Banco Inter credentials in /admin/platform (Billing), transactional e-mail in Settings > Transactional e-mail and the nodes with Ansible (docs/region-onboarding.md).');
+            : 'Next: Efí Bank credentials in /admin/platform (Billing), transactional e-mail in Settings > Transactional e-mail and the nodes with Ansible (docs/region-onboarding.md).');
 
         return self::SUCCESS;
     }
@@ -252,8 +252,8 @@ class PlatformInstall extends Command
             PlatformSetting::put(self::PROFILE_SETTING, $profile);
         }
         $this->summary[] = ['Payments', match (true) {
-            InterBilling::isManual() => 'manual'.(config('platform.billing.allow_simulated_payments') ? ' (customers can simulate the payment)' : ''),
-            InterBilling::enabled() => 'Banco Inter',
+            PlatformBilling::isManual() => 'manual'.(config('platform.billing.allow_simulated_payments') ? ' (customers can simulate the payment)' : ''),
+            PlatformBilling::enabled() => 'Efí Bank',
             default => (string) config('platform.billing.provider'),
         }];
         $this->summary[] = ['Container runtime', filled(config('platform.container.runtime')) ? (string) config('platform.container.runtime') : 'runc (Docker default)'];
@@ -343,20 +343,20 @@ class PlatformInstall extends Command
             return;
         }
         $tenant = PlatformTenant::forTeam($team);
-        if (! InterBilling::hasActivePlan($tenant)) {
+        if (! PlatformBilling::hasActivePlan($tenant)) {
             $tenant->update([
                 'plan' => 'pro',
                 'billing_interval' => PlanCatalog::INTERVAL_MONTHLY,
                 'status' => PlatformTenant::STATUS_ACTIVE,
                 'current_period_start' => now(),
                 'current_period_end' => now()->addMonth(),
-                'billing_provider' => InterBilling::PROVIDER,
+                'billing_provider' => PlatformBilling::PROVIDER,
                 'suspension_reason' => null,
                 'suspended_at' => null,
             ]);
             audit_log('platform.tenant.demo_created', $tenant, ['plan' => 'pro'], $team->id, 'system');
         }
-        InterBilling::syncCoolifySubscription($tenant->fresh());
+        PlatformBilling::syncCoolifySubscription($tenant->fresh());
         try {
             ProvisionTenant::run($team);
         } catch (\Throwable $e) {

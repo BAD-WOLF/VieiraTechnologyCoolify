@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\PlatformRegion;
 use App\Models\PlatformTenant;
 use App\Models\Server;
+use App\Services\Platform\Impersonation;
 use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PlatformGate;
 use App\Services\Platform\TenantLifecycle;
@@ -39,7 +40,17 @@ class Admin extends Component
 
     public ?string $editingPlan = null;
 
-    public string $editingOverrides = '';
+    /** @var array<string, string> quota => value for this customer only (empty: the plan's) */
+    public array $editingQuotas = [];
+
+    /** @var array<string, string> feature => "" (the plan's), "1" (included) or "0" (not included) */
+    public array $editingFeatures = [];
+
+    public string $editingPeriodEnd = '';
+
+    public bool $editingExempt = false;
+
+    public string $editingNotes = '';
 
     public string $search = '';
 
@@ -178,49 +189,123 @@ class Admin extends Component
     {
         $this->guard();
         $tenant = PlatformTenant::findOrFail($tenantId);
+        $this->resetErrorBag();
         $this->editingTenantId = $tenant->id;
         $this->editingPlan = $tenant->plan;
-        $this->editingOverrides = $tenant->quota_overrides ? json_encode($tenant->quota_overrides, JSON_PRETTY_PRINT) : '';
+        $overrides = (array) $tenant->quota_overrides;
+        $this->editingQuotas = [];
+        foreach (array_keys(PlanCatalog::QUOTAS) as $key) {
+            $this->editingQuotas[$key] = is_numeric($overrides[$key] ?? null) ? (string) $overrides[$key] : '';
+        }
+        $this->editingFeatures = [];
+        foreach (array_keys(PlanCatalog::FEATURES) as $key) {
+            $value = data_get($overrides, "features.{$key}");
+            $this->editingFeatures[$key] = is_null($value) ? '' : ((bool) $value ? '1' : '0');
+        }
+        $this->editingPeriodEnd = (string) $tenant->current_period_end?->format('Y-m-d');
+        $this->editingExempt = (bool) $tenant->billing_exempt;
+        $this->editingNotes = (string) $tenant->operator_notes;
     }
 
+    /**
+     * Everything about a customer's account: plan, limits and capabilities of their own, billing
+     * period, courtesy (no invoices) and notes. A pending account given a plan is activated.
+     */
     public function saveTenant(): void
     {
         $this->guard();
         $tenant = PlatformTenant::findOrFail($this->editingTenantId);
-        $overrides = null;
-        if (filled(trim($this->editingOverrides))) {
-            $overrides = json_decode($this->editingOverrides, true);
-            if (! is_array($overrides)) {
-                $this->addError('editingOverrides', __('Overrides must be a JSON object, e.g. {"cpus": 4, "features": {"sso": true}}.'));
-
-                return;
-            }
+        $rules = [
+            'editingPlan' => ['nullable', 'string'],
+            'editingPeriodEnd' => ['nullable', 'date_format:Y-m-d'],
+            'editingExempt' => ['boolean'],
+            'editingNotes' => ['nullable', 'string', 'max:5000'],
+            'editingFeatures.*' => ['nullable', 'in:,0,1'],
+        ];
+        foreach (PlanCatalog::QUOTAS as $key => $definition) {
+            $rules["editingQuotas.{$key}"] = ['nullable', 'numeric', 'min:0', 'max:'.$definition['max']];
         }
+        $this->validate($rules, [], collect(PlanCatalog::QUOTAS)->mapWithKeys(fn ($definition, $key) => ["editingQuotas.{$key}" => __($definition['title'])])->all());
         if (filled($this->editingPlan) && ! PlanCatalog::exists($this->editingPlan)) {
             $this->addError('editingPlan', __('Unknown plan.'));
 
             return;
         }
+        $overrides = [];
+        foreach (PlanCatalog::QUOTAS as $key => $definition) {
+            $value = trim((string) ($this->editingQuotas[$key] ?? ''));
+            if ($value !== '') {
+                $overrides[$key] = $definition['format'] === 'decimal' ? round((float) $value, 3) : (int) $value;
+            }
+        }
+        foreach (array_keys(PlanCatalog::FEATURES) as $key) {
+            $value = (string) ($this->editingFeatures[$key] ?? '');
+            if ($value !== '') {
+                $overrides['features'][$key] = $value === '1';
+            }
+        }
+        $activate = filled($this->editingPlan) && in_array($tenant->status, [PlatformTenant::STATUS_PENDING, PlatformTenant::STATUS_CANCELLED], true);
+        $periodEnd = filled($this->editingPeriodEnd) ? \Carbon\Carbon::createFromFormat('Y-m-d', $this->editingPeriodEnd)->endOfDay() : $tenant->current_period_end;
+        if ($activate && (is_null($periodEnd) || $periodEnd->isPast())) {
+            $periodEnd = now()->addMonthNoOverflow();
+        }
         $tenant->update([
             'plan' => $this->editingPlan ?: null,
-            'quota_overrides' => $overrides,
-            'status' => $tenant->status === PlatformTenant::STATUS_PENDING && filled($this->editingPlan) ? PlatformTenant::STATUS_ACTIVE : $tenant->status,
+            'quota_overrides' => $overrides ?: null,
+            'billing_exempt' => $this->editingExempt,
+            'operator_notes' => trim($this->editingNotes) ?: null,
+            'current_period_end' => $periodEnd,
+            'current_period_start' => $activate ? now() : $tenant->current_period_start,
+            'billing_interval' => $tenant->billing_interval ?: PlanCatalog::INTERVAL_MONTHLY,
+            'status' => $activate ? PlatformTenant::STATUS_ACTIVE : $tenant->status,
+            'suspension_reason' => $activate ? null : $tenant->suspension_reason,
+            'suspended_at' => $activate ? null : $tenant->suspended_at,
         ]);
-        audit_log('platform.tenant.edited', $tenant, ['plan' => $tenant->plan, 'overrides' => $overrides], $tenant->team_id);
+        $tenant = $tenant->fresh();
+        \App\Services\Platform\PlatformBilling::syncCoolifySubscription($tenant);
+        if ($activate && is_null($tenant->provisioned_at)) {
+            ProvisionTenant::dispatch($tenant->team_id);
+        }
+        audit_log('platform.tenant.edited', $tenant, [
+            'plan' => $tenant->plan,
+            'overrides' => $overrides ?: null,
+            'billing_exempt' => $tenant->billing_exempt,
+            'period_end' => $tenant->current_period_end?->toDateString(),
+            'activated' => $activate,
+        ], $tenant->team_id);
         $this->editingTenantId = null;
         $this->dispatch('success', __('Tenant saved.'));
+    }
+
+    /**
+     * Opens the dashboard as a user of the customer (see Impersonation).
+     */
+    public function impersonate(int $tenantId, int $userId)
+    {
+        $this->guard();
+        $tenant = PlatformTenant::with('team')->findOrFail($tenantId);
+        $user = $tenant->team?->members()->where('users.id', $userId)->first();
+        abort_if(is_null($user), 404);
+        if (! Impersonation::canImpersonate(auth()->user(), $user)) {
+            $this->dispatch('error', __('This user can not be accessed.'));
+
+            return null;
+        }
+        Impersonation::start($user, $tenant->team);
+
+        return redirect()->route('dashboard');
     }
 
     public function render()
     {
         $tenants = PlatformTenant::query()
-            ->with(['team', 'region'])
+            ->with(['team.members', 'region'])
             ->when($this->search !== '', fn ($query) => $query->whereHas('team', fn ($team) => $team->where('name', 'ilike', '%'.$this->search.'%')))
             ->orderByDesc('id')
             ->limit(200)
             ->get()
             ->map(function (PlatformTenant $tenant) {
-                $tenant->setAttribute('allocation', PlatformGate::allocated($tenant->team_id));
+                $tenant->setAttribute('allocation', PlatformGate::allocated($tenant->team_id, $tenant->quotas()));
 
                 return $tenant;
             });

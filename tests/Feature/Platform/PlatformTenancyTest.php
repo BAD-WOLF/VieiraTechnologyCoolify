@@ -17,6 +17,7 @@ use App\Models\Team;
 use App\Services\Platform\DomainPolicy;
 use App\Services\Platform\PlatformGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Visus\Cuid2\Cuid2;
 
@@ -193,17 +194,27 @@ it('confines file mounts and volumes to the resource directory', function () {
     expect($volume->exists)->toBeTrue();
 });
 
-it('gates persistent volumes behind the plan', function () {
+it('gives persistent volumes and directories to every plan', function () {
+    Queue::fake();
     $platform = tenancyPlatform();
     $world = tenancyTenant($platform['node'], 'basic');
     $application = tenancyApplication($world);
 
-    expect(fn () => LocalPersistentVolume::create([
+    $volume = LocalPersistentVolume::create([
         'name' => $application->uuid.'-data',
         'mount_path' => '/data',
         'resource_id' => $application->id,
         'resource_type' => Application::class,
-    ]))->toThrow(PlatformPolicyViolation::class, 'Professional plan');
+    ]);
+    $directory = LocalFileVolume::create([
+        'fs_path' => base_configuration_dir()."/applications/{$application->uuid}/uploads",
+        'mount_path' => '/app/uploads',
+        'is_directory' => true,
+        'resource_id' => $application->id,
+        'resource_type' => Application::class,
+    ]);
+
+    expect($volume->exists)->toBeTrue()->and($directory->exists)->toBeTrue();
 });
 
 it('keeps domains exclusive between tenants and protects platform hosts', function () {
@@ -235,12 +246,17 @@ it('limits custom domains per plan', function () {
     expect(fn () => tenancyApplication($world, ['fqdn' => 'https://two.com']))->toThrow(PlatformPolicyViolation::class, 'custom domains');
 });
 
-it('reserves quota when hardening and refuses deployments over the plan', function () {
+it('lets the containers of a node share the plan and refuses resources spread beyond it', function () {
     $platform = tenancyPlatform();
     $world = tenancyTenant($platform['node'], 'basic');
     config(['platform.plans.basic.quotas.cpus' => 1.0, 'platform.plans.basic.quotas.memory_mb' => 1024]);
     $first = tenancyApplication($world);
     $second = tenancyApplication($world);
+    $elsewhere = tenancyApplication($world);
+    $otherNode = Server::forceCreate([
+        'uuid' => (string) new Cuid2, 'name' => 'node-b', 'ip' => fake()->unique()->ipv4(), 'team_id' => 0,
+        'private_key_id' => 1, 'platform_region_id' => $platform['region']->id,
+    ]);
 
     $compose = ['services' => ['web' => ['image' => 'nginx', 'mem_limit' => '768m', 'cpus' => 0.5]]];
     $hardened = PlatformGate::harden($first, $compose, $platform['node']->id);
@@ -249,14 +265,26 @@ it('reserves quota when hardening and refuses deployments over the plan', functi
         ->and(PlatformAllocation::query()->where('team_id', $world['team']->id)->count())->toBe(1)
         ->and(PlatformGate::allocated($world['team']))->toBe(['cpus' => 0.5, 'memory_mb' => 768, 'containers' => 1]);
 
-    expect(fn () => PlatformGate::harden($second, $compose, $platform['node']->id))
-        ->toThrow(PlatformPolicyViolation::class, 'Memory quota exceeded');
+    // Same node: both run in the tenant slice, which never gives them more than the plan.
+    PlatformGate::harden($second, $compose, $platform['node']->id);
+    expect(PlatformGate::allocated($world['team']))->toBe(['cpus' => 1.0, 'memory_mb' => 1024, 'containers' => 2]);
+
+    // Another node has its own slice: the plan would count twice.
+    expect(fn () => PlatformGate::harden($elsewhere, $compose, $otherNode->id))
+        ->toThrow(PlatformPolicyViolation::class, 'Memory quota exceeded (1792 of 1024 MB on 2 servers');
 
     PlatformGate::harden($first, $compose, $platform['node']->id);
-    expect(PlatformGate::allocated($world['team'])['memory_mb'])->toBe(768);
+    expect(PlatformAllocation::query()->where('team_id', $world['team']->id)->count())->toBe(2);
 
     PlatformGate::release($first);
-    expect(PlatformGate::harden($second, $compose, $platform['node']->id)['services']['web']['cpus'])->toBe(0.5);
+    PlatformGate::release($second);
+    expect(PlatformGate::harden($elsewhere, $compose, $otherNode->id)['services']['web']['cpus'])->toBe(0.5);
+
+    // When the containers do not share the plan, every container limit counts in full.
+    PlatformGate::release($elsewhere);
+    config(['platform.container.shared_plan' => false]);
+    PlatformGate::harden($first, $compose, $otherNode->id);
+    expect(fn () => PlatformGate::harden($second, $compose, $otherNode->id))->toThrow(PlatformPolicyViolation::class, 'Memory quota exceeded (1536 of 1024 MB)');
 });
 
 it('blocks deployments of suspended tenants', function () {

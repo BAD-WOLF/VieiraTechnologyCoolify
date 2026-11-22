@@ -4,11 +4,13 @@ use App\Console\Commands\PlatformInstall;
 use App\Http\Controllers\PlatformOpenApiController;
 use App\Livewire\Platform\Admin;
 use App\Livewire\Platform\AdminBilling;
+use App\Livewire\Platform\AdminPlans;
 use App\Livewire\Platform\AdminSettings;
 use App\Livewire\Platform\Billing;
 use App\Models\AuditLog;
 use App\Models\InstanceSettings;
 use App\Models\PlatformInvoice;
+use App\Models\PlatformPlan;
 use App\Models\PlatformRegion;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
@@ -17,8 +19,8 @@ use App\Models\Server;
 use App\Models\Subscription;
 use App\Models\Team;
 use App\Models\User;
-use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformConfig;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
@@ -45,7 +47,7 @@ beforeEach(function () {
         'platform.enabled' => true,
         'platform.name' => 'Hostrema',
         'platform.locale' => 'en',
-        'platform.billing.provider' => 'inter',
+        'platform.billing.provider' => 'efi',
         'platform.metrics_token' => null,
         'platform.edge.token' => null,
     ]);
@@ -87,17 +89,18 @@ function settingsTenant(): PlatformTenant
 }
 
 it('applies the saved settings over the configuration files and goes back to the default', function () {
-    config(['platform.support_email' => 'env@example.com', 'platform.plans.pro.quotas.cpus' => 4]);
+    config(['platform.support_email' => 'env@example.com', 'platform.container.default_cpus' => 0.5]);
     PlatformConfig::set('platform.support_email', 'ajuda@example.com');
-    PlatformConfig::set('platform.plans.pro.quotas.cpus', 6.5);
+    PlatformConfig::set('platform.container.default_cpus', 0.75);
+    PlatformPlan::query()->where('slug', 'pro')->first()->update(['quotas' => array_merge(PlanCatalog::get('pro')['quotas'], ['cpus' => 6.5])]);
 
-    // Another request or job reads them again from the database.
+    // Another request or job reads them again from the database, plans included.
     PlatformConfig::flush();
-    config(['platform.support_email' => 'env@example.com', 'platform.plans.pro.quotas.cpus' => 4]);
+    config(['platform.support_email' => 'env@example.com', 'platform.container.default_cpus' => 0.5, 'platform.plans.pro.quotas.cpus' => 4]);
     PlatformConfig::apply();
 
     expect(config('platform.support_email'))->toBe('ajuda@example.com')
-        ->and(config('platform.plans.pro.quotas.cpus'))->toBe(6.5)
+        ->and(config('platform.container.default_cpus'))->toBe(0.75)
         ->and(PlanCatalog::get('pro')['quotas']['cpus'])->toBe(6.5)
         ->and(PlatformConfig::isOverridden('platform.support_email'))->toBeTrue()
         ->and(PlatformSetting::query()->where('key', 'config:platform.support_email')->value('value'))->not->toContain('ajuda@example.com');
@@ -107,9 +110,9 @@ it('applies the saved settings over the configuration files and goes back to the
         ->and(PlatformConfig::isOverridden('platform.support_email'))->toBeFalse();
 
     // Saving the value of the configuration files removes the override instead of copying it.
-    PlatformConfig::set('platform.plans.pro.quotas.cpus', 4);
-    expect(PlatformConfig::isOverridden('platform.plans.pro.quotas.cpus'))->toBeFalse()
-        ->and(config('platform.plans.pro.quotas.cpus'))->toBe(4);
+    PlatformConfig::set('platform.container.default_cpus', 0.5);
+    expect(PlatformConfig::isOverridden('platform.container.default_cpus'))->toBeFalse()
+        ->and(config('platform.container.default_cpus'))->toBe(0.5);
 });
 
 it('normalizes what the owner types', function () {
@@ -117,8 +120,7 @@ it('normalizes what the owner types', function () {
         ->and(PlatformConfig::normalize('platform.reserved_hosts', 'www, API;www  status'))->toBe(['www', 'api', 'status'])
         ->and(PlatformConfig::normalize('platform.container.cap_add', 'chown, net_bind_service'))->toBe(['CHOWN', 'NET_BIND_SERVICE'])
         ->and(PlatformConfig::normalize('platform.security.operator_api_cidrs', '10.0.0.0/8, 2001:db8::/32 203.0.113.7'))->toBe(['10.0.0.0/8', '2001:db8::/32', '203.0.113.7'])
-        ->and(PlatformConfig::normalize('platform.plans.pro.price_monthly', '149,9'))->toBe('149.90')
-        ->and(PlatformConfig::normalize('platform.plans.pro.price_monthly', ''))->toBeNull()
+        ->and(PlatformConfig::normalize('platform.container.default_cpus', '0,75'))->toBe(0.75)
         ->and(PlatformConfig::normalize('platform.container.log_max_file', '5'))->toBe('5')
         ->and(PlatformConfig::normalize('platform.container.log_max_size', '20M'))->toBe('20m')
         ->and(PlatformConfig::normalize('platform.branding.enabled', '0'))->toBeFalse()
@@ -201,26 +203,134 @@ it('lets the owner of the root team change the settings in the console', functio
         ->and(PlatformConfig::isOverridden('platform.name'))->toBeFalse();
 });
 
-it('edits prices, limits and features of every plan in one table', function () {
+it('creates, edits, orders, hides and removes plans in the plans tab', function () {
     settingsOperator('owner');
+    PlanCatalog::load();
 
-    Livewire::test(AdminSettings::class)
-        ->call('selectGroup', 'plans')
-        ->assertSee('Monthly price')
-        ->assertSee('Persistent volumes')
-        ->set('form.platform__plans__pro__price_monthly', '199,90')
-        ->set('form.platform__plans__pro__quotas__cpus', '8')
-        ->set('form.platform__plans__basic__features__databases', false)
+    Livewire::test(AdminPlans::class)
+        ->assertSee('Básico')
+        ->call('edit', 'pro')
+        ->assertSet('plan.price_monthly', '149,90')
+        ->set('plan.price_monthly', '199,90')
+        ->set('quotas.cpus', '8')
+        ->set('unlimited.deployments_per_day', true)
+        ->set('features.databases', false)
+        ->call('addExtra')
+        ->set('extras.0.text', 'Suporte prioritário')
+        ->set('extras.0.help', 'Resposta em até 4 horas úteis.')
         ->call('save')
         ->assertHasNoErrors();
 
-    expect(InterBilling::priceCents('pro', 'monthly'))->toBe(19990)
+    expect(PlanCatalog::priceCents('pro', 'monthly'))->toBe(19990)
         ->and(PlanCatalog::get('pro')['quotas']['cpus'])->toEqual(8.0)
-        ->and(PlanCatalog::get('basic')['features']['databases'])->toBeFalse();
+        ->and(PlanCatalog::get('pro')['quotas']['deployments_per_day'])->toBe(0)
+        ->and(PlanCatalog::get('pro')['features']['databases'])->toBeFalse()
+        ->and(PlanCatalog::extraLines(PlanCatalog::get('pro')))->toBe([['text' => 'Suporte prioritário', 'help' => 'Resposta em até 4 horas úteis.']]);
 
-    // The older price setting of the Billing tab no longer wins over the table.
-    PlatformSetting::put('price.pro.monthly', '99.00');
-    expect(InterBilling::priceCents('pro', 'monthly'))->toBe(19990);
+    // A new hidden plan, copied from another one and placed last.
+    Livewire::test(AdminPlans::class)
+        ->call('create', 'basic')
+        ->set('plan.name', 'Startup Parceira')
+        ->set('plan.price_monthly', '19,90')
+        ->call('save')
+        ->assertHasNoErrors();
+    $startup = PlanCatalog::get('startup_parceira');
+    expect($startup['public'])->toBeFalse()
+        ->and($startup['quotas'])->toEqual(PlanCatalog::get('basic')['quotas'])
+        ->and(array_key_last(PlanCatalog::all()))->toBe('startup_parceira')
+        ->and(PlanCatalog::isSelfServe('startup_parceira'))->toBeFalse()
+        ->and(PlanCatalog::public())->not->toHaveKey('startup_parceira');
+
+    Livewire::test(AdminPlans::class)->call('move', 'startup_parceira', -1);
+    expect(array_keys(PlanCatalog::all()))->toBe(['basic', 'pro', 'startup_parceira', 'enterprise']);
+
+    // Removing a plan moves its customers.
+    $tenant = settingsTenant();
+    $tenant->update(['plan' => 'startup_parceira']);
+    settingsOperator('owner');
+    Livewire::test(AdminPlans::class)
+        ->call('confirmDelete', 'startup_parceira')
+        ->set('replacement', 'startup_parceira')
+        ->call('delete')
+        ->assertHasErrors(['replacement'])
+        ->set('replacement', 'basic')
+        ->call('delete')
+        ->assertHasNoErrors();
+    expect(PlanCatalog::exists('startup_parceira'))->toBeFalse()
+        ->and($tenant->fresh()->plan)->toBe('basic');
+});
+
+it('lets only the owner change the plans', function () {
+    settingsOperator('admin');
+
+    Livewire::test(AdminPlans::class)
+        ->assertSee('Profissional')
+        ->assertDontSee('New plan')
+        ->call('edit', 'pro')
+        ->assertDispatched('error')
+        ->assertSet('editing', null);
+});
+
+it('gives a customer limits, capabilities, free days and a courtesy account of its own', function () {
+    $tenant = settingsTenant();
+    $tenant->update(['plan' => null, 'status' => PlatformTenant::STATUS_PENDING]);
+    settingsOperator('owner');
+
+    Livewire::test(Admin::class)
+        ->call('editTenant', $tenant->id)
+        ->set('editingPlan', 'basic')
+        ->set('editingQuotas.cpus', '1.5')
+        ->set('editingFeatures.public_databases', '1')
+        ->set('editingFeatures.databases', '0')
+        ->set('editingPeriodEnd', now()->addDays(45)->format('Y-m-d'))
+        ->set('editingExempt', true)
+        ->set('editingNotes', 'Parceiro de lançamento')
+        ->call('saveTenant')
+        ->assertHasNoErrors();
+
+    $tenant = $tenant->fresh();
+    expect($tenant->status)->toBe(PlatformTenant::STATUS_ACTIVE)
+        ->and($tenant->quota('cpus'))->toBe(1.5)
+        ->and($tenant->hasFeature('public_databases'))->toBeTrue()
+        ->and($tenant->hasFeature('databases'))->toBeFalse()
+        ->and($tenant->billing_exempt)->toBeTrue()
+        ->and($tenant->current_period_end->toDateString())->toBe(now()->addDays(45)->toDateString())
+        ->and(\App\Models\Subscription::query()->where('team_id', $tenant->team_id)->value('stripe_invoice_paid'))->toBeTruthy()
+        ->and($tenant->toArray())->not->toHaveKey('operator_notes');
+
+    // A courtesy account renews without an invoice.
+    $tenant->update(['current_period_end' => now()->subMinute()]);
+    PlatformBilling::renew($tenant->fresh());
+    expect(PlatformInvoice::query()->where('team_id', $tenant->team_id)->count())->toBe(0)
+        ->and($tenant->fresh()->current_period_end->isFuture())->toBeTrue();
+});
+
+it('lets an operator access the dashboard as a customer and come back, recording it', function () {
+    $tenant = settingsTenant();
+    $customer = $tenant->team->members()->first();
+    $operator = settingsOperator('owner');
+
+    Livewire::test(Admin::class)
+        ->call('impersonate', $tenant->id, $customer->id)
+        ->assertRedirect(route('dashboard'));
+    expect(auth()->id())->toBe($customer->id)
+        ->and(session(\App\Services\Platform\Impersonation::SESSION_KEY))->toBe($operator->id)
+        ->and(AuditLog::query()->where('action', 'platform.impersonation.started')->value('metadata'))->toMatchArray(['operator_id' => $operator->id]);
+
+    // What is done meanwhile is recorded with the operator.
+    audit_log('platform.test.action', null, [], $tenant->team_id);
+    expect(AuditLog::query()->where('action', 'platform.test.action')->first())
+        ->actor_type->toBe('operator')
+        ->metadata->toMatchArray(['impersonated_by' => $operator->id]);
+
+    $this->post(route('platform.impersonation.stop'))->assertRedirect(route('admin.platform', ['tab' => 'tenants']));
+    expect(auth()->id())->toBe($operator->id)
+        ->and(session()->has(\App\Services\Platform\Impersonation::SESSION_KEY))->toBeFalse()
+        ->and(AuditLog::query()->where('action', 'platform.impersonation.ended')->exists())->toBeTrue();
+
+    // Operators can not be accessed this way.
+    $other = settingsOperator('admin');
+    expect(\App\Services\Platform\Impersonation::canImpersonate($operator, $other))->toBeFalse();
 });
 
 it('checks values that depend on each other', function () {
@@ -307,12 +417,12 @@ it('issues manual invoices with instructions and activates the plan when the pay
     PlatformConfig::set('platform.billing.manual_instructions', 'Pix: financeiro@example.com');
     $tenant = settingsTenant();
 
-    $invoice = InterBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
+    $invoice = PlatformBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
 
     expect($invoice->status)->toBe(PlatformInvoice::STATUS_OPEN)
-        ->and(InterBilling::isManualInvoice($invoice))->toBeTrue()
+        ->and(PlatformBilling::isManualInvoice($invoice))->toBeTrue()
         ->and($invoice->payment_details['instructions'])->toBe('Pix: financeiro@example.com')
-        ->and(InterBilling::reconcileOpen())->toBe(0);
+        ->and(PlatformBilling::reconcileOpen())->toBe(0);
     Http::assertNothingSent();
 
     Livewire::test(Billing::class)
@@ -333,7 +443,7 @@ it('issues manual invoices with instructions and activates the plan when the pay
 it('only lets customers simulate payments when the owner allows it', function () {
     PlatformConfig::set('platform.billing.provider', 'manual');
     $tenant = settingsTenant();
-    $invoice = InterBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
+    $invoice = PlatformBilling::subscribe($tenant, 'pro', 'monthly')['invoice'];
 
     Livewire::test(Billing::class)
         ->assertSee('How to pay')
@@ -392,11 +502,13 @@ it('builds the local test environment with manual payments, Mailpit and a demo c
     ])->assertSuccessful();
 
     expect(User::query()->find(0)->email)->toBe('owner@hostrema.local')
-        ->and(InterBilling::isManual())->toBeTrue()
-        ->and(InterBilling::allowsSimulatedPayments())->toBeTrue()
+        ->and(PlatformBilling::isManual())->toBeTrue()
+        ->and(PlatformBilling::allowsSimulatedPayments())->toBeTrue()
         ->and(config('platform.security.require_two_factor'))->toBe('none')
         ->and(config('platform.base_domain'))->toBe('localhost')
         ->and(config('platform.container.tenant_slices'))->toBeFalse()
+        // Like production, a stack of several containers fits the smallest plan.
+        ->and(config('platform.container.shared_plan'))->toBeTrue()
         ->and(config('platform.container.runtime'))->toBeNull();
 
     $settings = InstanceSettings::query()->find(0);
@@ -470,12 +582,41 @@ it('copies everything the official image copies, so upstream additions are not l
 it('has a Portuguese translation for every text of the platform screens', function () {
     $translations = json_decode((string) file_get_contents(lang_path('platform/pt-br.json')), true);
     $files = collect([
-        resource_path('views/livewire/platform'), app_path('Livewire/Platform'), app_path('Services/Platform'), app_path('Actions/Platform'),
+        resource_path('views/livewire/platform'), resource_path('views/platform'), app_path('Livewire/Platform'), app_path('Services/Platform'), app_path('Actions/Platform'),
     ])->flatMap(fn (string $directory) => \Illuminate\Support\Facades\File::allFiles($directory))
         ->map(fn ($file) => $file->getPathname())
         ->push(resource_path('views/components/platform-banner.blade.php'), app_path('Exceptions/PlatformPolicyViolation.php'), app_path('Models/PlatformTenant.php'));
 
     $missing = [];
+    // Names and explanations of the limits and capabilities of the plans.
+    foreach (\App\Services\Platform\PlanCatalog::QUOTAS as $key => $definition) {
+        foreach (['title', 'label', 'help'] as $field) {
+            if (! array_key_exists($definition[$field], $translations)) {
+                $missing[] = "PlanCatalog::QUOTAS.{$key}.{$field}";
+            }
+        }
+    }
+    foreach (\App\Services\Platform\PlanCatalog::FEATURES as $key => $definition) {
+        foreach (['label', 'help'] as $field) {
+            if (! array_key_exists($definition[$field], $translations)) {
+                $missing[] = "PlanCatalog::FEATURES.{$key}.{$field}";
+            }
+        }
+    }
+    // Groups, labels, explanations and options of the settings tab.
+    foreach (\App\Services\Platform\PlatformConfig::GROUPS as $key => $label) {
+        if (! array_key_exists($label, $translations)) {
+            $missing[] = "PlatformConfig::GROUPS.{$key}";
+        }
+    }
+    foreach (\App\Services\Platform\PlatformConfig::definitions() as $path => $definition) {
+        $texts = array_filter([$definition['label'] ?? null, $definition['help'] ?? null, ...array_values((array) ($definition['options'] ?? []))], 'is_string');
+        foreach ($texts as $text) {
+            if (! array_key_exists($text, $translations)) {
+                $missing[] = "PlatformConfig::definitions.{$path}: {$text}";
+            }
+        }
+    }
     // Plan descriptions are translated where they are shown.
     foreach ((array) config('platform.plans') as $id => $plan) {
         $description = (string) data_get($plan, 'description');
@@ -484,7 +625,7 @@ it('has a Portuguese translation for every text of the platform screens', functi
         }
     }
     foreach ($files as $file) {
-        preg_match_all("/__\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", (string) file_get_contents($file), $matches);
+        preg_match_all("/(?:__|trans_choice)\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", (string) file_get_contents($file), $matches);
         foreach ($matches[1] as $text) {
             $text = stripslashes($text);
             if (! array_key_exists($text, $translations)) {

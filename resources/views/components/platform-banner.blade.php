@@ -1,6 +1,13 @@
 @php
     $platformTenantForBanner = isPlatformTenant() ? platformTenant() : null;
 @endphp
+@if (isPlatform() && \App\Services\Platform\Impersonation::active())
+    <form method="POST" action="{{ route('platform.impersonation.stop') }}" class="flex flex-wrap items-center gap-2 px-4 py-2 mb-4 text-sm border rounded-sm border-warning dark:text-white">
+        @csrf
+        {{ __('You are accessing the dashboard as :user (:team). Everything you do is recorded in the audit log with your name.', ['user' => auth()->user()?->email, 'team' => currentTeam()?->name]) }}
+        <button type="submit" class="underline">{{ __('Back to the operator console') }}</button>
+    </form>
+@endif
 @if ($platformTenantForBanner && ! $platformTenantForBanner->hasPlan() && ! request()->routeIs('subscription.*'))
     <div class="flex flex-wrap items-center gap-2 px-4 py-2 mb-4 text-sm border rounded-sm border-warning dark:text-white">
         {{ __('Your plan is not active yet. Choose a plan and pay the first invoice to start deploying.') }}

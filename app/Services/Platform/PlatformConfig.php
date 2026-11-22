@@ -9,7 +9,8 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 /**
- * Settings of the platform that the owner edits in the operator console (Settings tab).
+ * Settings of the platform that the owner edits in the operator console (Settings tab; the plans
+ * have their own tab and table, see PlanCatalog).
  *
  * The files in config/ (and the .env) only provide the defaults: a value saved in the console is
  * stored encrypted in platform_settings ("config:<path>") and applied over config() on every
@@ -24,7 +25,6 @@ class PlatformConfig
     /** @var array<string, string> */
     public const GROUPS = [
         'general' => 'General',
-        'plans' => 'Plans',
         'billing' => 'Billing',
         'tenants' => 'Accounts',
         'containers' => 'Containers and isolation',
@@ -32,37 +32,6 @@ class PlatformConfig
         'integrations' => 'Webhooks and events',
         'security' => 'Security',
         'internal' => 'Internal tokens and edge',
-    ];
-
-    /** @var array<string, string> */
-    public const QUOTA_LABELS = [
-        'cpus' => 'CPUs',
-        'memory_mb' => 'Memory (MB)',
-        'storage_gb' => 'Disk (GB)',
-        'resources' => 'Applications, services and databases',
-        'containers' => 'Containers',
-        'deployments_per_day' => 'Deployments per day (0 = unlimited)',
-        'custom_domains' => 'Custom domains (0 = unlimited)',
-        'egress_gb' => 'Outbound traffic per month (GB)',
-        'pids_per_container' => 'Processes per container',
-        'disk_read_mbps' => 'Disk read (MB/s, 0 = unlimited)',
-        'disk_write_mbps' => 'Disk write (MB/s, 0 = unlimited)',
-        'disk_iops' => 'Disk IOPS (0 = unlimited)',
-        'bandwidth_mbps' => 'Bandwidth (Mbit/s, 0 = unlimited)',
-    ];
-
-    /** @var array<string, string> */
-    public const FEATURE_LABELS = [
-        'databases' => 'Databases',
-        'persistent_volumes' => 'Persistent volumes',
-        'scheduled_backups' => 'Scheduled backups',
-        'log_export' => 'Log export (log drains)',
-        'preview_deployments' => 'Preview deployments',
-        'public_databases' => 'Public databases',
-        'docker_compose' => 'Docker Compose',
-        'dedicated_server' => 'Dedicated server',
-        'sso' => 'SSO (SAML/OIDC)',
-        'traces' => 'Application traces (OpenTelemetry)',
     ];
 
     public static bool $enabledInTests = false;
@@ -107,11 +76,11 @@ class PlatformConfig
             'platform.reserved_hosts' => ['group' => 'general', 'label' => 'Reserved hosts', 'type' => 'list', 'item' => 'host', 'help' => 'Comma separated. Names without a dot are reserved under the base domain.'],
 
             // Billing
-            'platform.billing.provider' => ['group' => 'billing', 'label' => 'Payment provider', 'type' => 'select', 'options' => ['inter' => 'Banco Inter (boleto + Pix, automatic)', 'manual' => 'Manual (Pix or transfer confirmed by you)', 'stripe' => 'Stripe (card)']],
+            'platform.billing.provider' => ['group' => 'billing', 'label' => 'Payment provider', 'type' => 'select', 'options' => ['efi' => 'Efí Bank (Pix and boleto, automatic)', 'manual' => 'Manual (Pix or transfer confirmed by you)', 'stripe' => 'Stripe (card)']],
             'platform.billing.manual_instructions' => ['group' => 'billing', 'label' => 'Payment instructions (manual provider)', 'type' => 'text', 'help' => 'Shown on every open invoice: Pix key, bank account, whom to send the receipt to...'],
             'platform.billing.allow_simulated_payments' => ['group' => 'billing', 'label' => 'Customers can simulate the payment (tests only)', 'type' => 'bool', 'help' => 'Adds a "simulate payment" button to open invoices. Never enable it in production.'],
             'platform.billing.due_days' => ['group' => 'billing', 'label' => 'Days to pay an invoice', 'type' => 'int', 'min' => 1, 'max' => 30],
-            'platform.billing.cancel_after_days' => ['group' => 'billing', 'label' => 'Days after the due date until an unpaid boleto is cancelled', 'type' => 'int', 'min' => 0, 'max' => 60],
+            'platform.billing.cancel_after_days' => ['group' => 'billing', 'label' => 'Days after the due date until an unpaid charge is written off', 'type' => 'int', 'min' => 0, 'max' => 60],
             'platform.billing.fine_percent' => ['group' => 'billing', 'label' => 'Late fine (%)', 'type' => 'decimal', 'min' => 0, 'max' => 2],
             'platform.billing.interest_percent_month' => ['group' => 'billing', 'label' => 'Late interest (% per month)', 'type' => 'decimal', 'min' => 0, 'max' => 1],
             'platform.billing.min_charge_cents' => ['group' => 'billing', 'label' => 'Smallest charge (cents)', 'type' => 'int', 'min' => 0, 'max' => 100000],
@@ -137,6 +106,7 @@ class PlatformConfig
             'platform.container.cap_add' => ['group' => 'containers', 'label' => 'Linux capabilities kept', 'type' => 'list', 'item' => 'capability'],
             'platform.container.oom_score_adj' => ['group' => 'containers', 'label' => 'OOM score of the customer containers', 'type' => 'int', 'min' => -1000, 'max' => 1000],
             'platform.container.tenant_slices' => ['group' => 'containers', 'label' => 'Limit each customer as a whole on every node (systemd slices)', 'type' => 'bool'],
+            'platform.container.shared_plan' => ['group' => 'containers', 'label' => 'Containers of a customer share the plan on each node', 'type' => 'bool', 'help' => 'Each container can use up to the whole plan and the slice caps the total, so a stack of several containers fits the smallest plan. Off: every container limit counts in full (turn it off when the slices are off in production).'],
             'platform.container.log_max_size' => ['group' => 'containers', 'label' => 'Size of each container log file', 'type' => 'size'],
             'platform.container.log_max_file' => ['group' => 'containers', 'label' => 'Log files kept per container', 'type' => 'int', 'min' => 1, 'max' => 20, 'cast' => 'string'],
             'platform.container.enforce_storage_opt' => ['group' => 'containers', 'label' => 'Disk limit per container (needs XFS with pquota)', 'type' => 'bool'],
@@ -174,29 +144,6 @@ class PlatformConfig
             'platform.edge.cache_seconds' => ['group' => 'internal', 'label' => 'Edge configuration cache (seconds)', 'type' => 'int', 'min' => 1, 'max' => 300],
         ];
 
-        foreach ((array) config('platform.plans', []) as $plan => $settings) {
-            $definitions["platform.plans.{$plan}.name"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Name', 'type' => 'string', 'required' => true];
-            $definitions["platform.plans.{$plan}.description"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Description', 'type' => 'text'];
-            $definitions["platform.plans.{$plan}.price_monthly"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Monthly price', 'type' => 'money'];
-            $definitions["platform.plans.{$plan}.price_yearly"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Yearly price', 'type' => 'money'];
-            $definitions["platform.plans.{$plan}.contact_sales"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Sold by the sales team (no self-service)', 'type' => 'bool'];
-            $definitions["platform.plans.{$plan}.stripe_price_monthly"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Stripe price id (monthly)', 'type' => 'string'];
-            $definitions["platform.plans.{$plan}.stripe_price_yearly"] = ['group' => 'plans', 'plan' => $plan, 'section' => 'plan', 'label' => 'Stripe price id (yearly)', 'type' => 'string'];
-            foreach (array_keys((array) data_get($settings, 'quotas', [])) as $quota) {
-                $definitions["platform.plans.{$plan}.quotas.{$quota}"] = [
-                    'group' => 'plans', 'plan' => $plan, 'section' => 'quotas', 'field' => $quota,
-                    'label' => self::QUOTA_LABELS[$quota] ?? Str::headline($quota),
-                    'type' => $quota === 'cpus' ? 'decimal' : 'int', 'min' => 0, 'max' => $quota === 'cpus' ? 512 : 100000000,
-                ];
-            }
-            foreach (array_keys((array) data_get($settings, 'features', [])) as $feature) {
-                $definitions["platform.plans.{$plan}.features.{$feature}"] = [
-                    'group' => 'plans', 'plan' => $plan, 'section' => 'features', 'field' => $feature,
-                    'label' => self::FEATURE_LABELS[$feature] ?? Str::headline($feature), 'type' => 'bool',
-                ];
-            }
-        }
-
         return self::$definitions = $definitions;
     }
 
@@ -230,6 +177,7 @@ class PlatformConfig
         } catch (\Throwable) {
             return;
         }
+        PlanCatalog::load();
         self::$appliedAt = microtime(true);
         foreach (self::definitions() as $path => $definition) {
             if (! array_key_exists($path, self::$defaults)) {

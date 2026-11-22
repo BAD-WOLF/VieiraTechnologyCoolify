@@ -143,7 +143,7 @@ resource "aws_vpc_security_group_ingress_rule" "data" {
 
 resource "aws_vpc_security_group_egress_rule" "app" {
   security_group_id = aws_security_group.app.id
-  description       = "Nodes (SSH through WireGuard), Banco Inter API, registries, e-mail"
+  description       = "Nodes (SSH through WireGuard), Efí Bank APIs, registries, e-mail"
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

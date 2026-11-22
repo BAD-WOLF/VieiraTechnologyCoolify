@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Crypt;
 
 /**
- * Operator settings of the platform (e.g. Banco Inter credentials), encrypted at rest with APP_KEY.
+ * Operator settings of the platform (e.g. Efí Bank credentials), encrypted at rest with APP_KEY.
  */
 class PlatformSetting extends Model
 {

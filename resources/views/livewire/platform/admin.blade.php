@@ -4,10 +4,10 @@
     </x-slot>
     <div>
         <h1>{{ __('Platform') }}</h1>
-        <div class="subtitle">{{ __('Regions, nodes, tenants and audit trail of the multi-tenant platform.') }}</div>
+        <div class="subtitle">{{ __('Customers, plans, billing, regions, nodes and audit trail of the platform.') }}</div>
     </div>
     <div class="flex gap-2">
-        @foreach (['tenants' => __('Tenants'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
+        @foreach (['tenants' => __('Tenants'), 'plans' => __('Plans'), 'billing' => __('Billing'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
             <x-forms.button wire:click="$set('tab', '{{ $key }}')" :isHighlighted="$tab === $key">{{ $label }}</x-forms.button>
         @endforeach
     </div>
@@ -30,7 +30,7 @@
                     @foreach ($tenants as $tenant)
                         <tr wire:key="tenant-{{ $tenant->id }}">
                             <td>{{ $tenant->team?->name }} <span class="text-xs">#{{ $tenant->team_id }}</span></td>
-                            <td>{{ $tenant->planName() }}</td>
+                            <td>{{ $tenant->planName() }}@if ($tenant->billing_exempt) <span class="text-xs">({{ __('courtesy') }})</span>@endif</td>
                             <td>{{ $tenant->status }}@if ($tenant->suspension_reason) <span class="text-xs">({{ $tenant->suspension_reason }})</span>@endif</td>
                             <td>{{ $tenant->region?->slug ?? '—' }}</td>
                             <td class="text-xs">{{ $tenant->allocation['cpus'] }} vCPU · {{ $tenant->allocation['memory_mb'] }} MB · {{ $tenant->allocation['containers'] }} ctr</td>
@@ -48,16 +48,57 @@
                         @if ($editingTenantId === $tenant->id)
                             <tr wire:key="tenant-edit-{{ $tenant->id }}">
                                 <td colspan="6">
-                                    <form wire:submit="saveTenant" class="flex flex-col gap-2">
-                                        <x-forms.select id="editingPlan" label="{{ __('Plan') }}">
-                                            <option value="">{{ __('No plan') }}</option>
-                                            @foreach ($plans as $key => $plan)
-                                                <option value="{{ $key }}">{{ $plan['name'] }}</option>
-                                            @endforeach
-                                        </x-forms.select>
-                                        <x-forms.textarea id="editingOverrides" label="{{ __('Quota overrides (JSON)') }}" helper='{"cpus": 4, "memory_mb": 8192, "features": {"sso": true}}' />
+                                    <form wire:submit="saveTenant" class="flex flex-col gap-4 py-2">
+                                        <div class="grid grid-cols-1 gap-2 lg:grid-cols-3">
+                                            <x-forms.select id="editingPlan" label="{{ __('Plan') }}" helper="{{ __('Changes now, without charge. An account without an active plan is activated.') }}">
+                                                <option value="">{{ __('No plan') }}</option>
+                                                @foreach ($plans as $key => $plan)
+                                                    <option value="{{ $key }}">{{ $plan['name'] }}{{ \App\Services\Platform\PlanCatalog::isPublic($plan) ? '' : ' ('.__('hidden').')' }}</option>
+                                                @endforeach
+                                            </x-forms.select>
+                                            <x-forms.input id="editingPeriodEnd" type="date" label="{{ __('Current period ends on') }}" helper="{{ __('Move it forward to give free days; the next invoice is issued on this date.') }}" />
+                                            <x-forms.checkbox id="editingExempt" label="{{ __('Courtesy account (never charged)') }}" helper="{{ __('The plan renews without invoices until you turn this off.') }}" />
+                                        </div>
+                                        <div>
+                                            <h4>{{ __('Limits of this customer') }}</h4>
+                                            <div class="text-xs dark:text-neutral-400">{{ __('Empty: the value of the plan. 0 means unlimited where the plan allows it.') }}</div>
+                                            <div class="grid grid-cols-2 gap-2 pt-2 lg:grid-cols-4">
+                                                @foreach (\App\Services\Platform\PlanCatalog::QUOTAS as $key => $definition)
+                                                    <x-forms.input wire:key="override-{{ $key }}" id="editingQuotas.{{ $key }}" type="number" step="any"
+                                                        label="{{ __($definition['title']) }}"
+                                                        placeholder="{{ __('plan: :value', ['value' => \App\Services\Platform\PlanCatalog::formatQuota($key, (float) data_get($plans, ($editingPlan ?: $tenant->plan).'.quotas.'.$key, 0))]) }}" />
+                                                @endforeach
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <h4>{{ __('Capabilities of this customer') }}</h4>
+                                            <div class="grid grid-cols-1 gap-2 pt-2 lg:grid-cols-3">
+                                                @foreach (\App\Services\Platform\PlanCatalog::FEATURES as $key => $definition)
+                                                    <x-forms.select wire:key="override-feature-{{ $key }}" id="editingFeatures.{{ $key }}" label="{{ __($definition['label']) }}">
+                                                        <option value="">{{ __('As in the plan') }}</option>
+                                                        <option value="1">{{ __('Included') }}</option>
+                                                        <option value="0">{{ __('Not included') }}</option>
+                                                    </x-forms.select>
+                                                @endforeach
+                                            </div>
+                                        </div>
+                                        <x-forms.textarea id="editingNotes" label="{{ __('Notes (only operators see them)') }}" rows="2" />
+                                        <div>
+                                            <h4>{{ __('Users') }}</h4>
+                                            <div class="flex flex-col gap-1 pt-1">
+                                                @foreach ($tenant->team?->members ?? [] as $member)
+                                                    <div wire:key="member-{{ $tenant->id }}-{{ $member->id }}" class="flex flex-wrap items-center gap-2 text-sm">
+                                                        <span>{{ $member->name }} &lt;{{ $member->email }}&gt; · {{ $member->pivot->role }}</span>
+                                                        <x-forms.button wire:click="impersonate({{ $tenant->id }}, {{ $member->id }})"
+                                                            wire:confirm="{{ __('Open the dashboard as :user? Everything you do is recorded with your name.', ['user' => $member->email]) }}">
+                                                            {{ __('Access as this user') }}
+                                                        </x-forms.button>
+                                                    </div>
+                                                @endforeach
+                                            </div>
+                                        </div>
                                         <div class="flex gap-2">
-                                            <x-forms.button type="submit">{{ __('Save') }}</x-forms.button>
+                                            <x-forms.button type="submit" isHighlighted>{{ __('Save') }}</x-forms.button>
                                             <x-forms.button wire:click="$set('editingTenantId', null)">{{ __('Cancel') }}</x-forms.button>
                                         </div>
                                     </form>
@@ -68,6 +109,8 @@
                 </tbody>
             </table>
         </div>
+    @elseif ($tab === 'plans')
+        <livewire:platform.admin-plans />
     @elseif ($tab === 'billing')
         <livewire:platform.admin-billing />
     @elseif ($tab === 'settings')

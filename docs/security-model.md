@@ -20,9 +20,10 @@ os comandos e os domínios que ele envia são tratados como hostis.
 - **Entradas.** O `TenantInputGuard` valida, nos modelos, comandos de build/start/install sem aspas, crases ou caracteres de controle; imagens e tags; portas, health checks e opções de `docker run` (lista permitida); caminhos dentro do diretório do recurso; nomes de arquivo de scripts init; credenciais de banco; endpoints S3 públicos; e nomes de variáveis.
 - **Injeção de comando.** Os argumentos do Nixpacks (`--build-cmd`, `--env` etc.) usam `escapeshellarg`, e o plano roda via script em base64; o mesmo vale para import de banco e init scripts do PostgreSQL.
 - **Domínios.** O `DomainPolicy` bloqueia domínios reservados (instância, `PLATFORM_BASE_DOMAIN`, `PLATFORM_RESERVED_HOSTS`) e domínios de outro tenant, e respeita a cota de domínios próprios.
-- **Planos.** O `PlatformGate` aplica cotas e recursos por plano (bancos, docker compose, volumes, previews, bancos públicos, log drains). Há reserva transacional de CPU, memória e containers em `platform_allocations`.
+- **Planos.** O `PlatformGate` aplica cotas e recursos por plano (bancos, Docker Compose, backups, previews, bancos públicos, exportação de logs). Há reserva transacional de CPU, memória e containers em `platform_allocations`, por nó: os containers de um cliente num nó dividem o plano (o slice do cliente limita o total), e só recursos em mais de um nó somam além dele. Volumes e diretórios estão em todos os planos e contam no armazenamento medido. Portas publicadas no host viram `expose` na rede do cliente. Só o owner do time root edita os planos.
 - **Terminal web.** Fica desligado para tenants (`PLATFORM_TENANT_TERMINAL`), porque o servidor de terminal confia no comando SSH enviado pelo navegador.
-- **Cobrança (Banco Inter).** As credenciais (Client Secret, certificado e chave) e os dados do pagador (CPF/CNPJ, endereço) ficam criptografados com a `APP_KEY` e nunca voltam para o navegador. O webhook exige um token secreto na URL e só serve de gatilho: o status da cobrança é sempre consultado na API do Inter com mTLS. A baixa da fatura é feita com trava de linha, então avisos repetidos não ativam o plano duas vezes.
+- **Cobrança (Efí Bank).** O Client Secret, o certificado e a chave da aplicação Efí e os dados do pagador (nome, CPF/CNPJ, e-mail e telefone; nunca o endereço) ficam criptografados com a `APP_KEY` e nunca voltam para o navegador. O certificado e a chave só vão para o disco para o mTLS, em arquivos `0600` que saem quando são trocados. As notificações (Pix e boletos) exigem um token secreto na URL e só servem de gatilho: a cobrança é sempre consultada de novo nas APIs da Efí (a API Pix com mTLS) antes de qualquer baixa, e o valor pago vem da Efí, não do aviso. A baixa da fatura é feita com trava de linha, então avisos repetidos não ativam o plano duas vezes.
+- **Acesso como cliente.** O owner e os admins do time root podem entrar no painel de um cliente como um dos usuários dele (nunca como outro usuário do time root). O início e o fim ficam no audit log, cada ação desse tempo leva o operador (`impersonated_by`), e uma faixa fixa mostra o acesso e a volta ao console.
 - **Operador.** 2FA obrigatório para o time root (`PLATFORM_REQUIRE_2FA`) e tokens de API do time root aceitos só das redes de `PLATFORM_OPERATOR_API_CIDRS`.
 - **Webhooks.** Só URLs HTTPS públicas: o endereço resolvido é conferido (privados, metadata, CGNAT, IPv6 local e mapeado) e a conexão vai para esse mesmo IP, sem seguir redirecionamentos. Cada entrega é assinada com HMAC-SHA256 e o segredo fica criptografado.
 - **Histórico de logs.** O painel monta a consulta ao Loki com o time e o recurso fixos; o texto do cliente vira um filtro literal (sem crase nem caracteres de controle).
@@ -68,7 +69,8 @@ os comandos e os domínios que ele envia são tratados como hostis.
 - [ ] Dentro do container de um tenant: `curl 169.254.169.254`, IPs privados da VPC, portas 22/9100/9280 do host, outras redes `tenant-*` e tentativas de escape (montagens, `/proc`, capabilities).
 - [ ] Limites: fork bomb (`pids_limit`), estouro de memória (OOM só no container), consumo de CPU (cota), muitos deploys (limite diário) e disco cheio (status `limited`).
 - [ ] Domínios: tomar domínio reservado, domínio de outro tenant ou wildcard; certificado para domínio alheio.
-- [ ] Cobrança: webhook do Inter sem token, com token errado ou com payload forjado ("RECEBIDO" falso), replay; troca de plano, upgrade proporcional, cancelamento e reativação; outro tenant tentando baixar boleto ou CSV de uso por uuid.
+- [ ] Cobrança: notificações da Efí (Pix e boletos) sem token, com token errado ou com payload forjado ("paid" ou Pix falso), replay; troca de plano, upgrade proporcional, cancelamento e reativação; outro tenant tentando baixar boleto ou CSV de uso por uuid.
+- [ ] Acesso como cliente: admin de outro time ou usuário comum chamando a ação, alvo do time root, e voltar ao console depois de a sessão expirar.
 - [ ] Endpoints internos: `/api/v1/platform/metrics` e `/api/v1/platform/edge/*` sem token ou com token errado (404), e rate limit.
 - [ ] Traces: enviar e consultar pelo gateway OTLP com token de outro cliente, sem token ou com `X-Scope-OrgID` forjado (o gateway sempre substitui pelo do token).
 - [ ] Limites por cliente: vários containers do mesmo cliente somando mais CPU, memória, disco ou banda que o plano.
@@ -98,7 +100,8 @@ que o Dockerfile oficial copia para a imagem também vai para a da plataforma.
 Mudanças em arquivos originais que não são só ganchos:
 
 - `bootstrap/helpers/shared.php`: `get_service_templates()` entrega aos clientes o catálogo da plataforma
-  (`ServiceTemplates`), o mesmo na tela, na criação e na API.
+  (`ServiceTemplates`), o mesmo na tela, na criação e na API. `sourceIsLocal()` corrige um bug do upstream: o
+  bind `.:/app` (a pasta do projeto) era tratado como volume nomeado `.`, e o compose falhava no deploy.
 - `app/Jobs/PullTemplatesFromCDN.php` e `app/Console/Commands/Init.php`: a plataforma não baixa templates do CDN
   do Coolify, nem pelo agendador nem na inicialização do container; eles chegam com a sincronização do upstream e
   passam pelos testes antes de ir para produção.
@@ -127,7 +130,7 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullChangelog.php` (+3/-0), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
 - `app/Livewire`: `Boarding/Index.php` (+4/-1), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `Settings/Updates.php` (+6/-0), `SettingsBackup.php` (+1/-1), `SettingsOauth.php` (+1/-1)
 - `app/Models`: `PrivateKey.php` (+1/-1), `Service.php` (+8/-1)
-- `bootstrap`: `helpers/shared.php` (+1/-1), `helpers/subscriptions.php` (+2/-0)
+- `bootstrap`: `helpers/shared.php` (+2/-2), `helpers/subscriptions.php` (+2/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
 - `resources`: `views/components/navbar.blade.php` (+28/-2), `views/components/settings/sidebar.blade.php` (+4/-2), `views/layouts/app.blade.php` (+1/-0), `views/livewire/dashboard.blade.php` (+5/-1), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+7/-3), `views/livewire/subscription/show.blade.php` (+10/-4)
 

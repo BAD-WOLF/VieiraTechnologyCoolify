@@ -14,7 +14,7 @@ Tudo fica desligado até `PLATFORM_ENABLED=true`. Sem isso o fork se comporta co
 | Nó dedicado | Servidor reservado a um tenant (Enterprise). |
 | Rede do tenant | `tenant-{id}`, uma rede Docker por tenant em cada nó (`StandaloneDocker` com `team_id`). |
 
-Fluxo do tenant: assinatura paga com Pix ou boleto (Banco Inter), provisionamento das redes nos nós da região, onboarding
+Fluxo do tenant: assinatura paga com Pix ou boleto (Efí Bank), provisionamento das redes nos nós da região, onboarding
 (projeto inicial, sem pedir servidor) e deploys nos nós compartilhados.
 
 ## Começo rápido
@@ -28,25 +28,29 @@ Fluxo do tenant: assinatura paga com Pix ou boleto (Banco Inter), provisionament
 
    Pode rodar de novo quando quiser: ele só cria o que falta e não desfaz nada que você mudou no painel.
 3. Entre com o owner, ative o 2FA (exigido do operador) e abra **/admin/platform → Configurações**. A lista **Pronto para vender?** mostra o que ainda falta (e-mail transacional, pagamentos, região e nós), com o link de cada tela.
-4. Em **/admin/platform → Cobrança**, cole o Client ID, o Client Secret, o certificado (.crt) e a chave (.key) da integração criada no Inter Empresas e clique em **Salvar e conectar**. O painel testa a conexão e registra o webhook sozinho.
+4. Em **/admin/platform → Cobrança**, preencha o Client ID e o Client Secret da aplicação criada na Efí, envie o certificado (`.p12`) e informe a chave Pix da conta. Clique em **Salvar e conectar**: o painel testa as duas APIs e registra o webhook do Pix sozinho.
 
-Os planos já vêm com preços e limites (Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta). Para mudar, use **Configurações → Planos**.
+Os planos já vêm com preços e limites (Básico R$ 49,90/mês ou R$ 499/ano, Profissional R$ 149,90/mês ou R$ 1.499/ano, Enterprise sob consulta). Para mudar preços, limites e recursos, ou para criar e remover planos, use a aba **Planos** do console (seção *Planos*, abaixo).
 
-A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando o Inter confirma o pagamento.
+A partir daí o cliente escolhe o plano, informa os dados de cobrança e paga com Pix (confirmação em segundos) ou boleto. O plano é ativado sozinho quando a Efí confirma o pagamento.
 
 ### Ao atualizar uma instalação existente
 
 Versões anteriores tinham um erro: com a plataforma instalada, o Coolify não criava as configurações de aplicações novas nem o volume de dados de bancos novos. Depois de atualizar, rode `php artisan platform:repair-resources` para listar os recursos afetados e, depois de fazer backup dos bancos listados, `php artisan platform:repair-resources --fix`. O volume novo é montado no próximo reinício do banco.
 
-### Criar a integração no Banco Inter
+### Criar a aplicação na Efí
 
-1. No Internet Banking do Inter Empresas, vá em **Soluções para sua empresa → Nova integração** (ou "Integrações → Nova aplicação").
-2. Marque a **API Pix** (escopos `cobv.write`, `cobv.read`, `webhook.write`, `webhook.read` e `pix.read`) e a **API Cobrança (Boleto e Pix)** (escopos `boleto-cobranca.read` e `boleto-cobranca.write`).
-3. Baixe o arquivo zip: ele traz o certificado (`.crt`) e a chave (`.key`). O Client ID e o Client Secret aparecem na tela da integração.
-4. No console, informe também a **chave Pix da conta** (CNPJ, e-mail, telefone ou chave aleatória cadastrada no Inter).
-5. O certificado vale 1 ano. Antes de vencer, gere outro e cole no console.
+A Efí aceita conta de pessoa física, sem CNPJ (Efí Pro), e de empresa (Efí Empresas). As duas têm as APIs.
 
-Para testar sem dinheiro real, crie a integração no sandbox do Inter, escolha **Sandbox (testes)** no console e use **Simular pagamento** na lista de faturas.
+1. Na conta Efí, vá em **API → Aplicações → Criar aplicação**.
+2. Ative a **API Cobranças** (boletos) e a **API Pix** com os escopos `cobv.write`, `cobv.read`, `webhook.write` e `webhook.read`, em produção e, se for testar, em homologação.
+3. Copie o **Client ID** e o **Client Secret** do ambiente que vai usar. Produção e homologação têm credenciais próprias.
+4. Em **API → Meus certificados**, crie o certificado do mesmo ambiente e baixe o `.p12`. Envie o arquivo como veio: o painel abre também os `.p12` feitos com algoritmos antigos, que o PHP sozinho não lê. Um `.pem` com o certificado e a chave também serve.
+5. Cadastre uma chave Pix na conta (CPF/CNPJ, e-mail, telefone ou aleatória) e informe-a no console.
+
+Sem chave Pix ou sem certificado, toda fatura sai como boleto com QR Code Pix, e só as credenciais bastam.
+
+Para testar sem dinheiro real, use as credenciais e o certificado de homologação, escolha **Homologação (testes)** no console e use **Simular pagamento** na lista de faturas. No boleto, a simulação faz a baixa pela API da Efí. No Pix, que a homologação não deixa pagar, o pagamento é registrado direto no painel.
 
 ## Testar em localhost (Docker)
 
@@ -92,9 +96,9 @@ set -a; . ../.env; set +a
 E2E_NODE=1 E2E_OWNER_EMAIL="$HOSTREMA_OWNER_EMAIL" E2E_OWNER_PASSWORD="$HOSTREMA_OWNER_PASSWORD" npx playwright test
 ```
 
-Ele cadastra um cliente, confirma o e-mail pelo Mailpit, abre o painel antes de pagar, escolhe o plano informando só nome e CPF, simula o pagamento, cria o primeiro projeto, adiciona um repositório público do GitHub, faz o deploy de uma imagem Docker e abre o site em `http://<nome>.localhost`, cria um PostgreSQL e um serviço de um clique, e abre as abas do console do owner. Em cada tela confere que o nome Coolify não aparece. O relatório (com capturas de tela) fica em `infra/local/e2e/playwright-report`.
+Ele cadastra um cliente, confirma o e-mail pelo Mailpit, abre o painel antes de pagar, escolhe o plano informando só nome, CPF e e-mail, simula o pagamento, cria o primeiro projeto, adiciona um repositório público do GitHub, faz o deploy de uma imagem Docker e abre o site em `http://<nome>.localhost`, cria um PostgreSQL e um serviço de um clique, e abre as abas do console do owner. Um segundo cliente, no plano Básico, adiciona um projeto Docker Compose como está no repositório (banco com volume, pasta do projeto montada e portas no host), troca o arquivo de `.yaml` para `.yml` e faz o deploy. Em cada tela confere que o nome Coolify não aparece. O relatório (com capturas de tela) fica em `infra/local/e2e/playwright-report`.
 
-Para testar o Banco Inter de verdade, escolha **Banco Inter** em Configurações → Cobrança e use credenciais do sandbox. O webhook do Inter não alcança o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
+Para testar a Efí de verdade, escolha **Efí Bank** em Configurações → Cobrança e use as credenciais de homologação. As notificações da Efí não alcançam o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
 
 | Comando | Para quê |
 | --- | --- |
@@ -106,7 +110,7 @@ Para testar o Banco Inter de verdade, escolha **Banco Inter** em Configurações
 | `./hostrema-local.sh down` | para tudo sem apagar os dados |
 | `./hostrema-local.sh reset` | apaga todos os dados locais |
 
-O ambiente local não tem HTTPS, gVisor, slices por cliente, Loki/Grafana, edge router nem portas públicas de bancos. As aplicações respondem só pelas portas 80 e 443 do nó.
+O ambiente local não tem HTTPS, gVisor, slices por cliente, Loki/Grafana, edge router nem portas públicas de bancos. As aplicações respondem só pelas portas 80 e 443 do nó. Mesmo sem os slices, os containers de um cliente dividem o plano como em produção, então uma stack com vários containers cabe no plano Básico.
 
 ## Configurações (painel do owner)
 
@@ -115,10 +119,9 @@ Quase tudo se configura em **/admin/platform → Configurações**, sem editar o
 | Grupo | O que tem |
 | --- | --- |
 | Geral | Nome e descrição da plataforma, idioma das páginas (padrão pt-BR), e-mail de suporte, links de vendas, documentação, termos e privacidade, logo, moeda, domínio base das aplicações e hosts reservados. Também traz a lista **Pronto para vender?**. |
-| Planos | Uma tabela com nome, preço mensal e anual e venda só pelo comercial de cada plano, mais as cotas (CPU, memória, disco, recursos, containers, deploys por dia, domínios, tráfego, processos, IOPS e banda) e os recursos (bancos, volumes, backups, log drains, previews, bancos públicos, Compose, servidor dedicado, SSO e traces). |
-| Cobrança | Meio de pagamento (Banco Inter, manual ou Stripe), instruções do modo manual, prazo, baixa do boleto, multa, juros, cobrança mínima, preço do excedente, trial e chaves do Stripe. |
+| Cobrança | Meio de pagamento (Efí Bank, manual ou Stripe), instruções do modo manual, prazo, dias até a baixa da cobrança, multa, juros, cobrança mínima, preço do excedente, trial e chaves do Stripe. |
 | Contas | Aviso de cota, dias até suspender e até parar os containers, servidores próprios e terminal para clientes. |
-| Containers e isolamento | Runtime (gVisor) dos nós compartilhados e das VMs dedicadas, CPU e memória padrão, capabilities, OOM score, slices por cliente, logs por container, limite de disco e faixa de portas dos bancos públicos. |
+| Containers e isolamento | Runtime (gVisor) dos nós compartilhados e das VMs dedicadas, CPU e memória padrão, capabilities, OOM score, slices por cliente, divisão do plano entre os containers, logs por container, limite de disco e faixa de portas dos bancos públicos. |
 | Logs, traces e medição | Loki padrão, tempo limite e linhas do histórico, endpoint OTLP, intervalo e retenção da medição. |
 | Webhooks e eventos | Limites, tempo limite, retenção, desativação por falhas, HTTP simples, alvos privados do operador e stream do Redis. |
 | Segurança | Quem precisa de 2FA e as redes permitidas para os tokens do operador. |
@@ -126,7 +129,8 @@ Quase tudo se configura em **/admin/platform → Configurações**, sem editar o
 
 Outras telas guardam o resto:
 
-- **Credenciais do Banco Inter:** aba **Cobrança** do console.
+- **Planos (preços, limites, recursos, ordem e visibilidade):** aba **Planos** do console.
+- **Credenciais e certificado da Efí:** aba **Cobrança** do console.
 - **Nome e Loki de cada região:** aba **Regiões e nós**.
 - **E-mail transacional (SMTP ou Resend), cadastro aberto e API:** telas do próprio Coolify (*Settings*), com atalhos na lista **Pronto para vender?**.
 
@@ -182,27 +186,61 @@ Com `worker_count` maior que zero, o cluster separa os papéis: as `instance_cou
 
 Para o `platform-release.yml` atualizar o cluster, coloque em `CONTROL_PLANE_HOST` a saída `ssh_hosts` (todas as instâncias, separadas por espaço) e libere o SSH em `admin_cidrs`. O workflow atualiza uma instância por vez e, se uma falhar, volta todas para a versão anterior. A versão em uso fica gravada no Parameter Store (`/hostrema/control-plane/image`), e uma instância criada depois já sobe com ela. A primeira versão vem da variável `image` (padrão `ghcr.io/bad-wolf/hostrema:latest`, a última release publicada).
 
-## Cobrança com Banco Inter
+## Planos
 
-Com a chave Pix configurada, cada fatura vira uma cobrança Pix com vencimento (API Pix do Inter, `cobv`, com multa e juros): o cliente informa só nome, CPF/CNPJ e e-mail e paga pelo QR code ou pelo Pix copia e cola. Quem prefere boleto escolhe isso nos dados de cobrança (ou em "Prefere pagar com boleto?" na fatura), informa o endereço, que o banco exige para registrar o boleto, e recebe uma cobrança "Bolepix" (boleto com QR code Pix, API Cobrança v3). Sem chave Pix, toda fatura é Bolepix e o endereço é obrigatório. As duas APIs usam OAuth2 com certificado mTLS, cada uma com o seu token. A página de pagamento se atualiza sozinha quando o Pix é confirmado, mostra o link para voltar ao início e, depois do pagamento, o botão para o painel. Antes do primeiro pagamento o cliente já abre o painel, que mostra como ativar o plano; criar e publicar recursos só fica liberado com o plano ativo.
+Os planos ficam na tabela `platform_plans` e se editam na aba **Planos** do console. Os três que vêm de fábrica:
+
+| | Básico | Profissional | Enterprise |
+| --- | --- | --- | --- |
+| Preço | R$ 49,90/mês ou R$ 499/ano | R$ 149,90/mês ou R$ 1.499/ano | sob consulta |
+| CPU e memória | 0,5 vCPU e 1,5 GB | 2 vCPU e 4 GB | 8 vCPU e 16 GB |
+| Armazenamento | 10 GB | 50 GB | 250 GB |
+| Recursos e containers | 3 e 6 | 15 e 30 | 100 e 200 |
+| Aplicações, bancos, Docker Compose, volumes e backups dos bancos | sim | sim | sim |
+| Previews de pull request, bancos públicos, exportação de logs e traces | não | sim | sim |
+| Servidor dedicado e SSO | não | não | sim |
+
+**Volumes, diretórios e backups estão em todos os planos.** Uma aplicação comum (um `docker-compose.yml` com banco e pasta do projeto, por exemplo) precisa deles, e o limite que vale é o armazenamento: o uso dos volumes, diretórios e backups é medido, o excedente entra na fatura seguinte e, com 100% da cota, novos deploys esperam até liberar espaço ou mudar de plano. Os demais recursos que o Básico não tem são os que custam mais para a plataforma ou só servem para equipes.
+
+**CPU e memória são divididos entre os containers do cliente.** Em cada nó, todos os containers de um cliente rodam juntos no slice dele, limitado ao plano. Cada container pode usar até o plano inteiro, então os limites declarados não se somam contra o plano, e uma stack de quatro containers cabe no Básico. Um nó nunca conta mais que o plano; só recursos espalhados por mais de um nó somam além dele, e o deploy é recusado com o motivo. O uso que aparece para o cliente é o medido ("em uso"), não o reservado. Sem slices em produção, desligue "Os containers de um cliente dividem o plano em cada nó" (Configurações → Containers e isolamento) para que cada limite conte por inteiro.
+
+**Portas do compose.** `ports` publicados no host viram `expose` na rede do cliente (o serviço é acessado pelo domínio), com um aviso no log do deploy. Um compose que monta uma pasta do próprio repositório (`.:/app`, por exemplo) precisa de **Preserve Repository During Deployment** ligado na aplicação, senão a pasta chega vazia; o log do deploy avisa.
+
+Na aba **Planos** o owner:
+
+- cria um plano do zero ou duplica um existente (a cópia nasce oculta);
+- muda nome, descrição, preços mensal e anual, IDs de preço do Stripe, destaque ("Recomendado") e venda só pelo comercial;
+- define cada limite (ou marca **Ilimitado**), liga ou desliga cada recurso e acrescenta itens livres (suporte, SLA...) com uma explicação;
+- muda a ordem em que os planos aparecem e oculta um plano, que deixa de ser vendido mas continua atribuível a clientes;
+- remove um plano. Se houver clientes nele, escolhe para qual plano eles vão; as faturas em aberto do plano removido são canceladas e a próxima renovação já cobra o novo.
+
+As mudanças valem para todos os clientes do plano em poucos minutos (os limites dos nós são reaplicados), entram no audit log e aparecem nas páginas de preços: cada limite, recurso e item tem um ícone de informação que explica o que é, e o que o plano não inclui aparece riscado.
+
+Para um cliente só, **Tenants → Editar** troca o plano (inclusive por um oculto) e ativa a conta na hora, adia o fim do período atual (dias grátis), marca a conta como cortesia (renova sem fatura), dá limites e recursos próprios (o campo vazio usa o do plano) e guarda notas que só os operadores veem.
+
+**Acessar como este usuário.** No mesmo painel, cada membro do cliente tem o botão **Acessar como este usuário**: o operador entra no painel do cliente como aquele usuário, para ver o que ele vê ou resolver algo por ele. Uma faixa no topo mostra quem está sendo acessado e o botão **Voltar ao console do operador**. O início e o fim ficam no audit log, e cada ação feita nesse tempo leva o operador em `impersonated_by`. Só o owner e os admins do time root podem acessar, e nunca como outro usuário do time root.
+
+## Cobrança com a Efí Bank
+
+Com a chave Pix e o certificado configurados, cada fatura vira uma cobrança Pix com vencimento (API Pix da Efí, `cobv`, com multa e juros): o cliente informa só nome, CPF/CNPJ e e-mail e paga pelo QR code ou pelo Pix copia e cola. Quem prefere boleto escolhe isso nos dados de cobrança (ou em "Prefere pagar com boleto?" na fatura), informa um telefone com DDD e recebe um boleto com QR Code Pix (API Cobranças, `one-step`), pago pelo código de barras ou pelo Pix. Ninguém informa endereço. Sem chave Pix ou sem certificado, toda fatura é boleto. A página de pagamento se atualiza sozinha quando o pagamento é confirmado, mostra o link para voltar ao início e, depois do pagamento, o botão para o painel. Antes do primeiro pagamento o cliente já abre o painel, que mostra como ativar o plano; criar e publicar recursos só fica liberado com o plano ativo.
 
 - **Assinatura.** A primeira fatura cobre o primeiro período (mensal ou anual). O plano começa quando ela é paga.
 - **Renovação.** No fim de cada período sai uma fatura com o próximo período e o uso excedente do período que fechou, com o prazo de pagamento definido em Configurações → Cobrança (padrão: 5 dias). O cliente continua usando durante o prazo.
-- **Atraso.** Fatura vencida deixa o tenant em atraso: aviso por e-mail, deploys suspensos após 7 dias, containers parados após 30 dias (com backup antes). Ao pagar, tudo volta sozinho. O cliente pode gerar uma nova cobrança se o boleto expirar.
+- **Atraso.** Fatura vencida deixa o tenant em atraso: aviso por e-mail, deploys suspensos após 7 dias, containers parados após 30 dias (com backup antes). Ao pagar, tudo volta sozinho. O cliente pode gerar uma nova cobrança se a anterior expirar.
 - **Mudanças de plano.** Upgrade é cobrado proporcionalmente ao resto do período e vale quando é pago. Downgrade e troca de mensal/anual valem na próxima renovação. O cancelamento encerra a assinatura no fim do período.
-- **Confirmação.** O Inter avisa o webhook `https://<painel>/api/v1/billing/webhooks/inter/<token secreto>` (boletos) e o mesmo endereço seguido de `/pix` (Pix da chave), os dois registrados pelo console. O aviso só diz qual cobrança mudou: o status é sempre consultado de novo na API do Inter. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
-- **Operador.** Em /admin/platform → Cobrança é possível consultar uma fatura no banco, marcar como paga (pagamento recebido por fora), cancelar, emitir de novo e, no sandbox, simular o pagamento.
-- **Dados do pagador.** Nome, CPF/CNPJ (validado) e e-mail; o endereço só para quem paga com boleto. Ficam criptografados no banco de dados, assim como as credenciais do Inter.
+- **Confirmação.** O Pix da chave chega em `https://<painel>/api/v1/billing/webhooks/efi/<token secreto>/pix`, registrado pelo console (sem exigir certificado do nosso lado: o token secreto autentica a chamada). Cada boleto leva o endereço `.../efi/<token secreto>/charges`, que a Efí chama com um token de notificação. Nenhum aviso é aceito como pagamento: o painel consulta de novo a cobrança na Efí antes de liberar o plano. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
+- **Operador.** Em /admin/platform → Cobrança é possível consultar uma fatura no banco, marcar como paga (pagamento recebido por fora), cancelar, emitir de novo e, na homologação, simular o pagamento.
+- **Dados do pagador.** Nome, CPF/CNPJ (validado), e-mail e, só para boleto, telefone. Ficam criptografados no banco de dados, assim como o Client Secret, o certificado e a chave da Efí, que nunca voltam para o navegador.
 
-Não há SDK oficial do Inter para PHP. A integração usa um cliente próprio (`app/Services/Platform/Inter/`) com o cliente HTTP do Laravel, sem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial.
+A integração usa um cliente próprio (`app/Services/Platform/Efi/`) com o cliente HTTP do Laravel, sem o SDK da Efí nem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial. A API Pix usa OAuth2 com o certificado (mTLS); a API Cobranças, só o Client ID e o Client Secret. Instalações que usavam o Banco Inter passam para a Efí na migração `2025_10_20_000011`: as faturas em aberto perdem a cobrança antiga e são emitidas de novo pela Efí no ciclo seguinte, e as credenciais antigas são apagadas.
 
 ### Pagamento manual (sem banco)
 
-Com o meio de pagamento **Manual** (Configurações → Cobrança), cada fatura sai na hora com as instruções que você escrever (chave Pix, conta, para onde mandar o comprovante). O plano é liberado quando você clica em **Marcar como paga** na aba Cobrança. Atrasos, suspensões e avisos funcionam como no Inter. Para testes, a opção "Clientes podem simular o pagamento" mostra o botão **Simular pagamento** nas faturas em aberto. Nunca ligue essa opção em produção.
+Com o meio de pagamento **Manual** (Configurações → Cobrança), cada fatura sai na hora com as instruções que você escrever (chave Pix, conta, para onde mandar o comprovante). O plano é liberado quando você clica em **Marcar como paga** na aba Cobrança. Atrasos, suspensões e avisos funcionam como na Efí. Para testes, a opção "Clientes podem simular o pagamento" mostra o botão **Simular pagamento** nas faturas em aberto. Nunca ligue essa opção em produção.
 
 ### Stripe (alternativa)
 
-Com o meio de pagamento **Stripe** vale a integração anterior: assinaturas no Stripe, webhook em `/api/v1/billing/webhooks/stripe` com os eventos `customer.subscription.*`, `invoice.*` e `charge.refunded`, e o customer portal do Stripe. A chave secreta, o segredo do webhook e os IDs de preço ficam em Configurações (Cobrança e Planos).
+Com o meio de pagamento **Stripe** vale a integração anterior: assinaturas no Stripe, webhook em `/api/v1/billing/webhooks/stripe` com os eventos `customer.subscription.*`, `invoice.*` e `charge.refunded`, e o customer portal do Stripe. A chave secreta e o segredo do webhook ficam em Configurações → Cobrança; os IDs de preço, em cada plano da aba **Planos**.
 
 ## Medição, preço e faturas (wiki 8)
 
@@ -218,7 +256,7 @@ O fluxo é `usage_events` (bruto, a cada 5 min) → `aggregated_usage_hourly` (r
 | Situação | Ação |
 | --- | --- |
 | Uso ≥ 80% de uma cota | E-mail e aviso no painel (uma vez por período) |
-| Acima de 100% (CPU, memória, containers, recursos) ou armazenamento cheio | Status `limited`: sem novos recursos nem deploys, e o que já roda continua |
+| Acima de 100% (containers e recursos; CPU e memória só quando os containers não dividem o plano) ou armazenamento cheio | Status `limited`: sem novos recursos nem deploys, e o que já roda continua |
 | Fatura vencida há mais de 7 dias | Status `suspended`: deploys bloqueados |
 | Mais de 30 dias, ou assinatura cancelada há mais de 7 dias | Status `hard_suspended`: backups disparados e containers parados depois do aviso |
 | Pagamento confirmado | Reativação, com os recursos parados iniciados de novo |
@@ -238,8 +276,8 @@ Todo compose gerado para um tenant (aplicações, serviços, bancos e previews) 
 
 Também há guardas nos modelos para todas as entradas (UI, API e webhooks): validação de comandos,
 portas, imagens, caminhos, domínios (sem domínio reservado ou de outro tenant), recursos por
-plano (bancos, docker compose, volumes, previews, bancos públicos e log drains) e o destino do recurso
-(só destinos do próprio tenant).
+plano (bancos, Docker Compose, backups, previews, bancos públicos e exportação de logs) e o destino do
+recurso (só destinos do próprio tenant).
 
 ### Serviços de um clique
 
@@ -271,7 +309,7 @@ Além do limite de cada container, o cliente inteiro tem um teto em cada nó. To
 | IOPS | 1.000 | 4.000 | sem limite |
 | Banda (bridge do cliente) | 50 Mbit/s | 200 Mbit/s | sem limite |
 
-Os valores mudam em Configurações → Planos ou, para um cliente só, por ajuste de cota no console (`{"bandwidth_mbps": 500}`). Ao mudar o plano ou os ajustes, os limites são reaplicados em todos os nós. A banda limita o tráfego entre os containers e a internet; o tráfego entre o proxy e a aplicação (respostas HTTP) não passa por esse limite.
+Os valores mudam na aba **Planos** ou, para um cliente só, em **Tenants → Editar** (limites do cliente). Ao mudar o plano ou os ajustes, os limites são reaplicados em todos os nós. A banda limita o tráfego entre os containers e a internet; o tráfego entre o proxy e a aplicação (respostas HTTP) não passa por esse limite.
 
 ## Traces das aplicações (OpenTelemetry)
 
@@ -325,10 +363,11 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Console do operador
 
-`/admin/platform`, apenas para o time root, tem cinco abas:
+`/admin/platform`, apenas para o time root, tem seis abas:
 
-- **Tenants:** plano, status, uso, overrides de cota (JSON), suspender (manual ou total), reativar e provisionar;
-- **Cobrança:** credenciais do Inter, preços dos planos, webhook e faturas de todos os tenants (consultar, marcar como paga, cancelar, emitir de novo);
+- **Tenants:** plano, status, uso, suspender (manual ou total), reativar e provisionar. **Editar** abre tudo o que é do cliente: plano (inclusive os ocultos), fim do período atual (adiar dá dias grátis), conta cortesia (nunca cobrada), limites e recursos próprios, notas internas e os membros, cada um com **Acessar como este usuário** (veja *Planos*);
+- **Planos:** preços, limites, recursos e itens extras de cada plano, ordem, destaque e visibilidade; criar, duplicar e remover planos;
+- **Cobrança:** credenciais e certificado da Efí, webhook do Pix e faturas de todos os tenants (consultar, marcar como paga, cancelar, emitir de novo);
 - **Regiões e nós:** região, nó dedicado e reprovisionamento; também cria, edita (nome e Loki) e desativa regiões;
 - **Configurações:** tudo o que antes ficava no `.env` (seção *Configurações* acima). Só o owner grava;
 - **Audit log:** ações de usuários, do sistema e da cobrança.
@@ -365,7 +404,8 @@ Todos os endpoints usam `Authorization: Bearer <token>`.
 | `GET /api/v1/platform/openapi.json` | público | Este conjunto de endpoints em OpenAPI 3.1 |
 | `POST /api/v1/platform/servers/{uuid}/region` | root | Região, nó dedicado e wildcard do nó (`region`, `region_name`, `dedicated_team_id`, `wildcard_domain`) |
 | `POST /api/v1/platform/tenants/{teamId}/provision` | root | (Re)provisiona as redes do tenant |
-| `POST /api/v1/billing/webhooks/inter/{token}` | Banco Inter | Aviso de mudança de cobrança (o status é consultado na API do Inter) |
+| `POST /api/v1/billing/webhooks/efi/{token}/pix` | Efí Bank | Pix recebido na chave da conta (a cobrança é consultada de novo na API Pix) |
+| `POST /api/v1/billing/webhooks/efi/{token}/charges` | Efí Bank | Token de notificação de um boleto (as mudanças são lidas na API Cobranças) |
 | `POST /api/v1/rollback` | token com `deploy` | Volta uma aplicação para a imagem de um deploy anterior (`uuid` e, opcionalmente, `commit` ou `deployment_uuid`) |
 | `GET /api/v1/platform/metrics` | token do Prometheus (Configurações → Tokens internos) | Métricas Prometheus do control plane |
 | `GET /api/v1/platform/edge/{região}` | token dos edge routers (Configurações → Tokens internos) | Configuração dinâmica dos edge routers (Traefik) |

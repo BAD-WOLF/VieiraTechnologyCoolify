@@ -1,10 +1,10 @@
-{{-- Open Banco Inter invoice: Pix QR code and copy and paste code, or boleto line and PDF. Expects $invoice and $qr. --}}
+{{-- Open invoice (Efí or manual): Pix QR code and copy and paste code, or boleto line, its Pix code and PDF. Expects $invoice and $qr. --}}
 @php
     $details = (array) $invoice->payment_details;
-    $isPix = \App\Services\Platform\InterBilling::isPix($invoice);
-    $isBoleto = \App\Services\Platform\InterBilling::isBoleto($invoice);
+    $isPix = \App\Services\Platform\PlatformBilling::isPix($invoice);
+    $isBoleto = \App\Services\Platform\PlatformBilling::isBoleto($invoice);
     $paymentMethods = \App\Services\Platform\BillingProfile::methods();
-    $waitingBank = filled($invoice->provider_reference) && ! \App\Services\Platform\InterBilling::isManualInvoice($invoice);
+    $waitingBank = filled($invoice->provider_reference) && ! \App\Services\Platform\PlatformBilling::isManualInvoice($invoice);
 @endphp
 <div wire:key="pay-{{ $invoice->uuid }}" class="flex flex-col gap-4 p-4 border rounded-sm border-warning/60"
     @if ($waitingBank) wire:poll.5s="checkPayment('{{ $invoice->uuid }}')" @endif>
@@ -12,7 +12,7 @@
         <div>
             <h3>{{ __('Payment pending') }}: {{ $invoice->formattedAmount() }}</h3>
             <div class="text-sm dark:text-neutral-400">
-                {{ $invoice->number }} · {{ \App\Services\Platform\InterBilling::describe($invoice) }}
+                {{ $invoice->number }} · {{ \App\Services\Platform\PlatformBilling::describe($invoice) }}
                 · {{ __('Due on :date', ['date' => $invoice->due_date?->format('d/m/Y')]) }}
             </div>
         </div>
@@ -29,7 +29,7 @@
             {{ data_get($invoice->metadata, 'issue_error') }}
             <div class="pt-2">{{ __('Check the billing details and issue the charge again.') }}</div>
         </x-callout>
-    @elseif (\App\Services\Platform\InterBilling::isManualInvoice($invoice))
+    @elseif (\App\Services\Platform\PlatformBilling::isManualInvoice($invoice))
         <div class="flex flex-col gap-2 text-sm">
             <span class="font-bold dark:text-white">{{ __('How to pay') }}</span>
             <div class="whitespace-pre-line dark:text-neutral-300">{{ $details['instructions'] ?? '' }}</div>
@@ -64,12 +64,12 @@
                                 <span x-text="copied === 'boleto' ? @js(__('Copied')) : @js(__('Copy'))"></span>
                             </x-forms.button>
                         </div>
-                        <span class="text-xs dark:text-neutral-400">{{ __('Boletos are confirmed in up to 3 business days.') }}</span>
+                        <span class="text-xs dark:text-neutral-400">{{ __('Boletos are confirmed in up to 3 business days; the Pix code of the boleto, in seconds.') }}</span>
                     </div>
                 @endif
                 <div class="flex flex-wrap gap-2">
-                    @if ($isBoleto)
-                        <x-forms.button type="button" wire:click="downloadBoleto('{{ $invoice->uuid }}')">{{ __('Download boleto (PDF)') }}</x-forms.button>
+                    @if ($isBoleto && str_starts_with((string) ($details['boleto_url'] ?? ''), 'https://'))
+                        <a class="button" href="{{ $details['boleto_url'] }}" target="_blank" rel="noopener">{{ __('Download boleto (PDF)') }}</a>
                     @endif
                     <x-forms.button type="button" wire:click="refreshInvoice('{{ $invoice->uuid }}')">{{ __('I already paid, check again') }}</x-forms.button>
                 </div>
@@ -82,13 +82,13 @@
         </div>
     @endif
     <div class="flex flex-wrap gap-2">
-        @if (in_array($invoice->provider_status, \App\Services\Platform\InterBilling::VOID_STATUSES, true) || filled(data_get($invoice->metadata, 'issue_error')) || $invoice->due_date?->isPast())
+        @if (in_array($invoice->provider_status, \App\Services\Platform\PlatformBilling::VOID_STATUSES, true) || filled(data_get($invoice->metadata, 'issue_error')) || $invoice->due_date?->isPast())
             <x-forms.button type="button" wire:click="reissueInvoice('{{ $invoice->uuid }}')">{{ __('Issue a new charge') }}</x-forms.button>
         @endif
         @if ($cancellable ?? false)
             <x-forms.button type="button" wire:click="cancelCheckout('{{ $invoice->uuid }}')">{{ __('Choose another plan') }}</x-forms.button>
         @endif
-        @if (\App\Services\Platform\InterBilling::allowsSimulatedPayments())
+        @if (\App\Services\Platform\PlatformBilling::allowsSimulatedPayments())
             <x-forms.button type="button" wire:click="simulatePayment('{{ $invoice->uuid }}')">{{ __('Simulate payment (tests)') }}</x-forms.button>
         @endif
     </div>

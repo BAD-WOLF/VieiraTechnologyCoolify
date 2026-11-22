@@ -2,11 +2,11 @@
 
 namespace App\Livewire\Platform;
 
-use App\Livewire\Platform\Concerns\ManagesInterInvoices;
+use App\Livewire\Platform\Concerns\ManagesInvoices;
 use App\Models\PlatformInvoice;
 use App\Services\Platform\BillingProfile;
-use App\Services\Platform\InterBilling;
 use App\Services\Platform\PlanCatalog;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PricingEngine;
 use App\Services\Platform\TenantUsage;
 use Livewire\Component;
@@ -17,7 +17,7 @@ use Livewire\Component;
  */
 class Billing extends Component
 {
-    use ManagesInterInvoices;
+    use ManagesInvoices;
 
     public bool $showPlans = false;
 
@@ -26,7 +26,7 @@ class Billing extends Component
         if (! isPlatformTenant()) {
             return redirect()->route('dashboard');
         }
-        if (InterBilling::enabled()) {
+        if (PlatformBilling::enabled()) {
             $this->loadProfile(platformTenant());
         }
     }
@@ -53,7 +53,7 @@ class Billing extends Component
     public function cancelSubscription(): void
     {
         if ($this->canManageBilling()) {
-            InterBilling::cancelAtPeriodEnd(platformTenant(), true);
+            PlatformBilling::cancelAtPeriodEnd(platformTenant(), true);
             $this->dispatch('success', __('The subscription ends on :date.', ['date' => platformTenant()->current_period_end?->format('d/m/Y')]));
         }
     }
@@ -61,7 +61,7 @@ class Billing extends Component
     public function resumeSubscription(): void
     {
         if ($this->canManageBilling()) {
-            InterBilling::cancelAtPeriodEnd(platformTenant(), false);
+            PlatformBilling::cancelAtPeriodEnd(platformTenant(), false);
             $this->dispatch('success', __('The subscription will be renewed.'));
         }
     }
@@ -77,10 +77,10 @@ class Billing extends Component
     {
         $tenant = platformTenant();
         [$periodStart, $periodEnd] = TenantUsage::currentPeriod($tenant);
-        $inter = InterBilling::enabled();
-        $open = $inter ? PlatformInvoice::query()
+        $invoicing = PlatformBilling::enabled();
+        $open = $invoicing ? PlatformInvoice::query()
             ->where('team_id', $tenant->team_id)
-            ->where('provider', InterBilling::PROVIDER)
+            ->where('provider', PlatformBilling::PROVIDER)
             ->where('status', PlatformInvoice::STATUS_OPEN)
             ->latest('id')
             ->get() : collect();
@@ -89,18 +89,17 @@ class Billing extends Component
 
         return view('livewire.platform.billing', [
             'tenant' => $tenant,
-            'inter' => $inter,
+            'invoicing' => $invoicing,
             'snapshot' => TenantUsage::snapshot($tenant),
             'preview' => PricingEngine::calculate($tenant, $periodStart, now()),
             'periodStart' => $periodStart,
             'periodEnd' => $periodEnd,
             'price' => $tenant->plan ? PlanCatalog::displayPrice($tenant->plan, $tenant->billing_interval ?? PlanCatalog::INTERVAL_MONTHLY) : null,
-            'nextPrice' => $nextPlan ? InterBilling::priceCents($nextPlan, $nextInterval) : null,
+            'nextPrice' => $nextPlan ? PlatformBilling::priceCents($nextPlan, $nextInterval) : null,
             'openInvoices' => $open,
             'qrCodes' => $open->mapWithKeys(fn (PlatformInvoice $invoice) => [$invoice->uuid => self::pixQrSvg(data_get($invoice->payment_details, 'pix_copia_e_cola'))]),
             'invoices' => PlatformInvoice::query()->where('team_id', $tenant->team_id)->latest('id')->limit(36)->get(),
             'isAdmin' => auth()->user()->isAdmin(),
-            'states' => BillingProfile::STATES,
             'profileComplete' => BillingProfile::isComplete($tenant),
         ]);
     }

@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\PlatformBilling;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -11,7 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Banco Inter billing cycle: renewals, overdue invoices and reconciliation of open charges.
+ * Billing cycle (Efí or manual): renewals, overdue invoices and reconciliation of open charges.
  */
 class PlatformBillingCycleJob implements ShouldBeUnique, ShouldQueue
 {
@@ -26,6 +26,6 @@ class PlatformBillingCycleJob implements ShouldBeUnique, ShouldQueue
         if (! isPlatform()) {
             return;
         }
-        InterBilling::runCycle();
+        PlatformBilling::runCycle();
     }
 }

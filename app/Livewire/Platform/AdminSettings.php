@@ -4,8 +4,8 @@ namespace App\Livewire\Platform;
 
 use App\Models\PlatformRegion;
 use App\Models\Server;
-use App\Services\Platform\Inter\InterSettings;
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\Efi\EfiSettings;
+use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformConfig;
 use Livewire\Component;
 
@@ -144,10 +144,8 @@ class AdminSettings extends Component
 
         return view('livewire.platform.admin-settings', [
             'groups' => PlatformConfig::GROUPS,
-            'fields' => array_filter($definitions, fn ($definition) => $definition['type'] !== 'secret' && ! isset($definition['plan'])),
+            'fields' => array_filter($definitions, fn ($definition) => $definition['type'] !== 'secret'),
             'secretFields' => array_filter($definitions, fn ($definition) => $definition['type'] === 'secret'),
-            'planRows' => $this->group === 'plans' ? $this->planRows($definitions) : [],
-            'plans' => array_map(fn ($plan) => (string) data_get($plan, 'name'), (array) config('platform.plans', [])),
             'overridden' => array_flip($overrides),
             'canEdit' => $this->canEdit(),
             'checklist' => $this->group === 'general' ? $this->checklist() : [],
@@ -165,8 +163,8 @@ class AdminSettings extends Component
         $nodes = Server::query()->where('team_id', 0)->whereNotNull('platform_region_id')
             ->whereHas('settings', fn ($query) => $query->where('is_usable', true))->count();
         $payments = match (true) {
-            InterBilling::isManual() => true,
-            InterBilling::enabled() => InterSettings::isConfigured(),
+            PlatformBilling::isManual() => true,
+            PlatformBilling::enabled() => EfiSettings::isConfigured(),
             default => filled(config('subscription.stripe_api_key')),
         };
 
@@ -175,32 +173,10 @@ class AdminSettings extends Component
             ['ok' => (bool) $settings->is_registration_enabled, 'label' => __('Customers can sign up'), 'hint' => __('Settings > Advanced > Registration allowed.'), 'url' => route('settings.advanced')],
             ['ok' => (bool) $settings->is_api_enabled, 'label' => __('API enabled'), 'hint' => __('Settings > Advanced > API access (Ansible and the customers use it).'), 'url' => route('settings.advanced')],
             ['ok' => (bool) ($settings->smtp_enabled || $settings->resend_enabled), 'label' => __('E-mail delivery'), 'hint' => __('Settings > Transactional e-mail (SMTP or Resend): invoices, verification and notices.'), 'url' => route('settings.email')],
-            ['ok' => $payments, 'label' => __('Payments'), 'hint' => InterBilling::isManual() ? __('Manual payments: confirm them in the Billing tab.') : __('Billing tab: Banco Inter credentials.'), 'url' => route('admin.platform', ['tab' => 'billing'])],
+            ['ok' => $payments, 'label' => __('Payments'), 'hint' => PlatformBilling::isManual() ? __('Manual payments: confirm them in the Billing tab.') : __('Billing tab: Efí Bank credentials.'), 'url' => route('admin.platform', ['tab' => 'billing'])],
             ['ok' => PlatformRegion::query()->where('is_active', true)->exists(), 'label' => __('Region'), 'hint' => __('Regions & nodes tab (Ansible creates it when it registers the nodes).'), 'url' => route('admin.platform', ['tab' => 'nodes'])],
             ['ok' => $nodes > 0, 'label' => __('Node ready for customers'), 'hint' => __('A validated server of the root team assigned to a region.'), 'url' => route('admin.platform', ['tab' => 'nodes'])],
         ];
-    }
-
-    /**
-     * Rows of the plans table: one per field, one column per plan.
-     *
-     * @param  array<string, array<string, mixed>>  $definitions
-     * @return array<string, array{label: string, type: string, section: string, cells: array<string, string>}>
-     */
-    private function planRows(array $definitions): array
-    {
-        $rows = [];
-        foreach ($definitions as $path => $definition) {
-            $field = $definition['field'] ?? str($path)->afterLast('.')->value();
-            $row = $definition['section'].'.'.$field;
-            if ($definition['section'] === 'plan' && str_starts_with($field, 'stripe_') && config('platform.billing.provider') !== 'stripe') {
-                continue;
-            }
-            $rows[$row] ??= ['label' => $definition['label'], 'type' => $definition['type'], 'section' => $definition['section'], 'cells' => []];
-            $rows[$row]['cells'][$definition['plan']] = self::key($path);
-        }
-
-        return $rows;
     }
 
     /**

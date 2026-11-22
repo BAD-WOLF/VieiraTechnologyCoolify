@@ -19,12 +19,15 @@ class TenantUsage
     public static function snapshot(PlatformTenant $tenant): array
     {
         $quotas = $tenant->quotas();
-        $allocated = PlatformGate::allocated($tenant->team_id);
+        $allocated = PlatformGate::allocated($tenant->team_id, $quotas);
         [$periodStart, $periodEnd] = self::currentPeriod($tenant);
 
+        // The containers share the plan on each node, so what matters to the customer is what they
+        // use (metering), not the limits they declared.
+        $inUse = TenantLimits::sharesPlan();
         $metrics = [
-            'cpus' => [$allocated['cpus'], (float) $quotas['cpus']],
-            'memory_mb' => [$allocated['memory_mb'], (int) $quotas['memory_mb']],
+            'cpus' => [$inUse ? self::cpusInUse($tenant->team_id) : $allocated['cpus'], (float) $quotas['cpus']],
+            'memory_mb' => [$inUse ? self::memoryInUseMb($tenant->team_id) : $allocated['memory_mb'], (int) $quotas['memory_mb']],
             'containers' => [$allocated['containers'], (int) $quotas['containers']],
             'resources' => [PlatformGate::resourceCount($tenant->team_id), (int) $quotas['resources']],
             'storage_gb' => [round(self::latestStorageBytes($tenant->team_id) / 1_000_000_000, 2), (int) $quotas['storage_gb']],
@@ -90,6 +93,42 @@ class TenantUsage
             ->sum('value');
     }
 
+    /**
+     * vCPUs used by the containers of the team at the last collection (sum over its nodes).
+     */
+    public static function cpusInUse(int $teamId): float
+    {
+        return round(self::latestRate($teamId, UsageEvent::METRIC_CPU_SECONDS), 2);
+    }
+
+    public static function memoryInUseMb(int $teamId): int
+    {
+        return (int) round(self::latestRate($teamId, UsageEvent::METRIC_MEMORY_BYTE_SECONDS) / 1_048_576);
+    }
+
+    /**
+     * Value per second of a metric collected per interval (CPU seconds, memory byte-seconds) at
+     * the last collection of the team.
+     */
+    private static function latestRate(int $teamId, string $metric): float
+    {
+        $interval = max(60, (int) config('platform.metering.interval_minutes', 5) * 60);
+        $latest = UsageEvent::query()
+            ->where('team_id', $teamId)
+            ->where('metric', $metric)
+            ->where('recorded_at', '>=', now()->subSeconds($interval * 3))
+            ->max('recorded_at');
+        if (is_null($latest)) {
+            return 0.0;
+        }
+
+        return (float) UsageEvent::query()
+            ->where('team_id', $teamId)
+            ->where('metric', $metric)
+            ->where('recorded_at', $latest)
+            ->sum('value') / $interval;
+    }
+
     public static function deploymentsLastDay(int $teamId): int
     {
         $applicationIds = Application::query()->withoutGlobalScopes()
@@ -103,12 +142,26 @@ class TenantUsage
     }
 
     /**
+     * Quotas whose use is counted against the plan. CPU and memory are shared on each node and
+     * capped by the tenant slice (what the containers use can never pass the plan there), so they
+     * only count when every container limit counts in full.
+     *
+     * @return array<int, string>
+     */
+    public static function hardLimits(): array
+    {
+        return TenantLimits::sharesPlan()
+            ? ['containers', 'resources', 'storage_gb']
+            : ['cpus', 'memory_mb', 'containers', 'resources', 'storage_gb'];
+    }
+
+    /**
      * Highest utilization (percent) among the quotas that are enforced as hard limits.
      */
     public static function peakUtilization(array $snapshot): float
     {
         $peak = 0.0;
-        foreach (['cpus', 'memory_mb', 'containers', 'resources', 'storage_gb'] as $key) {
+        foreach (self::hardLimits() as $key) {
             $peak = max($peak, (float) ($snapshot[$key]['percent'] ?? 0));
         }
 

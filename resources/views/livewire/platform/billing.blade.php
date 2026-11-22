@@ -22,12 +22,12 @@
         @if ($price)
             <div class="text-sm dark:text-neutral-400">{{ $price }} / {{ $tenant->billing_interval === 'yearly' ? __('year') : __('month') }}
                 · {{ __('Region') }}: {{ $tenant->region?->name ?? '—' }}
-                @if ($inter && $tenant->current_period_end)
+                @if ($invoicing && $tenant->current_period_end)
                     · {{ $tenant->cancel_at_period_end ? __('Ends on :date', ['date' => $tenant->current_period_end->format('d/m/Y')]) : __('Renews on :date', ['date' => $tenant->current_period_end->format('d/m/Y')]) }}
                 @endif
             </div>
         @endif
-        @if ($inter && $tenant->pending_plan)
+        @if ($invoicing && $tenant->pending_plan)
             <x-callout type="info" title="{{ __('Scheduled change') }}">
                 {{ __('Your plan changes to :plan on the next renewal.', ['plan' => \App\Services\Platform\PlanCatalog::get($tenant->pending_plan)['name'] ?? $tenant->pending_plan]) }}
                 @if ($isAdmin)
@@ -40,7 +40,7 @@
         @endif
         @if ($isAdmin)
             <div class="flex flex-wrap gap-2">
-                @if ($inter)
+                @if ($invoicing)
                     <x-forms.button wire:click="$toggle('showPlans')">{{ $showPlans ? __('Hide plans') : __('Change plan') }}</x-forms.button>
                     @if ($tenant->current_period_end && in_array($tenant->status, ['active', 'limited', 'suspended']))
                         @if ($tenant->cancel_at_period_end)
@@ -59,7 +59,7 @@
         @endif
     </section>
 
-    @if ($inter && $showPlans)
+    @if ($invoicing && $showPlans)
         <livewire:platform.pricing key="billing-plans" />
     @endif
 
@@ -68,8 +68,8 @@
             <span class="text-xs font-normal dark:text-neutral-400">{{ $periodStart->toDateString() }} → {{ $periodEnd->toDateString() }}</span>
         </h3>
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            @include('livewire.platform.partials.usage-bar', ['label' => __('CPU (reserved)'), 'item' => $snapshot['cpus'], 'unit' => 'vCPU'])
-            @include('livewire.platform.partials.usage-bar', ['label' => __('Memory (reserved)'), 'item' => $snapshot['memory_mb'], 'unit' => 'MB'])
+            @include('livewire.platform.partials.usage-bar', ['label' => \App\Services\Platform\TenantLimits::sharesPlan() ? __('CPU (in use)') : __('CPU (reserved)'), 'item' => $snapshot['cpus'], 'unit' => 'vCPU'])
+            @include('livewire.platform.partials.usage-bar', ['label' => \App\Services\Platform\TenantLimits::sharesPlan() ? __('Memory (in use)') : __('Memory (reserved)'), 'item' => $snapshot['memory_mb'], 'unit' => 'MB'])
             @include('livewire.platform.partials.usage-bar', ['label' => __('Containers'), 'item' => $snapshot['containers']])
             @include('livewire.platform.partials.usage-bar', ['label' => __('Resources'), 'item' => $snapshot['resources']])
             @include('livewire.platform.partials.usage-bar', ['label' => __('Storage'), 'item' => $snapshot['storage_gb'], 'unit' => 'GB'])
@@ -94,7 +94,7 @@
                     <td class="py-1 font-bold dark:text-white" colspan="2">{{ __('Usage charges so far') }}</td>
                     <td class="py-1 font-bold text-right dark:text-white">{{ formatPlatformMoney($preview['amount_cents'], $preview['currency']) }}</td>
                 </tr>
-                @if ($inter && $nextPrice && ! $tenant->cancel_at_period_end)
+                @if ($invoicing && $nextPrice && ! $tenant->cancel_at_period_end)
                     <tr>
                         <td class="py-1 dark:text-neutral-300" colspan="2">{{ __('Next renewal (plan + usage so far)') }}</td>
                         <td class="py-1 text-right dark:text-white">{{ formatPlatformMoney($nextPrice + $preview['amount_cents'], 'brl') }}</td>
@@ -103,11 +103,11 @@
             </tbody>
         </table>
         <div class="text-xs dark:text-neutral-400">
-            {{ $inter ? __('Usage above the plan is added to the renewal invoice of the next period.') : __('The plan price is charged by the subscription; usage charges are added to the next invoice.') }}
+            {{ $invoicing ? __('Usage above the plan is added to the renewal invoice of the next period.') : __('The plan price is charged by the subscription; usage charges are added to the next invoice.') }}
         </div>
     </section>
 
-    @if ($inter)
+    @if ($invoicing)
         <section class="flex flex-col gap-2">
             @if ($editingProfile && $isAdmin)
                 @include('livewire.platform.partials.billing-profile-form', ['cancellable' => $profileComplete])
@@ -120,7 +120,7 @@
                 </div>
                 <div class="text-sm dark:text-neutral-400">
                     @if ($profileComplete)
-                        {{ $profile['name'] }} · {{ $profile['email'] }} · {{ $profile['city'] }}/{{ $profile['state'] }}
+                        {{ $profile['name'] }} · {{ $profile['email'] }}@if (filled($profile['phone'])) · {{ $profile['phone'] }}@endif
                     @else
                         {{ __('Fill in the billing details to subscribe.') }}
                     @endif
@@ -143,7 +143,7 @@
             <div wire:key="invoice-{{ $invoice->uuid }}" class="flex flex-wrap items-center justify-between gap-2 p-2 text-sm border rounded-sm dark:border-coolgray-300">
                 <span class="font-mono dark:text-white">{{ $invoice->number ?? '—' }}</span>
                 <span class="dark:text-neutral-300">{{ $invoice->period_start->format('d/m/Y') }} → {{ $invoice->period_end->format('d/m/Y') }}</span>
-                <span class="dark:text-neutral-300">{{ $invoice->provider === 'inter' ? \App\Services\Platform\InterBilling::describe($invoice) : __('Usage') }}</span>
+                <span class="dark:text-neutral-300">{{ $invoice->provider === \App\Services\Platform\PlatformBilling::PROVIDER ? \App\Services\Platform\PlatformBilling::describe($invoice) : __('Usage') }}</span>
                 <span class="dark:text-white">{{ $invoice->formattedAmount() }}</span>
                 <span @class([
                     'text-xs uppercase',
@@ -152,14 +152,14 @@
                     'dark:text-neutral-400' => ! in_array($invoice->status, ['paid', 'open']),
                 ])>{{ __(ucfirst($invoice->status)) }}</span>
                 <span class="flex gap-2">
-                    @if ($invoice->provider === 'inter' && filled($invoice->provider_reference))
+                    @if ($invoice->provider === \App\Services\Platform\PlatformBilling::PROVIDER && filled($invoice->provider_reference))
                         <button class="underline dark:text-white" wire:click="downloadBoleto('{{ $invoice->uuid }}')">{{ __('Boleto') }}</button>
                     @endif
                     <button class="underline dark:text-white" wire:click="downloadUsage('{{ $invoice->uuid }}')">{{ __('Usage (CSV)') }}</button>
                     @if ($invoice->stripe_hosted_invoice_url)
                         <a class="underline dark:text-white" href="{{ $invoice->stripe_hosted_invoice_url }}" target="_blank">{{ __('View') }}</a>
                     @endif
-                    @if ($isAdmin && $invoice->provider === 'inter' && $invoice->status === 'void' && is_null($invoice->paid_at) && $invoice->type === 'subscription' && data_get($invoice->metadata, 'void_reason') !== 'superseded')
+                    @if ($isAdmin && $invoice->provider === \App\Services\Platform\PlatformBilling::PROVIDER && $invoice->status === 'void' && is_null($invoice->paid_at) && $invoice->type === 'subscription' && data_get($invoice->metadata, 'void_reason') !== 'superseded')
                         <button class="underline dark:text-white" wire:click="reissueInvoice('{{ $invoice->uuid }}')">{{ __('Issue a new charge') }}</button>
                     @endif
                 </span>

@@ -275,25 +275,43 @@ paths:
       responses:
         "200": { description: "Valid token, X-Scope-OrgID header set" }
         "401": { description: "Invalid token" }
-  /v1/billing/webhooks/inter/{token}:
+  /v1/billing/webhooks/efi/{token}:
     post:
       tags: [Internal]
-      summary: Banco Inter boleto charge notifications (the status is always read back from the Inter API)
+      summary: Efí test notification of the Pix webhook registration (the charges are always read back from the Efí APIs)
       security: []
       parameters:
         - { name: token, in: path, required: true, schema: { type: string } }
       responses:
         "200": { description: "Accepted" }
         "404": { description: "Wrong token" }
-  /v1/billing/webhooks/inter/{token}/pix:
+  /v1/billing/webhooks/efi/{token}/pix:
     post:
       tags: [Internal]
-      summary: Pix notifications of the account key (the charge is always read back from the Inter API)
+      summary: Efí Pix notifications of the account key (the charge is always read back from the Pix API)
       security: []
       parameters:
         - { name: token, in: path, required: true, schema: { type: string } }
       responses:
         "200": { description: "Accepted" }
+        "404": { description: "Wrong token" }
+  /v1/billing/webhooks/efi/{token}/charges:
+    post:
+      tags: [Internal]
+      summary: Efí boleto notifications (a notification token; the changes are read from the Cobranças API)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                notification: { type: string }
+      responses:
+        "200": { description: "Accepted" }
+        "400": { description: "Invalid notification token" }
         "404": { description: "Wrong token" }
   /v1/billing/webhooks/stripe:
     post:

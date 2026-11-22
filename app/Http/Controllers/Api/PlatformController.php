@@ -25,12 +25,15 @@ class PlatformController extends Controller
 {
     public function plans(): JsonResponse
     {
-        $plans = collect(PlanCatalog::all())->map(fn (array $plan, string $key) => [
+        $plans = collect(PlanCatalog::public())->map(fn (array $plan, string $key) => [
             'id' => $key,
             'name' => $plan['name'],
             'description' => $plan['description'] ?? null,
             'quotas' => $plan['quotas'],
             'features' => $plan['features'],
+            'extras' => array_column(PlanCatalog::extraLines($plan), 'text'),
+            'price_monthly_cents' => PlanCatalog::priceCents($key, PlanCatalog::INTERVAL_MONTHLY),
+            'price_yearly_cents' => PlanCatalog::priceCents($key, PlanCatalog::INTERVAL_YEARLY),
             'self_service' => PlanCatalog::isSelfServe($key),
         ])->values();
 

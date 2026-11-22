@@ -3,8 +3,8 @@
 namespace App\Jobs;
 
 use App\Models\PlatformInvoice;
-use App\Services\Platform\Inter\InterSettings;
-use App\Services\Platform\InterBilling;
+use App\Services\Platform\Efi\EfiSettings;
+use App\Services\Platform\PlatformBilling;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -13,10 +13,10 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Reads an invoice's charge from Banco Inter. While the bank is still generating the boleto/Pix
- * data the job checks again every 10 seconds (up to 2 minutes).
+ * Reads an invoice's charge from Efí. While Efí is still generating the payment data the job
+ * checks again every 10 seconds (up to 2 minutes).
  */
-class PlatformInterSyncInvoiceJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
+class PlatformSyncInvoiceJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -24,7 +24,10 @@ class PlatformInterSyncInvoiceJob implements ShouldBeUniqueUntilProcessing, Shou
 
     public int $uniqueFor = 30;
 
-    public function __construct(public int $invoiceId, public int $attempt = 0)
+    /**
+     * @param  int|null  $amountPaidCents  amount received, when a notification brought it
+     */
+    public function __construct(public int $invoiceId, public int $attempt = 0, public ?int $amountPaidCents = null)
     {
         $this->onQueue('high');
     }
@@ -45,11 +48,11 @@ class PlatformInterSyncInvoiceJob implements ShouldBeUniqueUntilProcessing, Shou
     public function handle(): void
     {
         $invoice = PlatformInvoice::query()->find($this->invoiceId);
-        if (! $invoice || $invoice->provider !== InterBilling::PROVIDER || ! InterSettings::isConfigured()) {
+        if (! $invoice || $invoice->provider !== PlatformBilling::PROVIDER || ! EfiSettings::isConfigured()) {
             return;
         }
-        $invoice = InterBilling::sync($invoice);
-        if ($invoice->status === PlatformInvoice::STATUS_OPEN && ! InterBilling::hasPaymentData($invoice) && $this->attempt < 12) {
+        $invoice = PlatformBilling::sync($invoice, $this->amountPaidCents);
+        if ($invoice->status === PlatformInvoice::STATUS_OPEN && ! PlatformBilling::hasPaymentData($invoice) && $this->attempt < 12) {
             self::dispatch($invoice->id, $this->attempt + 1)->delay(now()->addSeconds(10));
         }
     }

@@ -82,11 +82,14 @@ USER root
 RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
     docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID --service nginx
 
+# openssl: opens the .p12 certificates of Efí Bank, made with algorithms that PHP (OpenSSL 3)
+# only reads through the command (-legacy).
 RUN --mount=type=cache,target=/var/cache/apk \
     apk upgrade && \
     apk add --no-cache \
     postgresql${POSTGRES_VERSION}-client \
     openssh-client \
+    openssl \
     git \
     git-lfs \
     jq \
