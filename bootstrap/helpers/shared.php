@@ -149,17 +149,17 @@ function handleError(?Throwable $error = null, ?Livewire\Component $livewire = n
 {
     if ($error instanceof TooManyRequestsException) {
         if (isset($livewire)) {
-            return $livewire->dispatch('error', "Too many requests. Please try again in {$error->secondsUntilAvailable} seconds.");
+            return $livewire->dispatch('error', __('Too many requests. Please try again in :seconds seconds.', ['seconds' => $error->secondsUntilAvailable]));
         }
 
-        return "Too many requests. Please try again in {$error->secondsUntilAvailable} seconds.";
+        return __('Too many requests. Please try again in :seconds seconds.', ['seconds' => $error->secondsUntilAvailable]);
     }
     if ($error instanceof UniqueConstraintViolationException) {
         if (isset($livewire)) {
-            return $livewire->dispatch('error', 'Duplicate entry found. Please use a different name.');
+            return $livewire->dispatch('error', __('Duplicate entry found. Please use a different name.'));
         }
 
-        return 'Duplicate entry found. Please use a different name.';
+        return __('Duplicate entry found. Please use a different name.');
     }
 
     if ($error instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {

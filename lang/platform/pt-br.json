@@ -784,5 +784,11 @@
     "Delete this announcement? It leaves the bell of every user.": "Apagar este aviso? Ele sai do sino de todos os usuários.",
     "No announcements yet.": "Nenhum aviso ainda.",
     "{0} Nobody receives it yet.|{1} It reaches :count user.|[2,*] It reaches :count users.": "{0} Ninguém recebe ainda.|{1} Chega a :count usuário.|[2,*] Chega a :count usuários.",
-    "{0} Read by nobody yet|{1} Read by :count user|[2,*] Read by :count users": "{0} Ninguém leu ainda|{1} Lido por :count usuário|[2,*] Lido por :count usuários"
+    "{0} Read by nobody yet|{1} Read by :count user|[2,*] Read by :count users": "{0} Ninguém leu ainda|{1} Lido por :count usuário|[2,*] Lido por :count usuários",
+    "Warning": "Atenção",
+    "Success": "Sucesso",
+    "Info": "Informação",
+    "See the plans and the usage of your account": "Ver os planos e o uso da sua conta",
+    "Too many requests. Please try again in :seconds seconds.": "Muitas tentativas. Tente de novo em :seconds segundos.",
+    "Duplicate entry found. Please use a different name.": "Esse nome já está em uso. Escolha outro."
 }

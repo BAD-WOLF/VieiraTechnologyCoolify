@@ -16,7 +16,7 @@ class Observability extends Component
     {
         $tenant = platformTenant();
         if (! $tenant || ! auth()->user()?->isAdmin() || ! $tenant->hasFeature('traces')) {
-            $this->dispatch('error', __('Your plan does not include application traces.'));
+            $this->dispatch('error', __('Not included in your plan'), PlatformFeedback::describe([__('Your plan does not include application traces.')], true));
 
             return;
         }

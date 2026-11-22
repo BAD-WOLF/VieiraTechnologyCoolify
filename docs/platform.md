@@ -283,6 +283,8 @@ Com a chave Pix e o certificado configurados, cada fatura vira uma cobrança Pix
 - **Mudanças de plano.** Upgrade é cobrado proporcionalmente ao resto do período e vale quando é pago. Downgrade e troca de mensal/anual valem na próxima renovação. O cancelamento encerra a assinatura no fim do período.
 - **Confirmação.** O Pix da chave chega em `https://<painel>/api/v1/billing/webhooks/efi/<token secreto>/pix`, registrado pelo console (sem exigir certificado do nosso lado: o token secreto autentica a chamada). Cada boleto leva o endereço `.../efi/<token secreto>/charges`, que a Efí chama com um token de notificação. Nenhum aviso é aceito como pagamento: o painel consulta de novo a cobrança na Efí antes de liberar o plano. A cada 15 minutos um job também confere as faturas em aberto, cobrindo avisos perdidos.
 - **Operador.** Em /admin/platform → Cobrança é possível consultar uma fatura no banco, marcar como paga (pagamento recebido por fora), cancelar, emitir de novo e, na homologação, simular o pagamento.
+- **Teste de conexão.** "Salvar e conectar" e "Testar conexão" testam cada forma de pagamento do ambiente em uso e mostram, abaixo do formulário, o resultado de cada uma com o que fazer: **Boleto** (Client ID e Client Secret), **Pix** (as mesmas credenciais, o certificado e os escopos `cobv.write`/`cobv.read` da aplicação) e **Avisos de pagamento** (o webhook da chave Pix). HTTP 401 é credencial errada; HTTP 403 no Pix com o boleto conectado é certificado que não é deste ambiente (o de Homologação não serve em Produção) ou aplicação sem a API Pix; certificado vencido é recusado antes de chamar a Efí. O resultado fica salvo por ambiente, com a data, e vira "não testado" quando as credenciais mudam. O formulário mostra para quem cada certificado foi emitido, a validade e a impressão digital, e avisa quando os dois ambientes têm o mesmo certificado.
+- **Localhost.** A Efí só chama um endereço público com HTTPS, então em `http://localhost`, em `*.local`/`*.test`, em IP privado ou sem HTTPS os avisos de pagamento não são registrados (o teste diz o motivo) e o Pix funciona do mesmo jeito: a fatura aberta é conferida na Efí a cada 20 segundos enquanto o cliente olha a página de pagamento e a cada 15 minutos pelo ciclo de cobrança. Para testar ponta a ponta use o ambiente **Homologação** com as credenciais e o certificado de homologação e **Simular pagamento**.
 - **Dados do pagador.** Nome, CPF/CNPJ (validado), e-mail e, só para boleto, telefone. Ficam criptografados no banco de dados, assim como o Client Secret, o certificado e a chave da Efí, que nunca voltam para o navegador.
 
 A integração usa um cliente próprio (`app/Services/Platform/Efi/`) com o cliente HTTP do Laravel, sem o SDK da Efí nem dependência nova no `composer.json`, o que também evita conflitos no `composer.lock` ao puxar o Coolify oficial. A API Pix usa OAuth2 com o certificado (mTLS); a API Cobranças, só o Client ID e o Client Secret. Instalações que usavam o Banco Inter passam para a Efí na migração `2025_10_20_000011`: as faturas em aberto perdem a cobrança antiga e são emitidas de novo pela Efí no ciclo seguinte, e as credenciais antigas são apagadas.
@@ -417,14 +419,25 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Console do operador
 
-`/admin/platform`, apenas para o time root, tem seis abas:
+`/admin/platform`, apenas para o time root, tem sete abas:
 
 - **Tenants:** plano, status, uso, suspender (manual ou total), reativar e provisionar. **Editar** abre tudo o que é do cliente: plano (inclusive os ocultos), fim do período atual (adiar dá dias grátis), conta cortesia (nunca cobrada), limites e recursos próprios, notas internas e os membros, cada um com **Acessar como este usuário** (veja *Planos*);
 - **Planos:** preços, limites, recursos e itens extras de cada plano, ordem, destaque e visibilidade; criar, duplicar e remover planos;
-- **Cobrança:** credenciais e certificado da Efí, webhook do Pix e faturas de todos os tenants (consultar, marcar como paga, cancelar, emitir de novo);
+- **Cobrança:** credenciais e certificado da Efí, teste de conexão por forma de pagamento, webhook do Pix e faturas de todos os tenants (consultar, marcar como paga, cancelar, emitir de novo);
+- **Avisos:** mensagens do owner (novidade, promoção, atualização, manutenção, importante) para todos, para os clientes, para a equipe da plataforma, para os clientes de um plano ou para um cliente, na hora ou agendadas (no fuso da instância), com fim opcional. Mostra quantos usuários o aviso alcança antes de enviar e quantos já leram; encerrar tira o aviso do sino sem apagá-lo;
 - **Regiões e nós:** região, nó dedicado e reprovisionamento; também cria, edita (nome e Loki) e desativa regiões;
 - **Configurações:** tudo o que antes ficava no `.env` (seção *Configurações* acima). Só o owner grava;
 - **Audit log:** ações de usuários, do sistema e da cobrança.
+
+## Sino de notificações e mensagens
+
+Todo usuário tem um sino no canto superior direito do painel. Nele ficam os avisos do owner (aba **Avisos** do console) e os eventos da conta: fatura disponível, pagamento confirmado ou recusado, assinatura cancelada, limites do plano, suspensões e reativação (os mesmos que vão por e-mail aos donos e admins, aqui para todos os membros). O número vermelho conta o que o usuário ainda não leu; cada usuário tem a sua leitura e "Marcar todas como lidas". Avisos publicados antes de alguém entrar aparecem, mas não contam como novos. Um aviso novo atualiza os painéis abertos na hora (websocket do Coolify: canal público `platform-notifications` para avisos, canal privado do time para eventos da conta, sem o conteúdo na mensagem).
+
+As mensagens do sistema seguem três regras:
+
+- **Estado** (uma integração que não conecta, um plano inativo, um certificado vencido) fica na própria tela, perto do que precisa ser corrigido, dizendo o que aconteceu, por quê e como resolver, até ser resolvido;
+- **Resultado de um clique** vira notificação: verde quando deu certo, amarela quando deu certo em parte, vermelha quando falhou. O título diz o que falhou e o texto, o motivo; avisos e erros ficam na tela o tempo de ler (até 30 segundos, pausando com o mouse em cima);
+- **Campo inválido** aparece embaixo do campo. Recusas da plataforma listam um motivo por linha e, quando é o plano que impede, levam aos planos e ao uso da conta.
 
 ## Marca (white-label) e página pública
 

@@ -325,6 +325,7 @@
             <template x-for="(toast, index) in toasts" :key="toast.id">
                 <li :id="toast.id" x-data="{
                     toastHovered: false,
+                    duration: ['danger', 'warning'].includes(toast.type) ? Math.min(30000, 4000 + 60 * (String(toast.message || '').length + String(toast.description || '').length)) : 4000,
                     copyNotification: false,
                     copyToClipboard() {
                         navigator.clipboard.writeText(toast.description);
@@ -356,7 +357,7 @@
                                     deleteToastWithId(toast.id)
                                 }, 300);
                             }, 5);
-                        }, 2000)
+                        }, Math.max(2000, duration / 2))
                     }
                 });
                 
@@ -388,7 +389,7 @@
                             deleteToastWithId(toast.id)
                         }, 300);
                     }, 5);
-                }, 4000);"
+                }, duration);"
                     @mouseover="toastHovered=true" @mouseout="toastHovered=false"
                     class="absolute w-full duration-100 ease-out sm:max-w-xs "
                     :class="{ 'toast-no-description': !toast.description }">

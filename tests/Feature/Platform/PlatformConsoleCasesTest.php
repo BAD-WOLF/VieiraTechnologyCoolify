@@ -523,7 +523,8 @@ it('only lets customers with traces in the plan create a token, and lets them re
     consoleCustomer('basic');
     Livewire::test(Observability::class)
         ->call('generate')
-        ->assertDispatched('error', 'Your plan does not include application traces.');
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Not included in your plan'
+            && str_starts_with($params[1], 'Your plan does not include application traces.<br><a class="underline" href="'.route('subscription.show').'">'));
 
     $tenant = consoleCustomer('pro');
     $component = Livewire::test(Observability::class)->call('generate');
@@ -585,6 +586,34 @@ it('shows every refusal of a value the customer may not save as a notification',
 
     Livewire::test($component::class)
         ->call('save')
-        ->assertDispatched('error', 'Not allowed on the platform', 'Privileged images are not allowed. Port 22 is reserved.')
+        ->assertDispatched('error', 'Not allowed on the platform', 'Privileged images are not allowed.<br>Port 22 is reserved.')
         ->assertHasErrors(['image', 'ports']);
+});
+
+it('shows each reason of a refusal on its own line, escaped, with the plans when the plan is what stops it', function () {
+    consoleCustomer('basic');
+    $component = new class extends \Livewire\Component
+    {
+        public string $reason = 'limit';
+
+        public function save(): void
+        {
+            throw $this->reason === 'limit'
+                ? new \App\Exceptions\PlatformPolicyViolation(['CPU above the plan.', 'Image <script>x</script> refused.'], 'Plan limit reached')
+                : \App\Exceptions\PlatformPolicyViolation::single('Port 22 is reserved.', 'Not allowed');
+        }
+
+        public function render(): string
+        {
+            return '<div></div>';
+        }
+    };
+
+    Livewire::test($component::class)
+        ->call('save')
+        ->assertDispatched('error', fn (string $event, array $params) => $params[0] === 'Plan limit reached'
+            && $params[1] === 'CPU above the plan.<br>Image &lt;script&gt;x&lt;/script&gt; refused.<br><a class="underline" href="'.route('subscription.show').'">See the plans and the usage of your account</a>')
+        ->set('reason', 'rule')
+        ->call('save')
+        ->assertDispatched('error', 'Not allowed', 'Port 22 is reserved.');
 });
