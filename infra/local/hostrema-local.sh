@@ -5,6 +5,7 @@
 #   ./hostrema-local.sh setup     prepara de novo: owner, nó local, proxy e cliente demo
 #   ./hostrema-local.sh rebuild   reconstrói a imagem depois de mudar o código e reinicia
 #   ./hostrema-local.sh info      mostra endereços e senhas
+#   ./hostrema-local.sh efi       conecta a Efí Bank (pede as credenciais de homologação)
 #   ./hostrema-local.sh doctor    confere Docker, portas, painel, nó, proxy e domínios *.localhost
 #   ./hostrema-local.sh test      roda os testes de navegador (Playwright) neste ambiente
 #   ./hostrema-local.sh status    estado dos containers
@@ -15,7 +16,8 @@
 #   ./hostrema-local.sh reset     para e apaga todos os dados locais (pergunta antes; -y pula)
 #
 # Uma porta já ocupada na sua máquina é trocada sozinha por outra livre (e gravada no .env).
-# HOSTREMA_NO_OPEN=1 não abre o navegador no fim.
+# HOSTREMA_NO_OPEN=1 não abre o navegador no fim. Com HOSTREMA_EFI_CLIENT_ID (e as outras
+# HOSTREMA_EFI_*) no ambiente, o up também conecta a Efí, sem perguntar.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -39,7 +41,12 @@ PORT_VARS=(HOSTREMA_PORT HOSTREMA_REALTIME_PORT HOSTREMA_TERMINAL_PORT HOSTREMA_
 random_hex() { od -An -tx1 -N"${1:-16}" /dev/urandom | tr -d ' \n'; }
 
 check_requirements() {
-    command -v docker >/dev/null 2>&1 || fail "instale o Docker (Docker Desktop no Windows/macOS ou Docker Engine no Linux)."
+    if ! command -v docker >/dev/null 2>&1; then
+        if grep -qi microsoft /proc/version 2>/dev/null; then
+            fail "o Docker não aparece neste WSL: no Docker Desktop, ligue Settings → Resources → WSL integration para esta distribuição (ou rode pelo Git Bash)."
+        fi
+        fail "instale o Docker (Docker Desktop no Windows/macOS ou Docker Engine no Linux)."
+    fi
     docker compose version >/dev/null 2>&1 || fail "o plugin 'docker compose' (v2) não foi encontrado."
     docker info >/dev/null 2>&1 || fail "o Docker não está rodando (ou seu usuário não tem acesso a ele)."
 }
@@ -250,11 +257,113 @@ cmd_info() {
 
   Pagamentos ficam no modo manual: o cliente usa "Simular pagamento" na fatura,
   ou você confirma em /admin/platform -> Cobrança -> "Marcar como paga".
+  Para testar a Efí Bank de verdade (homologação): ./hostrema-local.sh efi
 
   Depois de mudar o código: ./hostrema-local.sh rebuild (e faça o deploy de novo
   das aplicações que já existiam). Diagnóstico: ./hostrema-local.sh doctor
 
 EOF
+}
+
+# ask VAR "pergunta" [padrão] [secret|optional|secret-optional]: o valor de HOSTREMA_VAR, ou o que
+# você digitar aqui.
+ask() {
+    local var=$1 question=$2 default=${3:-} mode=${4:-} env_name="HOSTREMA_$1" answer prompt
+    if [ -n "${!env_name:-}" ]; then
+        printf -v "$var" '%s' "${!env_name}"
+        return 0
+    fi
+    prompt=$question
+    [ -z "$default" ] || prompt="$prompt [$default]"
+    while :; do
+        printf '  %s: ' "$prompt"
+        answer=''
+        if [[ $mode == *secret* ]] && [ -t 0 ]; then
+            IFS= read -rs answer || true
+            printf '\n'
+        else
+            IFS= read -r answer || true
+        fi
+        answer=${answer:-$default}
+        if [ -n "$answer" ] || [[ $mode == *optional* ]]; then
+            break
+        fi
+        [ -t 0 ] || fail "falta \"$question\": digite ou defina $env_name e rode de novo."
+        echo '    (obrigatório)'
+    done
+    printf -v "$var" '%s' "$answer"
+}
+
+# Texto como string JSON (aspas, barras e quebras de linha escapadas).
+json_string() {
+    local value=$1
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '"%s"' "$value"
+}
+
+# A Efí Bank de verdade no ambiente local. Pede o que só você tem (as credenciais e o certificado da
+# aplicação criada na Efí), conecta o painel e diz o resultado do teste das duas APIs. As
+# credenciais ficam só no painel, criptografadas.
+cmd_efi() {
+    load_env
+    [ -n "$(compose ps --status running -q hostrema 2>/dev/null)" ] || fail "o Hostrema não está rodando; use ./hostrema-local.sh up"
+    say "Conectando a Efí Bank"
+    echo "    Na conta Efí: API → Aplicações → (sua aplicação) com API Cobranças e API Pix, e o certificado"
+    echo "    (.p12) em API → Meus certificados. Use as credenciais e o certificado do mesmo ambiente."
+    local EFI_ENVIRONMENT='' EFI_CLIENT_ID='' EFI_CLIENT_SECRET='' EFI_CERTIFICATE_FILE='' EFI_CERTIFICATE_PASSWORD='' EFI_PIX_KEY=''
+    local payload result label billing="http://localhost:${HOSTREMA_PORT:-8000}/admin/platform?tab=billing"
+    while :; do
+        ask EFI_ENVIRONMENT "Ambiente da Efí (sandbox = homologação, sem dinheiro; production = cobra de verdade)" sandbox
+        case "$EFI_ENVIRONMENT" in sandbox | production) break ;; esac
+        [ -z "${HOSTREMA_EFI_ENVIRONMENT:-}" ] || fail "\"$EFI_ENVIRONMENT\" não é um ambiente da Efí: use sandbox ou production (HOSTREMA_EFI_ENVIRONMENT)."
+        [ -t 0 ] || fail "\"$EFI_ENVIRONMENT\" não é um ambiente da Efí: use sandbox ou production."
+        warn "\"$EFI_ENVIRONMENT\" não é um ambiente da Efí: use sandbox ou production."
+    done
+    label=$([ "$EFI_ENVIRONMENT" = sandbox ] && echo homologação || echo produção)
+    [ "$EFI_ENVIRONMENT" = sandbox ] || warn "em produção, a Efí cobra de verdade: as faturas deste ambiente local viram cobranças reais."
+    ask EFI_CLIENT_ID "Client ID"
+    ask EFI_CLIENT_SECRET "Client Secret" "" secret
+    while :; do
+        ask EFI_CERTIFICATE_FILE "Caminho do certificado .p12 (ou .pem) nesta máquina (vazio = só boleto)" "" optional
+        if [ -z "$EFI_CERTIFICATE_FILE" ] || [ -f "$EFI_CERTIFICATE_FILE" ]; then
+            break
+        fi
+        [ -z "${HOSTREMA_EFI_CERTIFICATE_FILE:-}" ] && [ -t 0 ] || fail "arquivo não encontrado: $EFI_CERTIFICATE_FILE"
+        warn "arquivo não encontrado: $EFI_CERTIFICATE_FILE"
+    done
+    if [ -n "$EFI_CERTIFICATE_FILE" ]; then
+        ask EFI_CERTIFICATE_PASSWORD "Senha do certificado (quase sempre vazia)" "" secret-optional
+    fi
+    ask EFI_PIX_KEY "Chave Pix da conta (vazio = só boleto)" "" optional
+
+    payload="{\"settings\":{\"platform.billing.provider\":\"efi\"},\"efi\":{\"environment\":$(json_string "$EFI_ENVIRONMENT"),\"client_id\":$(json_string "$EFI_CLIENT_ID"),\"client_secret\":$(json_string "$EFI_CLIENT_SECRET"),\"pix_key\":$(json_string "$EFI_PIX_KEY")"
+    if [ -n "$EFI_CERTIFICATE_FILE" ]; then
+        payload="$payload,\"certificate_base64\":\"$(base64 <"$EFI_CERTIFICATE_FILE" | tr -d '\r\n')\",\"certificate_password\":$(json_string "$EFI_CERTIFICATE_PASSWORD")"
+    fi
+    payload="$payload}}"
+    result=$(printf '%s' "$payload" | compose exec -T hostrema php artisan platform:configure --stdin --json 2>&1 | tr -d '\r' | tail -n 1 || true)
+
+    if printf '%s' "$result" | grep -qE '"registered":\[[^]]+\],"errors":\[\]'; then
+        say "Efí conectada ($label): as faturas saem como Pix e boleto da Efí"
+        [ "$EFI_ENVIRONMENT" != sandbox ] || echo "    Em homologação, pague as faturas de teste com \"Simular pagamento\"."
+        echo "    As notificações da Efí não chegam ao localhost: o painel consulta as faturas abertas sozinho."
+        return 0
+    fi
+    if printf '%s' "$result" | grep -qE '"registered":\[[^]]+\]'; then
+        say "Efí conectada em parte ($label)"
+        printf '%s' "$result" | sed -nE 's/.*"errors":\{([^}]*)\}.*/\1/p' | awk '{ gsub(/","/, "\"\n\""); print }' | sed -E 's/^"([^"]*)":"(.*)"$/    \1: \2/'
+        echo "    O que falta e como corrigir: $billing"
+        return 0
+    fi
+    # Nada conectou: os pagamentos continuam no modo manual.
+    compose exec -T hostrema php artisan platform:configure --set=platform.billing.provider=manual >/dev/null 2>&1 || true
+    printf '%s' "$result" | sed -nE 's/.*"errors":\{([^}]*)\}.*/\1/p' | awk '{ gsub(/","/, "\"\n\""); print }' | sed -E 's/^"([^"]*)":"(.*)"$/    \1: \2/' >&2
+    printf '%s' "$result" | sed -nE 's/.*"errors":\[([^]]+)\]\}$/\1/p' | awk '{ gsub(/","/, "\"\n\""); print }' | sed -E 's/^"(.*)"$/    \1/' >&2
+    fail "a Efí não conectou; os pagamentos continuam no modo manual. Detalhes e como corrigir: $billing"
 }
 
 # check <descrição> <comando...>: uma linha de ok/falha no diagnóstico.
@@ -332,6 +441,9 @@ cmd_up() {
     compose_up
     wait_ready
     cmd_setup
+    if [ -n "${HOSTREMA_EFI_CLIENT_ID:-}" ]; then
+        cmd_efi
+    fi
     cmd_info
     if apps_answer_404; then
         open_dashboard "http://localhost:${HOSTREMA_PORT:-8000}"
@@ -379,6 +491,7 @@ setup)
     ;;
 rebuild) cmd_rebuild ;;
 info) cmd_info ;;
+efi) cmd_efi ;;
 doctor) cmd_doctor ;;
 test) cmd_test "$@" ;;
 status) compose ps ;;
@@ -388,7 +501,7 @@ shell) compose exec hostrema sh ;;
 down) compose down ;;
 reset) cmd_reset "$@" ;;
 *)
-    sed -n '2,18p' "$0"
+    sed -n '2,21p' "$0"
     exit 1
     ;;
 esac

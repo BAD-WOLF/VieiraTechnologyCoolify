@@ -112,7 +112,7 @@ Para testar sem dinheiro real, use as credenciais e o certificado de homologaç�
 
 `infra/local/` sobe o Hostrema inteiro na sua máquina para você testar antes de subir para o host. O ambiente usa a mesma imagem de produção, construída a partir deste checkout, e traz PostgreSQL, Redis, o realtime, o Mailpit (recebe todos os e-mails) e um nó local. O nó é um container com Docker próprio (Docker-in-Docker), acessado por SSH como os nós de uma região. As aplicações dos clientes, o Traefik e os builds rodam dentro dele, sem mexer nos containers da sua máquina.
 
-Você precisa de Docker Desktop (Windows ou macOS) ou Docker Engine com o plugin compose (Linux), de alguns GB livres para as imagens e das portas 8000, 6001, 6002, 8025, 80 e 443 livres (todas mudam no `infra/local/.env`). No Windows, rode o script pelo WSL ou pelo Git Bash.
+Você precisa de Docker Desktop (Windows ou macOS) ou Docker Engine com o plugin compose (Linux), de alguns GB livres para as imagens e das portas 8000, 6001, 6002, 8025, 80 e 443 livres (todas mudam no `infra/local/.env`). No Windows, pelo PowerShell: `.\infra\local\hostrema-local.ps1` (aceita os mesmos comandos). Ele roda o script no Git Bash, que vem com o Git for Windows, ou, sem ele, no Ubuntu do WSL (com a integração do Docker Desktop ligada para ele). Se o Windows bloquear scripts do PowerShell, rode `powershell -ExecutionPolicy Bypass -File .\infra\local\hostrema-local.ps1`; vale o mesmo para o de produção.
 
 ```bash
 cd infra/local
@@ -154,11 +154,12 @@ E2E_NODE=1 E2E_OWNER_EMAIL="$HOSTREMA_OWNER_EMAIL" E2E_OWNER_PASSWORD="$HOSTREMA
 
 Ele cadastra um cliente, confirma o e-mail pelo Mailpit, abre o painel antes de pagar, escolhe o plano informando só nome, CPF e e-mail, simula o pagamento, cria o primeiro projeto, adiciona um repositório público do GitHub, faz o deploy de uma imagem Docker e abre o site em `http://<nome>.localhost`, cria um PostgreSQL e um serviço de um clique, e abre as abas do console do owner. Um segundo cliente, no plano Básico, adiciona um projeto Docker Compose como está no repositório (banco com volume, pasta do projeto montada e portas no host), troca o arquivo de `.yaml` para `.yml` e faz o deploy. Em cada tela confere que o nome Coolify não aparece. O relatório (com capturas de tela) fica em `infra/local/e2e/playwright-report`.
 
-Para testar a Efí de verdade, escolha **Efí Bank** em Configurações → Cobrança e use as credenciais de homologação. As notificações da Efí não alcançam o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
+Para testar a Efí de verdade, rode `./hostrema-local.sh efi`. Ele pede o ambiente (homologação por padrão, sem dinheiro de verdade), o Client ID, o Client Secret, o caminho do certificado `.p12` e a chave Pix, conecta o painel, testa as duas APIs e diz o resultado, com o que falta e onde corrigir. Se nada conectar, os pagamentos continuam no modo manual. As credenciais ficam só no painel, criptografadas. Com as variáveis `HOSTREMA_EFI_CLIENT_ID`, `HOSTREMA_EFI_CLIENT_SECRET`, `HOSTREMA_EFI_CERTIFICATE_FILE`, `HOSTREMA_EFI_PIX_KEY` (e `HOSTREMA_EFI_ENVIRONMENT`, `HOSTREMA_EFI_CERTIFICATE_PASSWORD`) no ambiente, o `efi` não pergunta nada e o `up` já conecta a Efí sozinho. As notificações da Efí não alcançam o localhost, mas o botão **Consultar** e a conferência automática a cada 15 minutos atualizam as faturas.
 
 | Comando | Para quê |
 | --- | --- |
 | `./hostrema-local.sh rebuild` | reconstrói a imagem depois de mudar o código |
+| `./hostrema-local.sh efi` | conecta a Efí Bank (pede as credenciais e o certificado) |
 | `./hostrema-local.sh doctor` | confere Docker, containers, painel, filas, nó, proxy e domínios `*.localhost` |
 | `./hostrema-local.sh test` | roda os testes de navegador neste ambiente (precisa do Node.js) |
 | `./hostrema-local.sh logs [serviço]` | mostra os logs |

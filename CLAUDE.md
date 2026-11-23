@@ -220,7 +220,7 @@ When developing features:
 Whatever the request, before reporting it done run `bash infra/test/run.sh` and report any failure. It runs:
 - shellcheck of every script and the dashboard boot script rendered from its Terraform template;
 - every scenario of `infra/prod/hostrema-prod.sh` (`infra/prod/test/simulate.sh`: AWS, Terraform, SSH and Ansible are stand-ins) and of `infra/local/hostrema-local.sh` (`infra/local/test/run.sh`: Docker is a stand-in);
-- the HCL syntax (python-hcl2) and ansible-lint, when installed;
+- the HCL syntax (python-hcl2), ansible-lint and the syntax of the Windows `.ps1` launchers (pwsh), when installed;
 - the list of official Coolify files the fork changes (`docs/security-model.md`, against `origin/v4.x`; refresh it with `infra/scripts/upstream-touched-files.sh --write docs/security-model.md origin/v4.x` when a change to an upstream file is really needed);
 - the platform PHP suite (`tests/Feature/Platform`), which needs the PostgreSQL test database and Redis of `phpunit.xml` (`DB_TEST_HOST`, `DB_TEST_DATABASE`, `REDIS_HOST`).
 

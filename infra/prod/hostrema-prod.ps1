@@ -1,4 +1,4 @@
-# Hostrema em produção na AWS, a partir do Windows: roda infra/prod/hostrema-prod.sh no WSL (Ubuntu),
+﻿# Hostrema em produção na AWS, a partir do Windows: roda infra/prod/hostrema-prod.sh no WSL (Ubuntu),
 # instalando o Ubuntu do WSL na primeira vez. Uso (PowerShell): .\infra\prod\hostrema-prod.ps1 [comando]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 $ErrorActionPreference = 'Stop'

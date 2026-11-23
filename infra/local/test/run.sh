@@ -68,6 +68,19 @@ version) [ -f "\$M/no-compose" ] && exit 1; echo "Docker Compose version v2.30.0
 "exec -T hostrema-node docker ps --filter name=coolify-proxy"*) [ -f "\$M/proxy-down" ] || echo "Up 5 minutes" ;;
 "logs --tail=80 "*) echo "hostrema-1  | Waiting for the database..." ;;
 "down -v --remove-orphans") rm -f "\$M/running"; touch "\$M/wiped" ;;
+"exec -T hostrema php artisan platform:configure --stdin --json")
+    cat >"\$M/configure.json"
+    if [ -f "\$M/efi-invalid" ]; then
+        echo '{"efi":{"configured":false},"errors":["efi: The client id field is required.","efi: The client secret field is required."]}'
+        exit 1
+    elif [ -f "\$M/efi-refused" ]; then
+        echo '{"settings":{"platform.billing.provider":"efi"},"efi":{"configured":true,"pix":false,"registered":[],"errors":{"boleto":"A Efí recusou o Client ID e o Client Secret (HTTP 401), confira os dois.","pix":"Sem resposta da Efí."}},"errors":[]}'
+    elif [ -f "\$M/efi-partial" ]; then
+        echo '{"settings":{"platform.billing.provider":"efi"},"efi":{"configured":true,"pix":false,"registered":["boleto"],"errors":{"pix":"A Efí recusou o certificado de Homologação (HTTP 403)."}},"errors":[]}'
+    else
+        echo '{"settings":{"platform.billing.provider":"efi"},"efi":{"configured":true,"pix":true,"registered":["pix","boleto"],"errors":[]},"errors":[]}'
+    fi ;;
+"exec -T hostrema php artisan platform:configure --set=platform.billing.provider=manual") touch "\$M/back-to-manual" ;;
 esac
 exit 0
 EOF
@@ -116,6 +129,23 @@ run_bare() {
 }
 
 fails() { not run "$@"; }
+
+# run_env <VAR=valor...> -- <argumentos...>: run com essas variáveis no ambiente.
+run_env() {
+    local assignments=()
+    while [ "$1" != -- ]; do
+        assignments+=("$1")
+        shift
+    done
+    shift
+    (
+        export "${assignments[@]}"
+        run "$@"
+    )
+}
+
+# payload_is <expressão Python sobre d>: o que o script mandou ao platform:configure.
+payload_is() { python3 -I -c 'import base64, json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$M/configure.json" "$1"; }
 env_value() { sed -n "s/^$1=//p" "$LOCAL/.env"; }
 mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 wanted() { [ -z "$ONLY" ] || [[ $1 == *"$ONLY"* ]]; }
@@ -315,7 +345,74 @@ scenario_reset() {
     check "apaga com -y" test -f "$M/wiped"
 }
 
-for scenario in requisitos up portas espera comandos doctor test reset; do
+scenario_efi() {
+    local certificate
+    sandbox efi
+    run up || true
+    certificate=$SIM/efi.p12
+    printf 'certificado-p12' >"$certificate"
+
+    section "Efí: credenciais digitadas"
+    check "efi termina sem erro" run_input $'\nClient_Id_x\nsegredo "com" aspas\\\n'"$certificate"$'\n\npix@hostrema.local\n' efi
+    check "pagamentos pela Efí" payload_is 'd["settings"]["platform.billing.provider"] == "efi"'
+    check "homologação por padrão" payload_is 'd["efi"]["environment"] == "sandbox" and d["efi"]["client_id"] == "Client_Id_x"'
+    check "segredo com aspas e barra chega inteiro" payload_is 'd["efi"]["client_secret"] == "segredo \"com\" aspas\\"'
+    check "certificado enviado como veio" payload_is 'base64.b64decode(d["efi"]["certificate_base64"]) == b"certificado-p12"'
+    check "senha vazia e chave Pix" payload_is 'd["efi"]["certificate_password"] == "" and d["efi"]["pix_key"] == "pix@hostrema.local"'
+    check "diz que conectou" contains "$T_LOG" 'Efí conectada (homologação)'
+    check "explica como pagar em homologação" contains "$T_LOG" 'Simular pagamento'
+    check "credenciais não ficam no .env" not grep -q 'segredo' "$LOCAL/.env"
+    check "continua pela Efí" not test -f "$M/back-to-manual"
+
+    section "Efí: conectada em parte"
+    touch "$M/efi-partial"
+    check "efi termina sem erro" run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=segredo -- efi
+    check "sem certificado, nada de certificado no pedido" payload_is '"certificate_base64" not in d["efi"]'
+    check "diz que conectou em parte" contains "$T_LOG" 'Efí conectada em parte (homologação)'
+    check "mostra o que falhou" contains "$T_LOG" 'pix: A Efí recusou o certificado de Homologação (HTTP 403).'
+    check "aponta onde corrigir" contains "$T_LOG" 'http://localhost:8000/admin/platform?tab=billing'
+    check "fica pela Efí (o boleto conectou)" not test -f "$M/back-to-manual"
+    rm -f "$M/efi-partial"
+
+    section "Efí: nada conectou"
+    touch "$M/efi-refused"
+    check "efi para" not run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=segredo -- efi
+    check "mostra cada motivo inteiro" contains "$T_LOG" 'boleto: A Efí recusou o Client ID e o Client Secret (HTTP 401), confira os dois.'
+    check "mostra o motivo do Pix" contains "$T_LOG" 'pix: Sem resposta da Efí.'
+    check "volta os pagamentos para o modo manual" test -f "$M/back-to-manual"
+    check "diz que continua no manual" contains "$T_LOG" 'os pagamentos continuam no modo manual'
+    rm -f "$M/efi-refused" "$M/back-to-manual"
+    touch "$M/efi-invalid"
+    check "dados recusados pelo painel param" not run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=segredo -- efi
+    check "mostra os erros do painel" contains "$T_LOG" 'efi: The client secret field is required.'
+    check "e volta para o manual" test -f "$M/back-to-manual"
+    rm -f "$M/efi-invalid" "$M/back-to-manual"
+
+    section "Efí: respostas que faltam ou não servem"
+    check "sem Client ID nem terminal para" fails efi
+    check "diz qual variável definir" contains "$T_LOG" 'falta "Client ID": digite ou defina HOSTREMA_EFI_CLIENT_ID'
+    check "certificado que não existe para" not run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=s HOSTREMA_EFI_CERTIFICATE_FILE=/nao/existe.p12 -- efi
+    check "diz qual arquivo" contains "$T_LOG" 'arquivo não encontrado: /nao/existe.p12'
+    check "ambiente desconhecido para" not run_env HOSTREMA_EFI_ENVIRONMENT=teste -- efi
+    check "diz os ambientes" contains "$T_LOG" 'use sandbox ou production (HOSTREMA_EFI_ENVIRONMENT)'
+    check "produção funciona" run_env HOSTREMA_EFI_ENVIRONMENT=production HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=s -- efi
+    check "avisa que produção cobra de verdade" contains "$T_LOG" 'a Efí cobra de verdade'
+    check "conecta em produção" contains "$T_LOG" 'Efí conectada (produção)'
+
+    section "Efí: no up"
+    rm -f "$M/configure.json"
+    check "up com as variáveis da Efí termina" run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=s -- up
+    check "conecta a Efí sem perguntar" test -f "$M/configure.json"
+    rm -f "$M/configure.json"
+    check "up sem elas termina" run up
+    check "não mexe na Efí" not test -f "$M/configure.json"
+    check "mostra como conectar a Efí" contains "$T_LOG" './hostrema-local.sh efi'
+    rm -f "$M/running"
+    check "com o Hostrema parado, efi para" not run_env HOSTREMA_EFI_CLIENT_ID=id HOSTREMA_EFI_CLIENT_SECRET=s -- efi
+    check "diz para subir antes" contains "$T_LOG" 'o Hostrema não está rodando'
+}
+
+for scenario in requisitos up portas espera comandos doctor test reset efi; do
     if wanted "$scenario"; then
         "scenario_$scenario"
     fi

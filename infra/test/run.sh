@@ -95,6 +95,17 @@ php_suite() {
 
 # Arquivos do Coolify oficial que o fork altera: a lista em docs/security-model.md precisa
 # acompanhar (o CI faz a mesma conferência contra origin/v4.x).
+# Sintaxe dos atalhos do Windows (.ps1), pelo parser do próprio PowerShell.
+powershell_syntax() {
+    local script
+    for script in infra/prod/hostrema-prod.ps1 infra/local/hostrema-local.ps1; do
+        # shellcheck disable=SC2016 # PowerShell, not shell, expressions
+        HOSTREMA_PS1="$PWD/$script" pwsh -NoProfile -NonInteractive -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:HOSTREMA_PS1, [ref]$null, [ref]$errors) | Out-Null; if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }' || return 1
+        # Sem BOM, o Windows PowerShell 5.1 lê o arquivo como ANSI e embaralha os acentos.
+        [ "$(head -c 3 "$script" | od -An -tx1 | tr -d ' ')" = efbbbf ] || { echo "$script sem BOM UTF-8"; return 1; }
+    done
+}
+
 upstream_files() {
     bash infra/scripts/upstream-touched-files.sh --check docs/security-model.md origin/v4.x
 }
@@ -117,6 +128,11 @@ if [ "$WHAT" = all ] || [ "$WHAT" = scripts ]; then
         step "Ansible (sintaxe e ansible-lint)" ansible_checks
     else
         skip "Ansible" "instale com: pip install ansible ansible-lint (o CI roda)"
+    fi
+    if command -v pwsh >/dev/null 2>&1; then
+        step "atalhos do Windows (.ps1)" powershell_syntax
+    else
+        skip "atalhos do Windows (.ps1)" "precisa do PowerShell (pwsh); o CI confere"
     fi
     if git rev-parse --verify --quiet origin/v4.x >/dev/null; then
         step "arquivos do Coolify alterados (docs/security-model.md)" upstream_files
