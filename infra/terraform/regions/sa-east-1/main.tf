@@ -50,6 +50,7 @@ module "region" {
   region                        = "sa-east-1"
   platform_region               = "sa-east-1"
   name_prefix                   = var.name_prefix
+  availability_zones            = var.availability_zones
   vpc_cidr                      = var.vpc_cidr
   ssh_public_key                = var.ssh_public_key
   admin_cidrs                   = var.admin_cidrs

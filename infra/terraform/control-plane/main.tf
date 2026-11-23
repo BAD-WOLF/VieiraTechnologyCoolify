@@ -44,7 +44,7 @@ data "aws_ami" "ubuntu" {
 
 locals {
   name    = "hostrema-control-plane"
-  azs     = slice(data.aws_availability_zones.available.names, 0, 2)
+  azs     = length(var.availability_zones) == 2 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
   cluster = var.load_balancer || var.instance_count > 1 || var.worker_count > 0
 }
 

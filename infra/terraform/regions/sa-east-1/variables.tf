@@ -8,6 +8,12 @@ variable "name_prefix" {
   default = "hostrema"
 }
 
+variable "availability_zones" {
+  description = "Availability zones of the region network (they must offer the node and control types). Empty = the first two of the region."
+  type        = list(string)
+  default     = []
+}
+
 variable "vpc_cidr" {
   type    = string
   default = "10.20.0.0/16"

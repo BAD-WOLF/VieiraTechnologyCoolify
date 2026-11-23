@@ -46,7 +46,7 @@ No Windows, pelo PowerShell: `.\infra\prod\hostrema-prod.ps1`. Ele instala o Ubu
 
 O script só pergunta o que precisa vir de você:
 
-- as credenciais da AWS, se esta máquina ainda não tiver (uma chave de acesso de um usuário administrador);
+- o login na AWS, se esta máquina ainda não tiver credenciais. Pelo navegador, com o mesmo login do console (pode ser o usuário root), sem criar chave de acesso. Precisa da AWS CLI 2.32 ou mais nova: o script instala a atual quando não há nenhuma e, com uma anterior, entra com a chave de acesso. Por SSH ou no WSL, o endereço do login abre em qualquer aparelho e você cola o código no terminal. Quem preferir responde `chave` e usa uma chave de acesso de um usuário administrador;
 - o domínio principal (ex.: `hostrema.com.br`): o painel fica em `painel.<domínio>` e as aplicações em `<nome>.apps.<domínio>`;
 - o seu e-mail (owner do painel, alertas e certificados);
 - o tamanho inicial (`inicial`, `padrao` ou `grande`, com as máquinas de cada um na tela);
@@ -54,12 +54,13 @@ O script só pergunta o que precisa vir de você:
 
 O resto ele faz sozinho, nesta ordem:
 
-1. Instala o que faltar nesta máquina (AWS CLI, Terraform, Ansible, jq) em `~/.hostrema/tools`, sem mexer no sistema quando dá.
+1. Instala o que faltar nesta máquina (AWS CLI, Terraform, Ansible, jq) em `~/.hostrema/tools`, sem mexer no sistema quando dá. Se a região escolhida for uma das que a AWS entrega desligada (as *opt-in*), liga a região na conta.
 2. Cria o bucket do estado do Terraform (versionado, criptografado e com trava). Guarda nele também uma cópia das respostas e senhas, para rodar de outra máquina.
+   Confere a cota de vCPUs da região, que conta as máquinas comuns ligadas ao mesmo tempo (as que já rodam na conta também contam). Conta nova vem com 5 e o tamanho `inicial` usa 12: se faltar, o script pede o aumento à AWS logo aqui e só espera a aprovação na hora de criar as máquinas. Costuma sair em minutos; se a AWS abrir um caso no suporte, a resposta chega por e-mail, e rodar o script de novo continua de onde parou.
 3. Cria a zona DNS do domínio no Route53. Se o domínio já tem site ou e-mail, copia antes para a zona os registros que estão no ar (raiz, `www`, `mail`, MX, SPF, DMARC e as chaves DKIM mais comuns), para a troca não derrubar nada. Se o domínio estiver registrado fora da AWS (no registro.br, por exemplo), mostra os quatro servidores DNS para trocar no registro e espera a mudança aparecer. É o único passo fora da AWS; num domínio registrado na própria AWS, até isso é automático.
-4. Configura o Amazon SES (domínio verificado com DKIM, DMARC e credenciais SMTP) e pede à AWS o acesso de produção do SES.
+4. Configura o Amazon SES (domínio verificado com DKIM, MAIL FROM próprio em `bounce.<domínio>` com SPF, DMARC, supressão de endereços que voltam ou reclamam e credenciais SMTP) e pede à AWS o acesso de produção do SES. Se o seu e-mail não for do domínio, a AWS manda para ele um link de verificação: clique nele para já receber os e-mails do painel enquanto o acesso de produção não sai.
 5. Constrói a imagem do painel com o código desta pasta no AWS CodeBuild (enquanto a troca do DNS acontece) e a guarda no Amazon ECR da conta. Só o código vai para a AWS (o que o `.gitignore` exclui, como o `.env`, fica aqui), e esta máquina não precisa de Docker. Numa conta em que o CodeBuild ainda não está liberado, o script usa o Docker desta máquina, se houver.
-6. Cria o painel (`infra/terraform/control-plane`): balanceador com certificado, PostgreSQL Multi-AZ, Redis com failover e as instâncias, que se configuram sozinhas no primeiro boot. Se a preparação de uma instância falhar (rede ou AWS indisponível por um tempo), o script a refaz; se ainda assim o painel não subir, mostra o fim do log dela.
+6. Cria o painel (`infra/terraform/control-plane`): balanceador com certificado, PostgreSQL Multi-AZ, Redis com failover e as instâncias, que se configuram sozinhas no primeiro boot. A rede fica nas duas primeiras zonas da região que têm os tipos de máquina do tamanho escolhido (nem toda zona tem todos), e continua nelas depois; um tamanho novo cujos tipos faltem numa dessas zonas é recusado antes de qualquer mudança. Se a preparação de uma instância falhar (rede ou AWS indisponível por um tempo), o script a refaz; se ainda assim o painel não subir, mostra o fim do log dela.
 7. Prepara a plataforma (`platform:install`) e configura tudo o que seria feito no painel (`platform:configure`): domínio das aplicações, tokens internos, e-mail, cobrança, a chave SSH dos nós e o token da API do Ansible.
 8. Cria a região (`infra/terraform/regions/<região>`, ligada ao painel por peering) e prepara os servidores com o Ansible. O Ansible cadastra os nós no painel, e o proxy de cada nó passa a confiar no balanceador de borda da região.
 9. Liga o PROXY protocol da borda e confere o painel, os servidores e a borda.
@@ -79,9 +80,15 @@ O SSH do painel e dos servidores só aceita o IP público de quem roda o script.
 | `./hostrema-prod.sh ssh [host]` | shell no painel ou num servidor da região (`control`, `node-01`...) |
 | `./hostrema-prod.sh artisan <comando>` | comando do Laravel no painel |
 | `./hostrema-prod.sh logs` | logs do painel |
-| `./hostrema-prod.sh destroy` | apaga a instalação (pede para você digitar o domínio) |
+| `./hostrema-prod.sh destroy` | apaga a instalação, inclusive o usuário que envia pelo SES e a chave dele (pede para você digitar o domínio) |
 
-Até a AWS liberar o SES (a resposta chega por e-mail, normalmente em até 24 horas), o painel só consegue enviar e-mail para endereços verificados, como o seu. O `info` mostra quando foi liberado. `infra/prod/test/simulate.sh` roda o script em todos os cenários (instalação, segunda execução, código novo, `upgrade`, `reconfigure`, `destroy`, máquina nova, IP novo, domínio na AWS, SMTP próprio, Efí, outra região, credenciais e respostas inválidas, e cada falha possível) com substitutos da AWS, do Terraform, do SSH e do Ansible. `bash infra/test/run.sh` roda todos os testes de uma vez (scripts, Terraform, Ansible, a lista de arquivos do Coolify oficial que o fork altera e a suíte PHP da plataforma); o CI roda a parte dos scripts a cada mudança.
+Até a AWS liberar o SES (a resposta chega por e-mail, normalmente em até 24 horas), o painel só consegue enviar e-mail para endereços verificados, como o seu. O `info` mostra quando foi liberado e se a AWS já verificou o domínio.
+
+Tudo o que a instalação precisa na AWS e dá para fazer pelo terminal, o script faz. Ficam de fora só:
+
+- a troca dos servidores DNS no registro do domínio, quando ele não está registrado na própria AWS (o registro.br não tem uma API para isso);
+- as respostas da AWS que passam por uma pessoa: o acesso de produção do SES, o aumento da cota de vCPUs quando vira caso no suporte e a liberação do CodeBuild numa conta nova (enquanto isso, a imagem é construída com o Docker desta máquina);
+- o clique no link de verificação do SES, quando o seu e-mail não é do domínio. `infra/prod/test/simulate.sh` roda o script em todos os cenários (instalação, segunda execução, código novo, `upgrade`, `reconfigure`, `destroy` e a instalação seguinte, máquina nova, IP novo, domínio na AWS, SMTP próprio, Efí, outra região, região desligada, login pelo navegador, chave de acesso, cota de vCPUs, zonas sem o tipo de máquina, SES ainda em teste, respostas inválidas e cada falha possível) com substitutos da AWS, do Terraform, do SSH e do Ansible. `bash infra/test/run.sh` roda todos os testes de uma vez (scripts, Terraform, Ansible, a lista de arquivos do Coolify oficial que o fork altera e a suíte PHP da plataforma); o CI roda a parte dos scripts a cada mudança.
 
 ### Ao atualizar uma instalação existente
 

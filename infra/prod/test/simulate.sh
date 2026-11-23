@@ -103,10 +103,90 @@ case "\$*" in
 # First: their arguments carry the whole project, buildspec included.
 *"codebuild create-project"* | *"codebuild update-project"*) printf '%s' "\$4" >"\$M/build-project.json" ;;
 *"sts get-caller-identity"*)
-    { [ -f "\$M/no-credentials" ] && [ ! -f "\$M/profile" ]; } && exit 255
+    # The session ends once, after the first long wait (DNS).
+    if [ -f "\$M/expire-after-wait" ] && [ -f "\$M/slept" ]; then
+        rm -f "\$M/expire-after-wait" "\$M/logged-in"
+        exit 255
+    fi
+    # Without credentials until an access key is saved or the console login (aws login) happens.
+    if [ -f "\$M/no-credentials" ] && ! grep -q aws_access_key_id "\$M/profile" 2>/dev/null && [ ! -f "\$M/logged-in" ]; then
+        exit 255
+    fi
     [ -f "\$M/bad-credentials" ] && exit 255
     echo $ACCOUNT ;;
+--version) [ -f "\$M/aws-cli-new" ] && echo "aws-cli/2.33.4 Python/3.13.9 Linux/6.8.0 exe/x86_64.ubuntu.24" || echo "aws-cli/2.31.0 Python/3.12.6 Linux/6.8.0 exe/x86_64.ubuntu.24" ;;
+"login --profile"*) echo "\$*" >"\$M/login"; [ -f "\$M/login-fails" ] && exit 255; touch "\$M/logged-in" ;;
+*"configure get login_session"*) [ -f "\$M/logged-in" ] || exit 1; echo "arn:aws:iam::$ACCOUNT:root" ;;
 *"configure set"*) echo "\$*" >>"\$M/profile" ;;
+*"account get-region-opt-status"*)
+    if [ -f "\$M/region-disabling" ]; then echo DISABLING
+    elif [ ! -f "\$M/region-disabled" ]; then echo ENABLED_BY_DEFAULT
+    elif [ ! -f "\$M/region-enable-requested" ]; then echo DISABLED
+    else
+        polls=\$((\$(cat "\$M/region-polls" 2>/dev/null || echo 0) + 1)); echo "\$polls" >"\$M/region-polls"
+        [ "\$polls" -le 1 ] && echo ENABLING || echo ENABLED
+    fi ;;
+*"account enable-region"*) echo "\$*" >"\$M/region-enable-requested" ;;
+*"ec2 describe-instance-types"*)
+    [ -f "\$M/no-instance-types" ] && exit 254
+    for argument in "\$@"; do
+        case "\$argument" in
+        *.large) printf '%s\t2\n' "\$argument" ;;
+        *.xlarge) printf '%s\t4\n' "\$argument" ;;
+        *.2xlarge) printf '%s\t8\n' "\$argument" ;;
+        *.4xlarge) printf '%s\t16\n' "\$argument" ;;
+        *.8xlarge) printf '%s\t32\n' "\$argument" ;;
+        esac
+    done ;;
+*"ec2 describe-instances"*)
+    # Another workload of the account (4 standard vCPUs), one of ours and two of other quotas.
+    [ -f "\$M/other-instances" ] && printf 'c5.xlarge\t2\t2\tNone\nm6i.large\t1\t2\thostrema\ng4dn.xlarge\t2\t2\tNone\ninf2.xlarge\t2\t2\tNone\n' ;;
+*"service-quotas get-service-quota"*) cat "\$M/quota" 2>/dev/null || echo 1152.0 ;;
+*"service-quotas get-aws-default-service-quota"*) echo 5.0 ;;
+*"service-quotas request-service-quota-increase"*)
+    echo "\$*" >"\$M/quota-request"
+    if [ -f "\$M/quota-request-exists" ]; then
+        echo "An error occurred (ResourceAlreadyExistsException) when calling the RequestServiceQuotaIncrease operation: Only one open service quota increase request is allowed per quota." >&2
+        exit 254
+    fi
+    if [ -f "\$M/quota-request-refused" ]; then
+        echo "An error occurred (IllegalArgumentException) when calling the RequestServiceQuotaIncrease operation: Invalid desired value." >&2
+        exit 254
+    fi
+    echo req-new ;;
+*"service-quotas list-requested-service-quota-change-history-by-quota"*) [ -f "\$M/quota-request-exists" ] && echo req-console || echo None ;;
+*"service-quotas get-requested-service-quota-change"*)
+    # The first answer is "still open"; then AWS approves what was asked.
+    polls=\$((\$(cat "\$M/quota-polls" 2>/dev/null || echo 0) + 1)); echo "\$polls" >"\$M/quota-polls"
+    if [ -f "\$M/quota-denied" ]; then
+        echo DENIED
+    elif [ "\$polls" -le 1 ]; then
+        [ -f "\$M/quota-case" ] && echo CASE_OPENED || echo PENDING
+    else
+        desired=\$(sed -nE 's/.*--desired-value ([0-9]+).*/\1/p' "\$M/quota-request" 2>/dev/null)
+        echo "\${desired:-64}.0" >"\$M/quota"
+        echo APPROVED
+    fi ;;
+*"ec2 describe-availability-zones"*) printf '%sa\t%sb\t%sc\n' "\$AWS_REGION" "\$AWS_REGION" "\$AWS_REGION" ;;
+*"ec2 describe-instance-type-offerings"*)
+    for argument in "\$@"; do case "\$argument" in Name=instance-type,Values=*) type=\${argument#Name=instance-type,Values=} ;; esac; done
+    if grep -qx "\$type" "\$M/only-zone-a" 2>/dev/null; then
+        printf '%sa\n' "\$AWS_REGION"
+    elif grep -qx "\$type" "\$M/not-in-zone-b" 2>/dev/null; then
+        printf '%sa\t%sc\n' "\$AWS_REGION" "\$AWS_REGION"
+    elif grep -qx "\$type" "\$M/not-in-zone-c" 2>/dev/null; then
+        printf '%sa\t%sb\n' "\$AWS_REGION" "\$AWS_REGION"
+    else
+        printf '%sa\t%sb\t%sc\n' "\$AWS_REGION" "\$AWS_REGION" "\$AWS_REGION"
+    fi ;;
+*"s3 cp s3://"*"terraform.tfstate -"*)
+    # Terraform state of a part (control plane or region): resources once it was applied.
+    case "\$*" in
+    */control-plane/*) name=control-plane ;;
+    *) name=\$(printf '%s' "\$*" | sed -nE 's#.*/regions/([^/]+)/terraform.tfstate.*#\1#p') ;;
+    esac
+    [ -f "\$M/applied-\$name" ] || exit 1
+    echo '{"resources":[{"mode":"managed","type":"aws_vpc","name":"this"}]}' ;;
 *"s3api head-bucket"*) [ -f "\$M/bucket" ] || exit 1 ;;
 *"s3api create-bucket"*) echo "\$*" >"\$M/bucket" ;;
 *"s3api head-object"*) [ -f "\$M/state-in-s3" ] || exit 1 ;;
@@ -125,12 +205,24 @@ case "\$*" in
 *"route53domains update-domain-nameservers"*) echo "\$*" >"\$M/ns-updated" ;;
 *"route53 list-resource-record-sets"*) echo '{"ResourceRecordSets":[]}' ;;
 *"route53 change-resource-record-sets"*) echo "\$*" >>"\$M/records" ;;
+*"sesv2 get-email-identity"*"VerifiedForSendingStatus"*)
+    # SES sees the DKIM records once the domain points to Route53.
+    if [ -f "\$M/ses-unverified" ]; then echo False
+    elif [ -f "\$M/slept" ] || [ -f "\$M/ns-updated" ]; then echo True
+    else echo False; fi ;;
 *"sesv2 get-email-identity"*) [ -f "\$M/ses" ] || exit 254; echo '{"DkimAttributes":{"Tokens":["tok1","tok2","tok3"]}}' ;;
 *"sesv2 create-email-identity --email-identity $DOMAIN"*) touch "\$M/ses"; echo '{"DkimAttributes":{"Tokens":["tok1","tok2","tok3"]}}' ;;
+*"sesv2 create-email-identity"*) echo "\$*" >>"\$M/ses-addresses" ;;
+*"sesv2 put-email-identity-mail-from-attributes"*) echo "\$*" >"\$M/mail-from"; [ -f "\$M/mail-from-fails" ] && exit 254 ;;
+*"sesv2 put-account-suppression-attributes"*) echo "\$*" >"\$M/suppression" ;;
 *"iam get-user"*) [ -f "\$M/ses-user" ] || exit 254 ;;
 *"iam create-user"*) touch "\$M/ses-user" ;;
-*"iam list-access-keys"*) [ -f "\$M/ses-user-key" ] && echo AKIAOLDKEY || echo "" ;;
-*"iam create-access-key"*) printf 'AKIASIMULATION\twJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n' ;;
+*"iam list-access-keys"*)
+    if [ -s "\$M/ses-user-key" ]; then cat "\$M/ses-user-key"
+    elif [ -f "\$M/ses-user-key" ]; then echo AKIAOLDKEY
+    else echo ""; fi ;;
+*"iam create-access-key"*) echo AKIASIMULATION >"\$M/ses-user-key"; printf 'AKIASIMULATION\twJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n' ;;
+*"iam delete-user --user-name"*) rm -f "\$M/ses-user" "\$M/ses-user-key" ;;
 *"sesv2 get-account"*) [ -f "\$M/ses-production" ] && echo True || echo False ;;
 *"sesv2 put-account-details"*) echo "\$*" >"\$M/ses-request" ;;
 *"iam get-role"*) [ -f "\$M/build-role" ] || exit 254 ;;
@@ -162,6 +254,7 @@ EOF
 #!/usr/bin/env bash
 M="$M"
 echo "[terraform] \$*" >> "$SIM/calls.log"
+[ -z "\${AWS_PROFILE:-}" ] || echo "\$AWS_PROFILE" >>"\$M/terraform-profiles"
 dir=""
 for argument in "\$@"; do case "\$argument" in -chdir=*) dir=\${argument#-chdir=} ;; esac; done
 name=\$(basename "\$dir")
@@ -178,7 +271,7 @@ case "\$*" in
     if [ "\$name" != control-plane ]; then
         printf 'all:\n  children:\n    control:\n      hosts:\n        hostrema-%s-control:\n          ansible_host: 203.0.113.50\n    coolify_nodes:\n      vars:\n        ansible_ssh_common_args: "-o ProxyJump=ubuntu@203.0.113.50"\n      hosts:\n        hostrema-%s-node-01:\n          ansible_host: 10.20.128.10\n' "\$name" "\$name" >"\$dir/../../../ansible/inventory/\$name.yml"
     fi ;;
-*" destroy "*) echo "\$name" >>"\$M/destroyed" ;;
+*" destroy "*) echo "\$name" >>"\$M/destroyed"; rm -f "\$M/applied-\$name" ;;
 *" output -json"*)
     if [ "\$name" = control-plane ]; then
         [ -f "\$M/applied-control-plane" ] &&
@@ -240,7 +333,9 @@ EOF
 EXTRA=()
 run() {
     local status=0
-    (cd "$COPY" && env HOSTREMA_STATE_DIR="$SIM/state" HOSTREMA_TOOLS_DIR="$SIM/tools" PATH="$SIM/bin:$PATH" \
+    # Nothing of this machine's AWS profile or terminal session reaches the installer.
+    (cd "$COPY" && env -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u SSH_CONNECTION -u SSH_TTY -u DISPLAY -u WAYLAND_DISPLAY \
+        HOSTREMA_STATE_DIR="$SIM/state" HOSTREMA_TOOLS_DIR="$SIM/tools" PATH="$SIM/bin:$PATH" \
         HOSTREMA_DOMAIN="$DOMAIN" HOSTREMA_OWNER_EMAIL="owner@$DOMAIN" HOSTREMA_SIZE=inicial \
         HOSTREMA_EMAIL_MODE=ses HOSTREMA_AWS_REGION=sa-east-1 "${EXTRA[@]+"${EXTRA[@]}"}" \
         timeout 300 "${SETSID[@]+"${SETSID[@]}"}" bash "$COPY/infra/prod/hostrema-prod.sh" "$@") </dev/null >"$SIM/output.log" 2>&1 || status=$?
@@ -309,6 +404,18 @@ scenario_main_flow() {
     check "estado privado (pasta)" equals "$(mode_of "$SIM/state")" 700
     check "estado privado (segredos)" equals "$(mode_of "$SIM/state/secrets.env")" 600
     check "cópia do estado no bucket" test -s "$M/state.tgz"
+    check "cota de vCPUs suficiente: nenhum pedido" not test -f "$M/quota-request"
+    check "painel nas duas primeiras zonas que têm o tipo" jq -e '.availability_zones == ["sa-east-1a","sa-east-1b"]' "$cp_vars"
+    check "região nas duas primeiras zonas que têm os tipos" jq -e '.availability_zones == ["sa-east-1a","sa-east-1b"]' "$rg_vars"
+    check "zonas guardadas no estado" contains "$SIM/state/config.env" 'CP_ZONES=sa-east-1a\ sa-east-1b'
+    check "MAIL FROM do próprio domínio no SES" contains "$M/mail-from" '--mail-from-domain bounce.hostrema-teste.com.br --behavior-on-mx-failure USE_DEFAULT_VALUE'
+    check "MX do MAIL FROM" contains "$M/records" 'feedback-smtp.sa-east-1.amazonses.com'
+    check "SPF do MAIL FROM" contains "$M/records" 'v=spf1 include:amazonses.com ~all'
+    check "bounces e reclamações suprimidos" contains "$M/suppression" '--suppressed-reasons BOUNCE COMPLAINT'
+    check "e-mail do owner no domínio: sem link de verificação" not test -f "$M/ses-addresses"
+    check "logs do build guardados por 30 dias" contains "$SIM/calls.log" 'logs put-retention-policy --log-group-name /aws/codebuild/hostrema-image --retention-in-days 30'
+    check "confere o domínio no SES" contains "$T_LOG" 'e-mail (SES): hostrema-teste.com.br verificado'
+    check "Terraform com o perfil desta máquina (sem login do console)" not test -s "$M/terraform-profiles"
 
     section "Segunda execução (só a infraestrutura mudou)"
     infra_change 'ajuste do operador'
@@ -321,6 +428,8 @@ scenario_main_flow() {
     check "não aplica Terraform sem mudanças" not grep -q '^\[terraform\] .* apply ' "$SIM/calls.log"
     check "não pede de novo o acesso de produção do SES" not grep -q 'put-account-details' "$SIM/calls.log"
     check "não copia de novo os registros do domínio" not grep -q 'name=www' "$SIM/calls.log"
+    check "não mexe de novo na supressão do SES" not grep -q 'put-account-suppression-attributes' "$SIM/calls.log"
+    check "mantém as zonas" jq -e '.availability_zones == ["sa-east-1a","sa-east-1b"]' "$cp_vars"
 
     section "Mudança recusada sem confirmação"
     rm -f "$M/applied-control-plane"
@@ -404,6 +513,8 @@ scenario_main_flow() {
     check "SMTP novo enviado ao painel" jq -e '.smtp.host == "smtp.provedor.com.br" and .smtp.port == 465 and .smtp.username == "avisos" and .smtp.from_address == "avisos@hostrema-teste.com.br"' "$(last_payload)"
     check "sem SES nesta configuração" not grep -q 'sesv2' "$SIM/calls.log"
     check "alertas do Ansible pelo SMTP novo" jq -e '.smtp_smarthost == "smtp.provedor.com.br:465" and .vault_smtp_username == "avisos"' "$SIM/state/ansible-vars.json"
+    check "confere as zonas para os tipos novos" contains "$SIM/calls.log" 'Name=instance-type,Values=m6i.4xlarge'
+    check "tamanho novo nas mesmas zonas" jq -e '.availability_zones == ["sa-east-1a","sa-east-1b"]' "$rg_vars"
 
     section "destroy"
     fresh_calls
@@ -421,6 +532,20 @@ scenario_main_flow() {
     check "apaga o projeto de build" contains "$SIM/calls.log" 'codebuild delete-project --name hostrema-image'
     check "apaga o papel do build" contains "$SIM/calls.log" 'iam delete-role --role-name hostrema-image-build'
     check "esquece a imagem publicada" not grep -Eq '^DEPLOYED_IMAGE=.*hostrema' "$SIM/state/config.env"
+    check "apaga os logs do build" contains "$SIM/calls.log" 'logs delete-log-group --log-group-name /aws/codebuild/hostrema-image'
+    check "apaga a chave SMTP do SES" contains "$SIM/calls.log" 'iam delete-access-key --user-name hostrema-ses-smtp-sa-east-1 --access-key-id AKIASIMULATION'
+    check "apaga a política do usuário SMTP" contains "$SIM/calls.log" 'iam delete-user-policy --user-name hostrema-ses-smtp-sa-east-1 --policy-name ses-send'
+    check "apaga o usuário SMTP do SES" contains "$SIM/calls.log" 'iam delete-user --user-name hostrema-ses-smtp-sa-east-1'
+    check "esquece a chave SMTP do SES" grep -qx "SES_ACCESS_KEY_ID=''" "$SIM/state/secrets.env"
+    check "esquece as zonas da rede apagada" grep -qx "CP_ZONES=''" "$SIM/state/config.env"
+    check "diz o que ficou na conta" contains "$T_LOG" 'o domínio verificado no SES'
+
+    section "Nova instalação depois do destroy"
+    fresh_calls
+    check "up termina sem erro" run up --yes
+    check "reenvia as configurações e o SMTP ao painel novo" jq -e 'has("settings") and has("smtp") and .api_token == "ansible"' "$(last_payload)"
+    check "cria o owner de novo" contains "$SIM/calls.log" '--reset-password'
+    check "escolhe as zonas de novo" contains "$SIM/state/config.env" 'CP_ZONES=sa-east-1a\ sa-east-1b'
 }
 
 scenario_route53_domain() {
@@ -475,6 +600,15 @@ scenario_options() {
     check "cobrança continua pela Efí" not jq -e '.settings["platform.billing.provider"] == "manual"' "$(last_payload)"
     check "resumo mostra a Efí" contains "$T_LOG" 'Efí Bank'
     check "novo tamanho aplicado" jq -e '.node_count == 2 and .node_instance_type == "m6i.4xlarge"' "$rg_vars"
+
+    section "destroy com a Efí configurada"
+    EXTRA=(HOSTREMA_AWS_REGION=us-east-1 HOSTREMA_CONFIRM_DESTROY="$DOMAIN")
+    check "destroy termina sem erro" run destroy
+    EXTRA=()
+    check "a próxima instalação pergunta de novo pela Efí" grep -qx "EFI_STATUS=''" "$SIM/state/config.env"
+    check "e não fica presa à Efí sem credenciais" grep -qx "BILLING_PROVIDER=''" "$SIM/state/config.env"
+    check "sem usuário SMTP do SES para apagar" not grep -q 'iam delete-user --user-name' "$SIM/calls.log"
+    check "sem SES, não diz que ficou um domínio no SES" not contains "$T_LOG" 'no SES'
 }
 
 scenario_credentials() {
@@ -618,7 +752,205 @@ scenario_not_a_clone() {
     check "explica que precisa de um clone" contains "$T_LOG" 'clone git deste repositório'
 }
 
-for scenario in main_flow route53_domain options credentials invalid_answers failures new_machine ses_ready not_a_clone; do
+scenario_login() {
+    sandbox login
+    touch "$M/no-credentials" "$M/aws-cli-new"
+    section "Login do console pelo navegador (aws login)"
+    EXTRA=(HOSTREMA_AWS_LOGIN=navegador SSH_CONNECTION="198.51.100.1 50000 10.0.0.5 22")
+    check "plan termina sem erro" run plan
+    check "entra pelo aws login num perfil próprio" contains "$M/login" 'login --profile hostrema-login'
+    check "por SSH, o login é aberto em outro aparelho" contains "$M/login" '--remote'
+    check "região no perfil do login" contains "$M/profile" 'configure set region sa-east-1 --profile hostrema-login'
+    check "nenhuma chave de acesso" not grep -q 'aws_access_key_id' "$M/profile"
+    check "lembra o perfil do login" contains "$SIM/state/config.env" 'AWS_PROFILE_NAME=hostrema-login'
+    check "Terraform recebe a sessão pela AWS CLI" contains "$M/profile" 'configure export-credentials --profile hostrema-login --format process --profile hostrema-login-terraform'
+    check "a sessão não vira um perfil com credential_process" not grep -q 'credential_process.* --profile hostrema-login$' "$M/profile"
+    check "up termina sem erro" run up --yes
+    check "Terraform usa o perfil que pede as credenciais à CLI" grep -qx hostrema-login-terraform "$M/terraform-profiles"
+    check "Terraform nunca usa o perfil do login direto" not grep -qx hostrema-login "$M/terraform-profiles"
+    EXTRA=()
+
+    section "Sessão do login venceu (12 horas)"
+    rm -f "$M/logged-in" "$M/login"
+    EXTRA=(HOSTREMA_AWS_LOGIN=navegador DISPLAY=:0)
+    check "plan termina sem erro" run plan
+    check "pede o login de novo no mesmo perfil" contains "$M/login" 'login --profile hostrema-login'
+    if ! grep -qi microsoft /proc/version 2>/dev/null; then
+        check "com navegador nesta máquina, abre o navegador direto" not contains "$M/login" '--remote'
+    fi
+    EXTRA=()
+
+    section "Login que não termina"
+    rm -f "$M/logged-in"
+    touch "$M/login-fails"
+    EXTRA=(HOSTREMA_AWS_LOGIN=navegador)
+    check "plan para" fails plan
+    check "diz que o login não terminou" contains "$T_LOG" 'o login na AWS não terminou'
+    EXTRA=(HOSTREMA_AWS_LOGIN=pombo)
+    check "opção inválida para o script" fails plan
+    check "diz as opções de login" contains "$T_LOG" 'escolha navegador ou chave'
+    EXTRA=()
+    rm -f "$M/login-fails"
+
+    section "Sessão do login acaba no meio da instalação"
+    sandbox login-expiry
+    touch "$M/no-credentials" "$M/aws-cli-new" "$M/expire-after-wait"
+    EXTRA=(HOSTREMA_AWS_LOGIN=navegador)
+    check "up termina sem erro" run up --yes
+    EXTRA=()
+    check "pede o login de novo depois da espera do DNS" contains "$T_LOG" 'A sessão da AWS acabou'
+    check "e segue até o fim" contains "$T_LOG" 'borda da região: ok'
+    sandbox key-expiry
+    touch "$M/expire-after-wait"
+    check "credenciais que deixam de valer param o script" fails up --yes
+    check "diz para rodar de novo" contains "$T_LOG" 'as credenciais da AWS deixaram de valer'
+    check "rodando de novo, termina" run up --yes
+
+    sandbox login-old-cli
+    touch "$M/no-credentials"
+    section "AWS CLI anterior à 2.32"
+    EXTRA=(HOSTREMA_AWS_LOGIN=navegador HOSTREMA_key_id=AKIAOPERADOR HOSTREMA_secret=segredo-do-operador)
+    check "plan termina sem erro" run plan
+    check "avisa que o login pelo navegador precisa da CLI nova" contains "$T_LOG" 'precisa da AWS CLI 2.32 ou mais nova (esta é a 2.31.0)'
+    check "entra com a chave de acesso" contains "$M/profile" 'configure set aws_access_key_id AKIAOPERADOR --profile hostrema'
+    check "passa a usar o perfil da chave" contains "$SIM/state/config.env" 'AWS_PROFILE_NAME=hostrema'
+    EXTRA=()
+}
+
+scenario_quota() {
+    sandbox quota
+    echo 5.0 >"$M/quota"
+    touch "$M/other-instances"
+    section "Conta nova: cota de 5 vCPUs"
+    check "plan termina sem erro" run plan
+    check "plan avisa da cota (com as máquinas que já rodam na conta)" contains "$T_LOG" 'a cota de vCPUs da conta em sa-east-1 é 5 e este tamanho precisa de 16'
+    check "plan não pede nada" not test -f "$M/quota-request"
+    check "up termina sem erro" run up --yes
+    check "pede o aumento do que falta" contains "$M/quota-request" '--service-code ec2 --quota-code L-1216C47A --desired-value 16'
+    check "pede antes de esperar o DNS" bash -c "grep -n 'request-service-quota-increase\|type=NS' '$SIM/calls.log' | head -n 1 | grep -q request-service-quota-increase"
+    check "espera a aprovação antes de criar o painel" bash -c "grep -n 'get-requested-service-quota-change\|control-plane apply' '$SIM/calls.log' | head -n 1 | grep -q get-requested-service-quota-change"
+    check "diz a cota nova" contains "$T_LOG" 'cota de vCPUs: 16.'
+    check "esquece o pedido atendido" grep -qx "QUOTA_REQUEST_ID=''" "$SIM/state/config.env"
+    fresh_calls
+    check "up de novo termina sem erro" run up --yes
+    check "não pede de novo" not grep -q 'request-service-quota-increase' "$SIM/calls.log"
+
+    section "Cota: pedido já aberto (pelo console)"
+    sandbox quota-open
+    echo 5.0 >"$M/quota"
+    touch "$M/quota-request-exists"
+    check "up termina sem erro" run up --yes
+    check "espera o pedido que já existia" contains "$SIM/calls.log" 'get-requested-service-quota-change --request-id req-console'
+
+    section "Cota: a AWS abre um caso no suporte"
+    sandbox quota-case
+    echo 5.0 >"$M/quota"
+    touch "$M/quota-case"
+    check "up termina sem erro" run up --yes
+    check "explica o caso e que pode rodar de novo" contains "$T_LOG" 'a AWS abriu um caso no suporte para este pedido'
+
+    section "Cota: aumento negado"
+    sandbox quota-denied
+    echo 5.0 >"$M/quota"
+    touch "$M/quota-denied"
+    check "up para" fails up --yes
+    check "explica a recusa e o que fazer" contains "$T_LOG" 'a AWS não aprovou o aumento da cota de vCPUs (DENIED'
+    check "não cria o painel" not grep -q 'control-plane apply' "$SIM/calls.log"
+    check "esquece o pedido negado" grep -qx "QUOTA_REQUEST_ID=''" "$SIM/state/config.env"
+
+    section "Cota: pedido recusado na hora"
+    sandbox quota-refused
+    echo 5.0 >"$M/quota"
+    touch "$M/quota-request-refused"
+    check "up para" fails up --yes
+    check "mostra o motivo da AWS" contains "$T_LOG" 'a AWS recusou o pedido de mais vCPUs: An error occurred (IllegalArgumentException)'
+
+    section "Cota: sem como conferir"
+    sandbox quota-unknown
+    touch "$M/no-instance-types"
+    check "up termina sem erro" run up --yes
+    check "avisa que não conferiu" contains "$T_LOG" 'não consegui conferir a cota de vCPUs da conta'
+}
+
+scenario_zones() {
+    local cp_vars rg_vars
+    sandbox zones
+    cp_vars=$M/control-plane.vars.json
+    rg_vars=$M/sa-east-1.vars.json
+    echo m6i.2xlarge >"$M/not-in-zone-b"
+    section "Zonas: uma zona sem o tipo dos nós"
+    check "up termina sem erro" run up --yes
+    check "painel nas duas primeiras zonas" jq -e '.availability_zones == ["sa-east-1a","sa-east-1b"]' "$cp_vars"
+    check "região pula a zona sem o tipo dos nós" jq -e '.availability_zones == ["sa-east-1a","sa-east-1c"]' "$rg_vars"
+    check "zonas da região guardadas" contains "$SIM/state/config.env" 'RG_ZONES=sa-east-1a\ sa-east-1c'
+    rm -f "$M/not-in-zone-b"
+    check "up de novo termina sem erro" run up --yes
+    check "mantém as zonas da rede criada" jq -e '.availability_zones == ["sa-east-1a","sa-east-1c"]' "$rg_vars"
+
+    section "Zonas: tamanho novo sem o tipo numa delas"
+    echo m6i.4xlarge >"$M/not-in-zone-c"
+    EXTRA=(HOSTREMA_SIZE=padrao)
+    fresh_calls
+    check "reconfigure para antes de mudar qualquer coisa" fails reconfigure --yes
+    EXTRA=()
+    check "diz qual zona não tem o tipo" contains "$T_LOG" 'a zona sa-east-1c de sa-east-1, onde esta instalação já está, não tem todos estes tipos: m6i.xlarge m6i.4xlarge'
+    check "nenhum apply" not grep -q '^\[terraform\] .* apply ' "$SIM/calls.log"
+
+    section "Zonas: instalação de antes da escolha"
+    sandbox zones-legacy
+    cp_vars=$M/control-plane.vars.json
+    rg_vars=$M/sa-east-1.vars.json
+    run up --yes || true
+    sed -i.bak -e "s/^CP_ZONES=.*/CP_ZONES=''/" -e "s/^RG_ZONES=.*/RG_ZONES=''/" "$SIM/state/config.env"
+    check "up termina sem erro" run up --yes
+    check "painel continua nas zonas de antes (padrão do Terraform)" jq -e '.availability_zones == []' "$cp_vars"
+    check "região também" jq -e '.availability_zones == []' "$rg_vars"
+    check "não guarda zonas que não escolheu" grep -qx "CP_ZONES=''" "$SIM/state/config.env"
+    echo m6i.large >"$M/not-in-zone-b"
+    check "tipo que falta numa zona de antes para o script" fails up --yes
+    check "diz qual zona" contains "$T_LOG" 'a zona sa-east-1b de sa-east-1, onde esta instalação já está, não tem todos estes tipos: m6i.large'
+
+    section "Zonas: menos de duas com o tipo"
+    sandbox zones-single
+    echo m6i.2xlarge >"$M/only-zone-a"
+    check "up para" fails up --yes
+    check "explica o que escolher" contains "$T_LOG" 'em sa-east-1, menos de duas zonas têm todos estes tipos: m6i.large m6i.2xlarge'
+    check "nada aplicado" not grep -q '^\[terraform\] .* apply ' "$SIM/calls.log"
+}
+
+scenario_ses_sandbox() {
+    sandbox ses-sandbox
+    touch "$M/ses-unverified" "$M/mail-from-fails"
+    section "SES ainda em sandbox, owner fora do domínio"
+    EXTRA=(HOSTREMA_OWNER_EMAIL=dono@exemplo.com.br)
+    check "up termina sem erro" run up --yes
+    EXTRA=()
+    check "verifica o e-mail do owner no SES" contains "$M/ses-addresses" 'create-email-identity --email-identity dono@exemplo.com.br'
+    check "explica o link de verificação" contains "$T_LOG" 'para dono@exemplo.com.br um link de verificação'
+    check "avisa do MAIL FROM que não deu" contains "$T_LOG" 'não consegui configurar o MAIL FROM bounce.hostrema-teste.com.br'
+    check "diz que a AWS ainda verifica o domínio" contains "$T_LOG" 'a AWS ainda está verificando hostrema-teste.com.br (DKIM)'
+    check "info termina sem erro" run info
+    check "info mostra a verificação pendente" contains "$T_LOG" 'a AWS ainda está verificando o domínio (DKIM)'
+}
+
+scenario_region_optin() {
+    sandbox optin
+    touch "$M/region-disabled"
+    section "Região desligada na conta (opt-in)"
+    check "plan termina sem erro" run plan
+    check "plan avisa que vai ligar a região" contains "$T_LOG" 'a região sa-east-1 está desligada nesta conta'
+    check "plan não liga nada" not test -f "$M/region-enable-requested"
+    check "up termina sem erro" run up --yes
+    check "liga a região" contains "$M/region-enable-requested" '--region-name sa-east-1'
+    check "espera a AWS ligar" contains "$T_LOG" 'região sa-east-1 ligada.'
+    check "liga antes de criar o bucket" bash -c "grep -n 'account enable-region\|s3api create-bucket' '$SIM/calls.log' | head -n 1 | grep -q enable-region"
+    sandbox optin-disabling
+    touch "$M/region-disabling"
+    check "região sendo desligada para o script" fails plan
+    check "diz para esperar" contains "$T_LOG" 'está sendo desligada nesta conta'
+}
+
+for scenario in main_flow route53_domain options credentials login quota zones ses_sandbox region_optin invalid_answers failures new_machine ses_ready not_a_clone; do
     if wanted "$scenario"; then
         "scenario_$scenario"
     fi

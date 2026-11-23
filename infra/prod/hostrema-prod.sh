@@ -13,7 +13,7 @@
 #
 # Opções: -y/--yes não pergunta antes de criar ou mudar recursos pagos.
 #
-# Só pergunta o que precisa vir de você (credenciais da AWS, domínio, seu e-mail e, se quiser, a Efí);
+# Só pergunta o que precisa vir de você (o login na AWS, domínio, seu e-mail e, se quiser, a Efí);
 # o resto é gerado, guardado em ~/.hostrema/prod (com cópia no bucket de estado da AWS) e reaplicado
 # a cada execução. Pode rodar de novo quando quiser: só cria o que falta e só muda o que mudou.
 # Respostas também podem vir do ambiente (HOSTREMA_DOMAIN, HOSTREMA_OWNER_EMAIL, HOSTREMA_SIZE...).
@@ -34,13 +34,15 @@ TERRAFORM_MIN=1.10.0
 export PATH="$TOOLS_DIR/bin:$TOOLS_DIR/venv/bin:$PATH"
 # Git Bash (Windows) would rewrite the paths given to the remote commands.
 export MSYS_NO_PATHCONV=1
+# The AWS CLI v2 would page long answers in a terminal and wait for a key.
+export AWS_PAGER=""
 
 # Answers and generated values kept between runs (secrets in a separate 0600 file).
 CONFIG_KEYS=(AWS_PROFILE_NAME AWS_REGION ACCOUNT_ID DOMAIN PANEL_HOST APPS_DOMAIN OWNER_EMAIL SIZE
     EMAIL_MODE SMTP_HOST SMTP_PORT SMTP_USER SMTP_FROM ZONE_ID STATE_BUCKET IMAGE DEPLOYED_IMAGE
     EFI_ENVIRONMENT EFI_PIX_KEY EFI_CERTIFICATE_FILE EFI_STATUS BILLING_PROVIDER INSTALLED
     SES_PRODUCTION_REQUESTED EDGE_PROXY_PROTOCOL CP_HOSTS SETTINGS_HASH SMTP_HASH RECORDS_COPIED BUILD_ID
-    BUILD_IMAGE)
+    BUILD_IMAGE QUOTA_REQUEST_ID CP_ZONES RG_ZONES)
 SECRET_KEYS=(OWNER_PASSWORD GRAFANA_PASSWORD EDGE_TOKEN METRICS_TOKEN API_TOKEN NODE_KEY_UUID
     NODE_KEY_PUBLIC SES_ACCESS_KEY_ID SES_SMTP_PASSWORD SMTP_PASSWORD EFI_CLIENT_ID EFI_CLIENT_SECRET
     EFI_CERTIFICATE_PASSWORD)
@@ -387,16 +389,89 @@ docker_() {
 # AWS
 # ---------------------------------------------------------------------------------------------
 
+# Entrar na AWS: pelo login do console no navegador (aws login, AWS CLI 2.32 ou mais nova), sem
+# criar chave de acesso e também com o usuário root; ou com uma chave de acesso.
 ensure_aws_auth() {
     if [ -n "${AWS_PROFILE_NAME:-}" ]; then
         export AWS_PROFILE=$AWS_PROFILE_NAME
     fi
     ask AWS_REGION "Região da AWS" "sa-east-1"
     export AWS_REGION AWS_DEFAULT_REGION=$AWS_REGION
-    if ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
+    if ! ACCOUNT_ID=$(caller_account); then
+        say "Entrar na AWS"
+        login_method
+        if [ "$AWS_LOGIN" = navegador ]; then
+            login_with_console
+        else
+            login_with_access_key
+        fi
+    fi
+    terraform_credentials
+    ensure_region_enabled
+}
+
+# Conta das credenciais atuais, pela STS de us-east-1: responde mesmo com a região escolhida ainda
+# desligada na conta.
+caller_account() {
+    aws sts get-caller-identity --region us-east-1 --query Account --output text 2>/dev/null
+}
+
+aws_cli_version() {
+    aws --version 2>&1 | sed -nE 's#^aws-cli/([0-9]+\.[0-9]+\.[0-9]+).*#\1#p' | head -n 1
+}
+
+# AWS_LOGIN: navegador (precisa da AWS CLI 2.32+ e de alguém no terminal) ou chave.
+login_method() {
+    local version default=chave
+    version=$(aws_cli_version)
+    if [ -z "$version" ] || ! version_at_least "$version" 2.32.0; then
+        if [ "${HOSTREMA_AWS_LOGIN:-}" = navegador ]; then
+            warn "o login pelo navegador precisa da AWS CLI 2.32 ou mais nova (esta é a ${version:-desconhecida}); entrando com chave de acesso."
+        elif has_tty && [ -z "${HOSTREMA_key_id:-}" ]; then
+            note "Com a AWS CLI 2.32 ou mais nova, dá para entrar pelo navegador, sem criar chave de acesso:"
+            note "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+        fi
+        AWS_LOGIN=chave
         return 0
     fi
-    say "Credenciais da AWS"
+    if has_tty && [ -z "${HOSTREMA_key_id:-}" ]; then
+        default=navegador
+    fi
+    while :; do
+        ask AWS_LOGIN "Entrar pelo navegador (login do console, sem criar chave) ou com chave de acesso? (navegador ou chave)" "$default"
+        case "$AWS_LOGIN" in navegador | chave) break ;; esac
+        reject AWS_LOGIN "\"$AWS_LOGIN\" não é uma opção: escolha navegador ou chave."
+    done
+}
+
+# Sem navegador nesta máquina (SSH, WSL, servidor), o endereço do login é aberto em outro aparelho.
+has_local_browser() {
+    [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 1
+    ! grep -qi microsoft /proc/version 2>/dev/null || return 1
+    [ "$OS" = darwin ] || [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]
+}
+
+# As credenciais do login valem até 12 horas (a CLI as renova nesse tempo); depois, o login é pedido
+# de novo na próxima execução.
+login_with_console() {
+    local profile=hostrema-login remote=()
+    has_local_browser || remote=(--remote)
+    note "Entre com o mesmo login do console da AWS (pode ser o usuário root): nenhuma chave de acesso é criada."
+    if [ ${#remote[@]} -gt 0 ]; then
+        note "Abra o endereço que vai aparecer em qualquer navegador, entre e cole aqui o código mostrado."
+    fi
+    aws configure set region "$AWS_REGION" --profile "$profile"
+    if has_tty; then
+        aws login --profile "$profile" ${remote[@]+"${remote[@]}"} </dev/tty || fail "o login na AWS não terminou. Rode de novo."
+    else
+        aws login --profile "$profile" ${remote[@]+"${remote[@]}"} || fail "o login na AWS não terminou. Rode de novo."
+    fi
+    AWS_PROFILE_NAME=$profile
+    export AWS_PROFILE=$profile
+    ACCOUNT_ID=$(caller_account) || fail "a AWS não aceitou o login. Rode de novo."
+}
+
+login_with_access_key() {
     note "Crie uma chave de acesso de um usuário administrador: console da AWS → IAM → Usuários →"
     note "(seu usuário) → Credenciais de segurança → Criar chave de acesso → Command Line Interface."
     local key_id="" secret=""
@@ -407,8 +482,76 @@ ensure_aws_auth() {
     aws configure set region "$AWS_REGION" --profile hostrema
     AWS_PROFILE_NAME=hostrema
     export AWS_PROFILE=hostrema
-    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) ||
-        fail "a AWS recusou essas credenciais. Confira a chave e rode de novo."
+    ACCOUNT_ID=$(caller_account) || fail "a AWS recusou essas credenciais. Confira a chave e rode de novo."
+}
+
+# Depois de uma espera longa (DNS, build, cota), a sessão do login do console, que vale até 12 horas,
+# pode ter acabado: entra de novo e continua.
+ensure_session() {
+    caller_account >/dev/null && return 0
+    if [ "${AWS_PROFILE_NAME:-}" = hostrema-login ] && { has_tty || [ "${HOSTREMA_AWS_LOGIN:-}" = navegador ]; }; then
+        say "A sessão da AWS acabou (o login do console vale até 12 horas): entre de novo"
+        login_with_console
+        terraform_credentials
+        return 0
+    fi
+    fail "as credenciais da AWS deixaram de valer. Rode o script de novo para entrar outra vez: ele continua daqui."
+}
+
+# A sessão do login do console chega ao Terraform por um perfil que pede as credenciais à AWS CLI: o
+# Terraform antes da 1.15 e o provider da AWS antes da 6.23 não leem essa sessão sozinhos.
+TF_AWS_PROFILE=''
+terraform_credentials() {
+    local profile=${AWS_PROFILE:-default} aws_path
+    TF_AWS_PROFILE=''
+    [ -n "$(aws configure get login_session --profile "$profile" 2>/dev/null)" ] || return 0
+    aws_path=$(command -v aws)
+    TF_AWS_PROFILE="$profile-terraform"
+    aws configure set credential_process "\"$aws_path\" configure export-credentials --profile $profile --format process" \
+        --profile "$TF_AWS_PROFILE"
+    aws configure set region "$AWS_REGION" --profile "$TF_AWS_PROFILE"
+}
+
+terraform_() {
+    if [ -n "${TF_AWS_PROFILE:-}" ]; then
+        AWS_PROFILE=$TF_AWS_PROFILE terraform "$@"
+    else
+        terraform "$@"
+    fi
+}
+
+# Regiões mais novas (as "opt-in") vêm desligadas na conta: a região escolhida é ligada aqui.
+ensure_region_enabled() {
+    local status waited=0
+    status=$(region_status) || return 0
+    case "$status" in
+    DISABLING) fail "a região $AWS_REGION está sendo desligada nesta conta; espere terminar e rode de novo." ;;
+    DISABLED)
+        if [ "$PLAN_ONLY" = 1 ]; then
+            note "a região $AWS_REGION está desligada nesta conta: o ./hostrema-prod.sh a liga (sem custo)."
+            return 0
+        fi
+        say "Ligando a região $AWS_REGION nesta conta (regiões mais novas vêm desligadas)"
+        aws account enable-region --region us-east-1 --region-name "$AWS_REGION" >/dev/null ||
+            fail "não consegui ligar a região $AWS_REGION (console da AWS → nome da conta → Conta → Regiões da AWS)."
+        ;;
+    ENABLING) ;;
+    # ENABLED, ENABLED_BY_DEFAULT ou uma resposta que este script não conhece: nada a fazer.
+    *) return 0 ;;
+    esac
+    until [ "$(region_status || true)" = ENABLED ]; do
+        sleep 30
+        waited=$((waited + 30))
+        if [ $((waited % 300)) -eq 0 ]; then
+            note "ainda aguardando a AWS ligar a região $AWS_REGION ($((waited / 60)) min)..."
+        fi
+    done
+    note "região $AWS_REGION ligada."
+}
+
+region_status() {
+    aws account get-region-opt-status --region us-east-1 --region-name "$AWS_REGION" \
+        --query RegionOptStatus --output text 2>/dev/null
 }
 
 region_name() {
@@ -428,6 +571,226 @@ operator_cidr() {
     ip=$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]') || true
     [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "não consegui descobrir o seu IP público (https://checkip.amazonaws.com)."
     printf '%s/32' "$ip"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Cota de vCPUs e zonas da região
+# ---------------------------------------------------------------------------------------------
+
+# "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances": vCPUs das máquinas comuns
+# ligadas ao mesmo tempo na região. Conta nova da AWS vem com 5; o tamanho inicial usa 12.
+VCPU_QUOTA_CODE=L-1216C47A
+VCPUS_NEEDED=0
+
+# vCPUs das máquinas do tamanho escolhido (painel, workers, nó de controle e nós), pelos tipos da AWS.
+size_vcpus() {
+    apply_size
+    local types=() type table
+    while read -r type; do
+        types+=("$type")
+    done < <(printf '%s\n' "$CP_TYPE" "$RG_CONTROL_TYPE" "$RG_NODE_TYPE" | sort -u)
+    table=$(aws ec2 describe-instance-types --instance-types "${types[@]}" \
+        --query 'InstanceTypes[].[InstanceType,VCpuInfo.DefaultVCpus]' --output text 2>/dev/null) || return 1
+    awk -v cp="$CP_TYPE" -v cp_count="$((CP_COUNT + CP_WORKERS))" -v control="$RG_CONTROL_TYPE" \
+        -v node="$RG_NODE_TYPE" -v nodes="$RG_NODES" '
+        { vcpus[$1] = $2 }
+        END {
+            if (!(cp in vcpus) || !(control in vcpus) || !(node in vcpus)) exit 1
+            print vcpus[cp] * cp_count + vcpus[control] + vcpus[node] * nodes
+        }' <<<"$table"
+}
+
+# vCPUs de máquinas comuns que já rodam na região e não são desta instalação (contam na mesma cota).
+other_vcpus() {
+    aws ec2 describe-instances --filters Name=instance-state-name,Values=pending,running \
+        --query "Reservations[].Instances[].[InstanceType,CpuOptions.CoreCount,CpuOptions.ThreadsPerCore,Tags[?Key=='Project']|[0].Value]" \
+        --output text 2>/dev/null |
+        awk -F'\t' '$4 != "hostrema" && $1 ~ /^[acdhimrtz]/ && $1 !~ /^(inf|hpc|dl|trn|mac)/ { total += $2 * $3 }
+            END { print total + 0 }'
+}
+
+vcpu_quota() {
+    local value
+    value=$(aws service-quotas get-service-quota --service-code ec2 --quota-code "$VCPU_QUOTA_CODE" \
+        --query Quota.Value --output text 2>/dev/null) ||
+        value=$(aws service-quotas get-aws-default-service-quota --service-code ec2 --quota-code "$VCPU_QUOTA_CODE" \
+            --query Quota.Value --output text 2>/dev/null) || return 1
+    value=${value%%.*}
+    [[ $value =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$value"
+}
+
+# Pede o aumento logo no começo (a AWS costuma aprovar em minutos; às vezes abre um caso no suporte)
+# e o resto da instalação segue enquanto isso; wait_for_vcpu_quota espera antes de criar as máquinas.
+ensure_vcpu_quota() {
+    local needed others quota request
+    if ! needed=$(size_vcpus) || ! others=$(other_vcpus) || ! quota=$(vcpu_quota); then
+        warn "não consegui conferir a cota de vCPUs da conta; se ela não bastar, o Terraform avisa."
+        return 0
+    fi
+    VCPUS_NEEDED=$((needed + others))
+    if [ "$quota" -ge "$VCPUS_NEEDED" ]; then
+        return 0
+    fi
+    if [ "$PLAN_ONLY" = 1 ]; then
+        note "a cota de vCPUs da conta em $AWS_REGION é $quota e este tamanho precisa de $VCPUS_NEEDED: o ./hostrema-prod.sh pede o aumento à AWS."
+        return 0
+    fi
+    # Pedido de uma execução anterior ainda aberto: espera por ele.
+    if [ -n "${QUOTA_REQUEST_ID:-}" ] && quota_request_open "$QUOTA_REQUEST_ID"; then
+        return 0
+    fi
+    say "A cota de vCPUs da conta em $AWS_REGION é $quota e este tamanho usa $VCPUS_NEEDED: pedindo o aumento à AWS"
+    if ! request=$(aws service-quotas request-service-quota-increase --service-code ec2 --quota-code "$VCPU_QUOTA_CODE" \
+        --desired-value "$VCPUS_NEEDED" --query RequestedQuota.Id --output text 2>"$STATE_DIR/quota.err"); then
+        # Já havia um pedido aberto para esta cota (feito pelo console, por exemplo): espera por ele.
+        request=$(aws service-quotas list-requested-service-quota-change-history-by-quota --service-code ec2 \
+            --quota-code "$VCPU_QUOTA_CODE" --query "RequestedQuotas[?Status=='PENDING' || Status=='CASE_OPENED'] | [0].Id" \
+            --output text 2>/dev/null) || request=''
+        if [ -z "$request" ] || [ "$request" = None ]; then
+            fail "a AWS recusou o pedido de mais vCPUs: $(tail -n 3 "$STATE_DIR/quota.err")"
+        fi
+    fi
+    QUOTA_REQUEST_ID=$request
+    save_state
+    note "pedido feito (costuma ser aprovado em minutos); enquanto a AWS responde, o resto da instalação continua."
+}
+
+quota_request_status() {
+    aws service-quotas get-requested-service-quota-change --request-id "$1" \
+        --query RequestedQuota.Status --output text 2>/dev/null
+}
+
+quota_request_open() {
+    case "$(quota_request_status "$1" || true)" in
+    PENDING | CASE_OPENED) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+wait_for_vcpu_quota() {
+    [ -n "${QUOTA_REQUEST_ID:-}" ] || return 0
+    local status quota waited=0 told='' unknown=0
+    say "Aguardando a AWS aumentar a cota de vCPUs (pedido $QUOTA_REQUEST_ID)"
+    while :; do
+        status=$(quota_request_status "$QUOTA_REQUEST_ID" || true)
+        quota=$(vcpu_quota || echo 0)
+        if [ "$quota" -ge "$VCPUS_NEEDED" ]; then
+            note "cota de vCPUs: $quota."
+            QUOTA_REQUEST_ID=''
+            save_state
+            return 0
+        fi
+        # Pedido que a AWS não acha mais (estado de outra conta, por exemplo): pede de novo.
+        if [ -z "$status" ] || [ "$status" = None ]; then
+            caller_account >/dev/null || ensure_session
+            unknown=$((unknown + 1))
+            if [ "$unknown" -ge 10 ]; then
+                QUOTA_REQUEST_ID=''
+                ensure_vcpu_quota
+                [ -n "${QUOTA_REQUEST_ID:-}" ] || return 0
+                unknown=0
+            fi
+        else
+            unknown=0
+        fi
+        case "$status" in
+        DENIED | NOT_APPROVED | CASE_CLOSED | INVALID_REQUEST)
+            QUOTA_REQUEST_ID=''
+            save_state
+            fail "a AWS não aprovou o aumento da cota de vCPUs ($status; a explicação chega por e-mail e fica em https://support.console.aws.amazon.com). Responda o caso, ou escolha um tamanho menor com ./hostrema-prod.sh reconfigure, e rode de novo."
+            ;;
+        CASE_OPENED)
+            if [ -z "$told" ]; then
+                note "a AWS abriu um caso no suporte para este pedido; a resposta chega por e-mail (em geral em até um dia útil)."
+                note "Pode deixar a janela aberta; se fechar, rode de novo depois e ele continua daqui."
+                told=1
+            fi
+            ;;
+        APPROVED)
+            # A cota nova leva alguns minutos para valer. Meia hora depois, ainda abaixo do pedido (a AWS
+            # às vezes aprova só uma parte): pede o que falta.
+            if [ "$waited" -ge 1800 ]; then
+                QUOTA_REQUEST_ID=''
+                ensure_vcpu_quota
+                [ -n "${QUOTA_REQUEST_ID:-}" ] || return 0
+                waited=0
+            fi
+            ;;
+        esac
+        sleep 30
+        waited=$((waited + 30))
+        if [ $((waited % 600)) -eq 0 ]; then
+            note "ainda aguardando a cota de vCPUs ($quota de $VCPUS_NEEDED; $((waited / 60)) min)..."
+        fi
+    done
+}
+
+# Zonas da região, na ordem dos nomes, que oferecem todos estes tipos de instância (nem toda zona tem
+# todos os tipos).
+zones_offering() {
+    local zones offered type
+    zones=$(aws ec2 describe-availability-zones --filters Name=zone-type,Values=availability-zone Name=state,Values=available \
+        --query 'AvailabilityZones[].ZoneName' --output text 2>/dev/null | tr '\t' '\n' | sort) || return 1
+    for type in "$@"; do
+        offered=$(aws ec2 describe-instance-type-offerings --location-type availability-zone \
+            --filters "Name=instance-type,Values=$type" --query 'InstanceTypeOfferings[].Location' \
+            --output text 2>/dev/null | tr '\t' '\n') || return 1
+        zones=$(printf '%s\n' "$zones" | grep -Fx -f <(printf '%s\n' "$offered") || true)
+    done
+    printf '%s\n' "$zones" | grep -v '^$' || true
+}
+
+# O estado do Terraform desta parte (no bucket) já tem recursos criados?
+tf_state_has_resources() {
+    local count
+    count=$(aws s3 cp "s3://$STATE_BUCKET/$1" - --only-show-errors 2>/dev/null |
+        jq '[.resources[]? | select(.mode == "managed")] | length' 2>/dev/null) || return 1
+    [ "${count:-0}" -gt 0 ]
+}
+
+# choose_zones VAR <chave do estado do Terraform> <tipos...>: as duas zonas de uma parte (painel ou
+# região). Na primeira instalação, as duas primeiras que têm os tipos. Depois, as mesmas (mudar de
+# zona recriaria a rede), conferindo que os tipos de um tamanho novo também existem nelas. Instalações
+# de antes desta escolha continuam nas duas primeiras zonas da região, como eram.
+choose_zones() {
+    local var=$1 key=$2 offered current zone missing=''
+    shift 2
+    if ! offered=$(zones_offering "$@"); then
+        warn "não consegui conferir as zonas de $AWS_REGION que têm $*; o Terraform usa as duas primeiras."
+        return 0
+    fi
+    current=${!var:-}
+    if [ -z "$current" ] && tf_state_has_resources "$key"; then
+        current=$(aws ec2 describe-availability-zones --filters Name=zone-type,Values=availability-zone Name=state,Values=available \
+            --query 'AvailabilityZones[].ZoneName' --output text 2>/dev/null | tr '\t' '\n' | sort | head -n 2 | tr '\n' ' ')
+    fi
+    if [ -n "$current" ]; then
+        for zone in $current; do
+            printf '%s\n' "$offered" | grep -qx "$zone" || missing="$missing $zone"
+        done
+        [ -z "$missing" ] ||
+            fail "a zona${missing} de $AWS_REGION, onde esta instalação já está, não tem todos estes tipos: $*. Escolha outro tamanho com ./hostrema-prod.sh reconfigure."
+        return 0
+    fi
+    current=$(printf '%s\n' "$offered" | head -n 2 | tr '\n' ' ' | sed 's/ $//')
+    if [ "$(printf '%s\n' "$offered" | grep -c .)" -lt 2 ]; then
+        fail "em $AWS_REGION, menos de duas zonas têm todos estes tipos: $*. Escolha outro tamanho ou outra região com ./hostrema-prod.sh reconfigure."
+    fi
+    printf -v "$var" '%s' "$current"
+    save_state
+}
+
+# Zonas do painel e da região, escolhidas ou conferidas antes de qualquer mudança na AWS.
+ensure_zones() {
+    apply_size
+    choose_zones CP_ZONES control-plane/terraform.tfstate "$CP_TYPE"
+    choose_zones RG_ZONES "regions/$AWS_REGION/terraform.tfstate" "$RG_CONTROL_TYPE" "$RG_NODE_TYPE"
+}
+
+# Lista JSON das zonas guardadas ("a b" → ["a","b"]); vazia = as duas primeiras da região.
+zones_json() {
+    jq -nc --arg zones "${1:-}" '$zones | split(" ") | map(select(. != ""))'
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -742,6 +1105,16 @@ ensure_ses() {
     if ! record_exists "_dmarc.$DOMAIN" TXT; then
         route53_upsert "_dmarc.$DOMAIN" TXT "\"v=DMARC1; p=none; rua=mailto:$OWNER_EMAIL\""
     fi
+    # MAIL FROM do próprio domínio (bounce.<domínio>): o SPF passa a valer para o domínio, e não só
+    # para amazonses.com, como pedem Gmail e Yahoo. Sem ele, o e-mail sai do mesmo jeito.
+    if route53_upsert "bounce.$DOMAIN" MX "10 feedback-smtp.$AWS_REGION.amazonses.com" 2>/dev/null &&
+        route53_upsert "bounce.$DOMAIN" TXT '"v=spf1 include:amazonses.com ~all"' 2>/dev/null &&
+        aws sesv2 put-email-identity-mail-from-attributes --email-identity "$DOMAIN" --mail-from-domain "bounce.$DOMAIN" \
+            --behavior-on-mx-failure USE_DEFAULT_VALUE >/dev/null 2>&1; then
+        :
+    else
+        warn "não consegui configurar o MAIL FROM bounce.$DOMAIN no SES; o e-mail sai com o MAIL FROM da Amazon."
+    fi
     if [ -z "${SES_ACCESS_KEY_ID:-}" ] || [ -z "${SES_SMTP_PASSWORD:-}" ]; then
         user="hostrema-ses-smtp-$AWS_REGION"
         aws iam get-user --user-name "$user" >/dev/null 2>&1 || aws iam create-user --user-name "$user" >/dev/null
@@ -765,17 +1138,31 @@ ensure_ses() {
     # Contas novas do SES só enviam para endereços verificados: o acesso de produção é pedido aqui
     # e a AWS responde por e-mail (normalmente em até 24 h).
     if [ -z "${SES_PRODUCTION_REQUESTED:-}" ]; then
+        # Endereço que volta (bounce) ou reclama de spam deixa de receber: a AWS exige isso no SES.
+        aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT >/dev/null 2>&1 || true
         if [ "$(aws sesv2 get-account --query ProductionAccessEnabled --output text 2>/dev/null)" != True ]; then
             aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL \
                 --website-url "https://$PANEL_HOST" --contact-language EN \
                 --additional-contact-email-addresses "$OWNER_EMAIL" \
                 --use-case-description "Transactional e-mail of the Hostrema hosting platform: sign-up confirmation, password reset, invoices and service notices sent only to our own customers, who sign up on https://$PANEL_HOST. Bounces and complaints are handled by SES suppression." \
                 >/dev/null 2>&1 || warn "não consegui pedir o acesso de produção do SES (peça no console: SES → Account dashboard)."
-            aws sesv2 create-email-identity --email-identity "$OWNER_EMAIL" >/dev/null 2>&1 || true
+            # Até lá, o SES só entrega para endereços verificados. Um e-mail do próprio domínio já é;
+            # outro (Gmail, por exemplo) recebe da AWS um link de verificação.
+            if [[ $OWNER_EMAIL != *"@$DOMAIN" ]] &&
+                aws sesv2 create-email-identity --email-identity "$OWNER_EMAIL" >/dev/null 2>&1; then
+                note "Até a AWS liberar o SES, ele só entrega e-mail para endereços verificados. A AWS mandou"
+                note "para $OWNER_EMAIL um link de verificação: clique nele para já receber os e-mails do painel."
+            fi
         fi
         SES_PRODUCTION_REQUESTED=1
     fi
     save_state
+}
+
+# Domínio verificado no SES (DKIM no ar): antes disso, nada sai pelo SES.
+ses_domain_verified() {
+    [ "$(aws sesv2 get-email-identity --region "$AWS_REGION" --email-identity "$DOMAIN" \
+        --query VerifiedForSendingStatus --output text 2>/dev/null)" = True ]
 }
 
 git_() { git -c safe.directory="$REPO" -c core.safecrlf=false -C "$REPO" "$@"; }
@@ -877,6 +1264,9 @@ YAML
         timeoutInMinutes: 60,
         queuedTimeoutInMinutes: 60
     }')
+    # Logs dos builds por 30 dias (o CodeBuild criaria o grupo sem prazo nenhum).
+    aws logs create-log-group --log-group-name "/aws/codebuild/$BUILD_PROJECT" >/dev/null 2>&1 || true
+    aws logs put-retention-policy --log-group-name "/aws/codebuild/$BUILD_PROJECT" --retention-in-days 30 >/dev/null 2>&1 || true
     if [ "$(aws codebuild batch-get-projects --names "$BUILD_PROJECT" --query 'projects[0].name' --output text 2>/dev/null)" = "$BUILD_PROJECT" ]; then
         aws codebuild update-project --cli-input-json "$project" >/dev/null || return 1
         return 0
@@ -956,6 +1346,8 @@ wait_for_image() {
                 fail "a imagem do painel não foi construída (log completo no CodeBuild). Rode de novo para tentar outra vez."
                 ;;
             esac
+        else
+            caller_account >/dev/null || ensure_session
         fi
         tries=$((tries - 1))
         [ "$tries" -gt 0 ] || fail "o build $BUILD_ID não terminou em 90 minutos."
@@ -1031,7 +1423,7 @@ terraform {
   }
 }
 EOF
-    terraform -chdir="$dir" init -input=false -migrate-state -force-copy >"$STATE_DIR/terraform-init.log" 2>&1 || {
+    terraform_ -chdir="$dir" init -input=false -migrate-state -force-copy >"$STATE_DIR/terraform-init.log" 2>&1 || {
         tail -n 40 "$STATE_DIR/terraform-init.log" >&2
         fail "terraform init falhou em $dir."
     }
@@ -1041,7 +1433,7 @@ EOF
 tf_apply() {
     local dir=$1 vars=$2 what=$3 plan rc=0 summary
     plan="$STATE_DIR/$(basename "$dir").tfplan"
-    terraform -chdir="$dir" plan -input=false -var-file="$vars" -out="$plan" -detailed-exitcode \
+    terraform_ -chdir="$dir" plan -input=false -var-file="$vars" -out="$plan" -detailed-exitcode \
         >"$STATE_DIR/terraform-plan.log" 2>&1 || rc=$?
     if [ "$rc" = 1 ]; then
         tail -n 60 "$STATE_DIR/terraform-plan.log" >&2
@@ -1060,11 +1452,11 @@ tf_apply() {
         return 0
     fi
     confirm "Aplicar na conta AWS $ACCOUNT_ID ($what)?" || fail "nada foi aplicado."
-    terraform -chdir="$dir" apply -input=false "$plan"
+    terraform_ -chdir="$dir" apply -input=false "$plan"
 }
 
 tf_output() {
-    terraform -chdir="$1" output -json 2>/dev/null || printf '{}'
+    terraform_ -chdir="$1" output -json 2>/dev/null || printf '{}'
 }
 
 apply_control_plane() {
@@ -1076,10 +1468,10 @@ apply_control_plane() {
         --arg region "$AWS_REGION" --arg key "$(cat "$SSH_KEY.pub")" --arg cidr "$cidr" \
         --arg domain "$PANEL_HOST" --arg zone "${ZONE_ID:-}" --arg image "$IMAGE" \
         --arg type "$CP_TYPE" --arg db "$CP_DB" --arg redis "$CP_REDIS" \
-        --argjson count "$CP_COUNT" --argjson workers "$CP_WORKERS" \
+        --argjson count "$CP_COUNT" --argjson workers "$CP_WORKERS" --argjson zones "$(zones_json "${CP_ZONES:-}")" \
         '{region: $region, ssh_public_key: $key, admin_cidrs: [$cidr], domain: $domain, route53_zone_id: $zone,
           load_balancer: true, instance_count: $count, worker_count: $workers, instance_type: $type,
-          db_instance_class: $db, redis_node_type: $redis, image: $image}' >"$vars"
+          db_instance_class: $db, redis_node_type: $redis, image: $image, availability_zones: $zones}' >"$vars"
     tf_init "$CP_DIR" control-plane/terraform.tfstate
     tf_apply "$CP_DIR" "$vars" "painel"
 }
@@ -1323,11 +1715,12 @@ apply_region() {
         --arg control_type "$RG_CONTROL_TYPE" --arg node_type "$RG_NODE_TYPE" \
         --argjson control_disk "$RG_CONTROL_DISK" --argjson node_count "$RG_NODES" --argjson node_disk "$RG_NODE_DISK" \
         --argjson iops "$RG_NODE_IOPS" --argjson throughput "$RG_NODE_THROUGHPUT" \
+        --argjson zones "$(zones_json "${RG_ZONES:-}")" \
         '{ssh_public_key: $key, admin_cidrs: [$cidr], control_plane_cidrs: [], control_plane_peering: $peering,
           route53_zone_id: $zone, apps_domain: $apps, edge_domain: $edge, otlp_domain: $otlp, nodes_domain: $nodes,
           control_instance_type: $control_type, control_data_volume_gb: $control_disk,
           node_count: $node_count, node_instance_type: $node_type, node_data_volume_gb: $node_disk,
-          node_data_volume_iops: $iops, node_data_volume_throughput: $throughput}' >"$vars"
+          node_data_volume_iops: $iops, node_data_volume_throughput: $throughput, availability_zones: $zones}' >"$vars"
     tf_init "$dir" "regions/$AWS_REGION/terraform.tfstate"
     tf_apply "$dir" "$vars" "região $AWS_REGION"
 }
@@ -1398,6 +1791,14 @@ check_installation() {
     servers=$(curl -fsS --max-time 15 -H "Authorization: Bearer $API_TOKEN" -H 'Accept: application/json' \
         "https://$PANEL_HOST/api/v1/servers" 2>/dev/null | jq -r '.[]? | .name' | grep -c . || true)
     note "servidores cadastrados no painel: ${servers:-0}"
+    if [ "${EMAIL_MODE:-}" = ses ]; then
+        if ses_domain_verified; then
+            note "e-mail (SES): $DOMAIN verificado"
+        else
+            note "e-mail (SES): a AWS ainda está verificando $DOMAIN (DKIM). Leva minutos depois da troca do"
+            note "DNS (raramente até 72 horas); até lá o painel não envia e-mail. O ./hostrema-prod.sh info mostra quando terminar."
+        fi
+    fi
     edge=$(tf_output "$(region_dir)" | jq -r '.edge_lb_dns_name.value // empty')
     if [ -n "$edge" ]; then
         code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Host: verificacao.$APPS_DOMAIN" "http://$edge/" || true)
@@ -1429,12 +1830,14 @@ prepare() {
 cmd_plan() {
     prepare
     show_summary
+    ensure_vcpu_quota
     if ! aws s3api head-bucket --bucket "$STATE_BUCKET" >/dev/null 2>&1; then
         say "Nada foi criado ainda nesta conta: ./hostrema-prod.sh cria tudo o que está acima."
         return 0
     fi
     ensure_zone
     ensure_image
+    ensure_zones
     apply_control_plane
     if [ -n "$(control_plane_hosts)" ]; then
         apply_region
@@ -1451,12 +1854,17 @@ cmd_up() {
     fi
     ensure_state_bucket
     save_state
+    ensure_vcpu_quota
     ensure_zone
     copy_public_records
     ensure_ses
     ensure_image
     ensure_delegation
+    ensure_session
     wait_for_image
+    wait_for_vcpu_quota
+    ensure_session
+    ensure_zones
     apply_control_plane
     refresh_hosts
     wait_for_panel
@@ -1474,9 +1882,13 @@ cmd_up() {
 cmd_info() {
     load_or_restore_state
     local ses_status="" grafana_host=""
+    if command -v aws >/dev/null 2>&1; then
+        use_saved_credentials
+    fi
     if [ "${EMAIL_MODE:-}" = ses ] && command -v aws >/dev/null 2>&1; then
-        [ -n "${AWS_PROFILE_NAME:-}" ] && export AWS_PROFILE=$AWS_PROFILE_NAME
-        if [ "$(aws sesv2 get-account --region "$AWS_REGION" --query ProductionAccessEnabled --output text 2>/dev/null)" = True ]; then
+        if ! ses_domain_verified; then
+            ses_status="a AWS ainda está verificando o domínio (DKIM); até lá o painel não envia e-mail"
+        elif [ "$(aws sesv2 get-account --region "$AWS_REGION" --query ProductionAccessEnabled --output text 2>/dev/null)" = True ]; then
             ses_status="liberado"
         else
             ses_status="aguardando a AWS liberar o envio para qualquer endereço (pedido feito; resposta por e-mail)"
@@ -1536,6 +1948,7 @@ use_saved_credentials() {
     fi
     AWS_REGION=${AWS_REGION:-sa-east-1}
     export AWS_REGION AWS_DEFAULT_REGION=$AWS_REGION
+    terraform_credentials
 }
 
 cmd_ssh() {
@@ -1614,20 +2027,49 @@ cmd_destroy() {
         ensure_region_dir
         tf_init "$dir" "regions/$AWS_REGION/terraform.tfstate"
         say "Apagando a região $AWS_REGION"
-        terraform -chdir="$dir" destroy -input=false -auto-approve -var-file="$STATE_DIR/region-$AWS_REGION.tfvars.json"
+        terraform_ -chdir="$dir" destroy -input=false -auto-approve -var-file="$STATE_DIR/region-$AWS_REGION.tfvars.json"
     fi
     tf_init "$CP_DIR" control-plane/terraform.tfstate
     aws rds modify-db-instance --db-instance-identifier hostrema-control-plane --no-deletion-protection \
         --apply-immediately >/dev/null 2>&1 || true
     say "Apagando o painel"
-    terraform -chdir="$CP_DIR" destroy -input=false -auto-approve -var-file="$STATE_DIR/control-plane.tfvars.json"
+    terraform_ -chdir="$CP_DIR" destroy -input=false -auto-approve -var-file="$STATE_DIR/control-plane.tfvars.json"
     aws ecr delete-repository --repository-name hostrema --force >/dev/null 2>&1 || true
     aws codebuild delete-project --name "$BUILD_PROJECT" >/dev/null 2>&1 || true
+    aws logs delete-log-group --log-group-name "/aws/codebuild/$BUILD_PROJECT" >/dev/null 2>&1 || true
     aws iam delete-role-policy --role-name "$BUILD_ROLE" --policy-name build >/dev/null 2>&1 || true
     aws iam delete-role --role-name "$BUILD_ROLE" >/dev/null 2>&1 || true
+    delete_ses_smtp_user
+    # Um painel novo começa vazio: a próxima instalação reenvia as configurações e o SMTP, e pergunta
+    # de novo pela Efí (as credenciais ficavam só no painel apagado).
     DEPLOYED_IMAGE='' INSTALLED='' API_TOKEN='' EDGE_PROXY_PROTOCOL='' NODE_KEY_UUID='' NODE_KEY_PUBLIC=''
+    SETTINGS_HASH='' SMTP_HASH='' CP_HOSTS='' CP_ZONES='' RG_ZONES='' QUOTA_REQUEST_ID='' BUILD_ID='' BUILD_IMAGE=''
+    if [ "${EFI_STATUS:-}" = configured ]; then
+        EFI_STATUS='' BILLING_PROVIDER=''
+    fi
     save_state
-    say "Instalação apagada. Ficaram: a zona DNS de $DOMAIN, o bucket s3://$STATE_BUCKET e o estado em $STATE_DIR."
+    local kept="a zona DNS de $DOMAIN"
+    if aws sesv2 get-email-identity --email-identity "$DOMAIN" >/dev/null 2>&1; then
+        kept="$kept (com os registros do e-mail), o domínio verificado no SES"
+    fi
+    say "Instalação apagada. Ficaram: $kept, o bucket s3://$STATE_BUCKET e o estado em $STATE_DIR."
+}
+
+# O usuário IAM que envia pelo SES (e a chave dele) não sobra depois do destroy.
+delete_ses_smtp_user() {
+    local user="hostrema-ses-smtp-$AWS_REGION" key
+    if aws iam get-user --user-name "$user" >/dev/null 2>&1; then
+        for key in $(aws iam list-access-keys --user-name "$user" --query 'AccessKeyMetadata[].AccessKeyId' --output text 2>/dev/null || true); do
+            aws iam delete-access-key --user-name "$user" --access-key-id "$key" || true
+        done
+        aws iam delete-user-policy --user-name "$user" --policy-name ses-send >/dev/null 2>&1 || true
+        aws iam delete-user --user-name "$user" ||
+            warn "não consegui apagar o usuário $user (console da AWS → IAM → Usuários)."
+    fi
+    SES_ACCESS_KEY_ID='' SES_SMTP_PASSWORD=''
+    if [ "${EMAIL_MODE:-}" = ses ]; then
+        SMTP_USER='' SMTP_PASSWORD=''
+    fi
 }
 
 usage() {

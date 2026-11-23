@@ -8,6 +8,17 @@ variable "vpc_cidr" {
   default = "10.10.0.0/16"
 }
 
+variable "availability_zones" {
+  description = "The two availability zones of the subnets (they must offer instance_type). Empty = the first two of the region."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.availability_zones) == 0 || length(var.availability_zones) == 2
+    error_message = "Give exactly two availability zones, or none."
+  }
+}
+
 variable "ssh_public_key" {
   type = string
 }
