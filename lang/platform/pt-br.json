@@ -790,5 +790,9 @@
     "Info": "Informação",
     "See the plans and the usage of your account": "Ver os planos e o uso da sua conta",
     "Too many requests. Please try again in :seconds seconds.": "Muitas tentativas. Tente de novo em :seconds segundos.",
-    "Duplicate entry found. Please use a different name.": "Esse nome já está em uso. Escolha outro."
+    "Duplicate entry found. Please use a different name.": "Esse nome já está em uso. Escolha outro.",
+    "Delete certificate": "Excluir certificado",
+    "Delete the certificate of :env? Pix stops working in this environment until you send another one.": "Excluir o certificado de :env? O Pix para de funcionar neste ambiente até você enviar outro.",
+    "Certificate deleted (:env)": "Certificado excluído (:env)",
+    "Without a certificate, the invoices of this environment are boletos with a Pix QR code until you send another one.": "Sem certificado, as faturas deste ambiente saem como boleto com QR Code Pix até você enviar outro."
 }

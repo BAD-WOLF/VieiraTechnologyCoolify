@@ -227,6 +227,7 @@ class AdminBilling extends Component
             'pixReady' => EfiSettings::pixReady($this->environment),
             'hasSecret' => filled(EfiSettings::credential($this->environment, 'client_secret')),
             'hasCertificate' => filled(EfiSettings::pem('certificate', $this->environment)),
+            'storedCertificate' => EfiSettings::hasStoredCertificate($this->environment),
             'inUse' => EfiSettings::environment() === EfiSettings::normalize($this->environment),
             'webhookAt' => PlatformSetting::get('efi.webhook_registered_at'),
             'lastWebhookAt' => PlatformSetting::get('efi.last_webhook_at'),
@@ -236,6 +237,24 @@ class AdminBilling extends Component
             'sameCertificate' => $this->sameCertificate(),
             'environmentLabel' => EfiConnectionCheck::environmentLabel($this->environment),
         ]);
+    }
+
+    /**
+     * Deletes the certificate saved for the environment on screen.
+     */
+    public function removeCertificate(): void
+    {
+        $this->guard();
+        $environment = EfiSettings::normalize($this->environment);
+        if (! EfiSettings::hasStoredCertificate($environment)) {
+            return;
+        }
+        EfiSettings::forgetCertificate($environment);
+        EfiClient::forgetTokens();
+        $this->reset('certificateFile', 'certificatePassword');
+        audit_log('platform.efi.certificate_removed', null, ['environment' => $environment], 0);
+        $this->dispatch('success', __('Certificate deleted (:env)', ['env' => EfiConnectionCheck::environmentLabel($environment)]),
+            __('Without a certificate, the invoices of this environment are boletos with a Pix QR code until you send another one.'));
     }
 
     /**

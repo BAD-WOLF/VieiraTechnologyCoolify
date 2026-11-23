@@ -933,3 +933,40 @@ it('reads the Efí error message whatever field it comes in', function () {
         ->and(EfiException::fromResponse('Efí GET /x', $response([], 502))->getMessage())->toBe('Efí GET /x failed (HTTP 502).')
         ->and(EfiException::fromResponse('Efí GET /x', $response(['message' => ['not', 'text']], 500))->getMessage())->toBe('Efí GET /x failed (HTTP 500).');
 });
+
+it('deletes the certificate saved for the environment on screen, with its files on the disk, and keeps the other environment', function () {
+    efiOperator();
+    $certificate = efiCertificate();
+    foreach (EfiSettings::ENVIRONMENTS as $environment) {
+        EfiSettings::storeCredential($environment, 'certificate', $certificate['certificate']);
+        EfiSettings::storeCredential($environment, 'private_key', $certificate['key']);
+    }
+    $files = [EfiSettings::certificatePath(), EfiSettings::privateKeyPath()];
+
+    Livewire::test(AdminBilling::class)
+        ->assertSee('Delete certificate')
+        ->call('removeCertificate')
+        ->assertDispatched('success', fn (string $event, array $params) => $params[0] === 'Certificate deleted (Homologação)')
+        ->assertDontSee('Delete certificate')
+        ->assertSee('Needed for Pix');
+
+    expect(EfiSettings::hasStoredCertificate('sandbox'))->toBeFalse()
+        ->and(EfiSettings::pem('private_key', 'sandbox'))->toBeNull()
+        ->and(array_filter($files, 'file_exists'))->toBe([])
+        ->and(EfiSettings::hasStoredCertificate('production'))->toBeTrue()
+        ->and(EfiSettings::pem('private_key', 'production'))->not->toBeNull()
+        ->and(\App\Models\AuditLog::query()->where('action', 'platform.efi.certificate_removed')->exists())->toBeTrue();
+});
+
+it('has no certificate to delete when it comes from the EFI_* variables', function () {
+    efiOperator();
+    efiPixConfigured();
+
+    Livewire::test(AdminBilling::class)
+        ->assertSee('Stored - send another one to replace it')
+        ->assertDontSee('Delete certificate')
+        ->call('removeCertificate')
+        ->assertNotDispatched('success');
+
+    expect(EfiSettings::pem('certificate'))->not->toBeNull();
+});

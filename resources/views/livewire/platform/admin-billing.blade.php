@@ -50,6 +50,10 @@
             <div class="flex flex-col gap-1">
                 <label class="text-sm dark:text-white">{{ __('Certificate of the application (.p12 or .pem)') }}
                     <span class="text-xs dark:text-neutral-400">{{ $hasCertificate ? __('Stored - send another one to replace it') : __('Needed for Pix') }}</span>
+                    @if ($storedCertificate)
+                        <button type="button" class="text-xs underline text-error" wire:click="removeCertificate"
+                            wire:confirm="{{ __('Delete the certificate of :env? Pix stops working in this environment until you send another one.', ['env' => $environmentLabel]) }}">{{ __('Delete certificate') }}</button>
+                    @endif
                 </label>
                 <input type="file" wire:model="certificateFile" accept=".p12,.pfx,.pem" class="text-xs" />
                 @error('certificateFile') <span class="text-xs text-error">{{ $message }}</span> @enderror

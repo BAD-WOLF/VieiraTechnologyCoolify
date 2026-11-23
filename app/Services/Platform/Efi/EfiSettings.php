@@ -95,6 +95,30 @@ class EfiSettings
         PlatformSetting::put('efi.'.self::normalize($environment).".{$key}", $value);
     }
 
+    /**
+     * A certificate saved in the console for the environment (not one from the EFI_* variables).
+     */
+    public static function hasStoredCertificate(string $environment): bool
+    {
+        return filled(PlatformSetting::get('efi.'.self::normalize($environment).'.certificate'));
+    }
+
+    /**
+     * Removes the certificate and key saved in the console for the environment, and their copies on
+     * the disk.
+     */
+    public static function forgetCertificate(string $environment): void
+    {
+        $stored = self::hasStoredCertificate($environment);
+        foreach (['certificate', 'private_key'] as $key) {
+            $pem = $stored ? self::pem($key, $environment) : null;
+            self::storeCredential($environment, $key, null);
+            if (! is_null($pem)) {
+                @unlink(storage_path('app/private/platform/efi/'.$key.'-'.substr(hash('sha256', $pem), 0, 24).'.pem'));
+            }
+        }
+    }
+
     public static function normalize(mixed $environment): string
     {
         return $environment === 'sandbox' ? 'sandbox' : 'production';
