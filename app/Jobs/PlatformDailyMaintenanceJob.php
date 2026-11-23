@@ -6,6 +6,7 @@ use App\Actions\Platform\ProvisionTenant;
 use App\Models\PlatformInvoice;
 use App\Models\PlatformTenant;
 use App\Services\Platform\PlatformBilling;
+use App\Services\Platform\PrivacyRetention;
 use App\Services\Platform\StripeBilling;
 use App\Services\Platform\UsageAggregator;
 use App\Services\Platform\Webhooks;
@@ -56,6 +57,11 @@ class PlatformDailyMaintenanceJob implements ShouldBeUnique, ShouldQueue
         UsageAggregator::reconcileDay(now()->subDay());
         UsageAggregator::pruneRawEvents();
         Webhooks::prune();
+        try {
+            PrivacyRetention::run();
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     private function reconcile(PlatformTenant $tenant): void

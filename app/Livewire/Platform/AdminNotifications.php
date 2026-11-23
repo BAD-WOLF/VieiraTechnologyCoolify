@@ -61,7 +61,7 @@ class AdminNotifications extends Component
 
             return;
         }
-        $reach = PlatformInbox::reach($this->audience, $this->plan ?: null, $this->teamId !== '' ? (int) $this->teamId : null);
+        $reach = PlatformInbox::reach($this->audience, $this->plan ?: null, $this->teamId !== '' ? (int) $this->teamId : null, $this->kind);
         $notification = PlatformInbox::announce([
             'kind' => $this->kind,
             'title' => trim($this->title),
@@ -111,7 +111,7 @@ class AdminNotifications extends Component
             'announcements' => PlatformNotification::query()->whereIn('kind', PlatformNotification::ANNOUNCEMENT_KINDS)
                 ->with('team:id,name')->withCount('reads')->latest('published_at')->latest('id')->limit(50)->get(),
             'plans' => collect(PlanCatalog::all())->mapWithKeys(fn (array $plan, string $slug) => [$slug => $plan['name'] ?? $slug])->all(),
-            'reach' => PlatformInbox::reach($this->audience, $this->plan ?: null, ctype_digit($this->teamId) ? (int) $this->teamId : null),
+            'reach' => PlatformInbox::reach($this->audience, $this->plan ?: null, ctype_digit($this->teamId) ? (int) $this->teamId : null, $this->kind),
             'teamName' => $teamName,
             'canEdit' => $this->canEdit(),
             'timezone' => $this->timezone(),

@@ -339,6 +339,12 @@
                                 {{ __('Integrations') }}
                             </a>
                         </li>
+                        <li>
+                            <a title="{{ __('Privacy and data') }}" class="{{ request()->is('platform/privacy') ? 'menu-item-active menu-item' : 'menu-item' }}" href="{{ route('platform.privacy') }}">
+                                <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l8 4v5c0 5-3.5 8-8 9c-4.5-1-8-4-8-9V7zm-3 9l2 2l4-4" /></svg>
+                                {{ __('Privacy and data') }}
+                            </a>
+                        </li>
                     @endif
                     @if (isPlatform() && isInstanceAdmin() && (int) currentTeam()?->id === 0)
                         <li>

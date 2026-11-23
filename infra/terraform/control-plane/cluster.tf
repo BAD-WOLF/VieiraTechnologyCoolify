@@ -9,6 +9,30 @@ locals {
     terminal = { port = 6002, health = "/" }
   }
   certificate_arn = var.certificate_arn != "" ? var.certificate_arn : try(aws_acm_certificate_validation.panel[0].certificate_arn, "")
+  # Where the data of the panel is, for the privacy policy (LGPD, arts. 9º and 33): the region of
+  # the installation and, when there is one, the region of the copies of the database backups.
+  aws_region_places = {
+    "sa-east-1"    = "São Paulo, no Brasil"
+    "us-east-1"    = "Virgínia do Norte, nos Estados Unidos"
+    "us-east-2"    = "Ohio, nos Estados Unidos"
+    "us-west-1"    = "Califórnia do Norte, nos Estados Unidos"
+    "us-west-2"    = "Oregon, nos Estados Unidos"
+    "ca-central-1" = "Montreal, no Canadá"
+    "mx-central-1" = "Querétaro, no México"
+    "eu-west-1"    = "Irlanda"
+    "eu-west-2"    = "Londres, no Reino Unido"
+    "eu-west-3"    = "Paris, na França"
+    "eu-central-1" = "Frankfurt, na Alemanha"
+    "eu-south-1"   = "Milão, na Itália"
+    "eu-south-2"   = "Aragão, na Espanha"
+    "eu-north-1"   = "Estocolmo, na Suécia"
+  }
+  region_place    = lookup(local.aws_region_places, var.region, "")
+  dr_region_place = lookup(local.aws_region_places, var.dr_region, "")
+  privacy_hosting = join("; ", compact([
+    "Amazon Web Services (AWS), região ${var.region}${local.region_place == "" ? "" : " (${local.region_place})"}",
+    var.dr_region == "" ? "" : "cópias dos backups do banco de dados do painel na região ${var.dr_region}${local.dr_region_place == "" ? "" : " (${local.dr_region_place})"}",
+  ]))
   env_file = join("\n", concat([
     "APP_ID=${random_id.app_id.hex}",
     "APP_NAME=Hostrema",
@@ -28,6 +52,7 @@ locals {
     "PUSHER_APP_SECRET=${random_password.pusher_secret.result}",
     "PLATFORM_ENABLED=true",
     "PLATFORM_CONTROL_PLANE_CLUSTER=true",
+    "PLATFORM_PRIVACY_HOSTING=\"${local.privacy_hosting}\"",
     "AUTOUPDATE=false",
   ], length(var.app_previous_keys) > 0 ? ["APP_PREVIOUS_KEYS=${join(",", var.app_previous_keys)}"] : [], [for key, value in var.extra_env : "${key}=${value}"]))
 }

@@ -7,7 +7,7 @@
         <div class="subtitle">{{ __('Customers, plans, billing, regions, nodes and audit trail of the platform.') }}</div>
     </div>
     <div class="flex flex-wrap gap-2">
-        @foreach (['tenants' => __('Tenants'), 'plans' => __('Plans'), 'billing' => __('Billing'), 'notifications' => __('Announcements'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
+        @foreach (['tenants' => __('Tenants'), 'plans' => __('Plans'), 'billing' => __('Billing'), 'notifications' => __('Announcements'), 'privacy' => __('Privacy (LGPD)'), 'nodes' => __('Regions & nodes'), 'settings' => __('Settings'), 'audit' => __('Audit log')] as $key => $label)
             <x-forms.button wire:click="$set('tab', '{{ $key }}')" :isHighlighted="$tab === $key">{{ $label }}</x-forms.button>
         @endforeach
     </div>
@@ -93,6 +93,12 @@
                                                             wire:confirm="{{ __('Open the dashboard as :user? Everything you do is recorded with your name.', ['user' => $member->email]) }}">
                                                             {{ __('Access as this user') }}
                                                         </x-forms.button>
+                                                        @if (auth()->user()->isOwner())
+                                                            <x-forms.button isError wire:click="deleteUser({{ $tenant->id }}, {{ $member->id }})"
+                                                                wire:confirm="{{ __('Delete the account of :user and everything only it has? It can not be undone.', ['user' => $member->email]) }}">
+                                                                {{ __('Delete account') }}
+                                                            </x-forms.button>
+                                                        @endif
                                                     </div>
                                                 @endforeach
                                             </div>
@@ -115,6 +121,8 @@
         <livewire:platform.admin-billing />
     @elseif ($tab === 'notifications')
         <livewire:platform.admin-notifications />
+    @elseif ($tab === 'privacy')
+        <livewire:platform.admin-privacy />
     @elseif ($tab === 'settings')
         <livewire:platform.admin-settings />
     @elseif ($tab === 'nodes')

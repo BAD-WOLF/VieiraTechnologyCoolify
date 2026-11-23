@@ -135,10 +135,10 @@ Mudanças em arquivos originais que não são só ganchos:
 - `app/Jobs`: `ApplicationDeploymentJob.php` (+69/-35), `PullChangelog.php` (+3/-0), `PullTemplatesFromCDN.php` (+2/-1), `StripeProcessJob.php` (+9/-0)
 - `app/Livewire`: `Boarding/Index.php` (+4/-1), `DeploymentsIndicator.php` (+10/-4), `Project/Application/DeploymentNavbar.php` (+3/-2), `Project/CloneMe.php` (+2/-3), `Project/Database/Heading.php` (+11/-2), `Project/Database/Import.php` (+33/-2), `Project/Database/Postgresql/General.php` (+16/-4), `Project/Index.php` (+1/-1), `Project/New/PublicGitRepository.php` (+4/-2), `Project/New/Select.php` (+23/-3), `Project/Service/Heading.php` (+18/-6), `Project/Shared/Destination.php` (+29/-7), `Project/Shared/GetLogs.php` (+33/-0), `Project/Shared/ResourceOperations.php` (+3/-1), `Settings/Updates.php` (+6/-0), `SettingsBackup.php` (+1/-1), `SettingsOauth.php` (+1/-1)
 - `app/Models`: `PrivateKey.php` (+1/-1), `Service.php` (+8/-1)
-- `bootstrap`: `helpers/shared.php` (+6/-6), `helpers/subscriptions.php` (+2/-0)
+- `bootstrap`: `helpers/shared.php` (+6/-6), `helpers/subscriptions.php` (+3/-0)
 - `config`: `app.php` (+2/-1), `constants.php` (+1/-1)
-- `resources`: `views/components/navbar.blade.php` (+28/-2), `views/components/settings/sidebar.blade.php` (+4/-2), `views/components/toast.blade.php` (+3/-2), `views/layouts/app.blade.php` (+8/-0), `views/layouts/base.blade.php` (+8/-8), `views/livewire/dashboard.blade.php` (+5/-1), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+7/-3), `views/livewire/subscription/show.blade.php` (+10/-4)
+- `resources`: `views/auth/register.blade.php` (+1/-0), `views/components/navbar.blade.php` (+34/-2), `views/components/settings/sidebar.blade.php` (+4/-2), `views/components/toast.blade.php` (+3/-2), `views/layouts/app.blade.php` (+8/-0), `views/layouts/base.blade.php` (+8/-8), `views/livewire/dashboard.blade.php` (+5/-1), `views/livewire/project/clone-me.blade.php` (+1/-1), `views/livewire/project/new/select.blade.php` (+12/-7), `views/livewire/project/shared/resource-operations.blade.php` (+2/-2), `views/livewire/settings-dropdown.blade.php` (+7/-5), `views/livewire/subscription/index.blade.php` (+7/-3), `views/livewire/subscription/show.blade.php` (+10/-4)
 
-Total: 61 arquivos.
+Total: 62 arquivos.
 <!-- upstream-files:end -->
 

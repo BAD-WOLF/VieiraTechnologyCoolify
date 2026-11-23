@@ -89,6 +89,7 @@ function allowedPathsForInvalidAccounts()
         'verify',
         'force-password-reset',
         'livewire/update',
+        ...platformPathsForInvalidAccounts(),
     ];
 }
 

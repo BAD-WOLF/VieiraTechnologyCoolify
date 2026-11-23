@@ -2,7 +2,9 @@
 
 use App\Http\Controllers\PlatformBrandLogoController;
 use App\Http\Controllers\PlatformImpersonationController;
+use App\Http\Controllers\PlatformLegalController;
 use App\Http\Controllers\PlatformPricingPageController;
+use App\Http\Controllers\PlatformPrivacyExportController;
 use App\Http\Middleware\CheckForcePasswordReset;
 use App\Http\Middleware\DecideWhatToDoWithUser;
 use App\Http\Middleware\PlatformRequireTwoFactor;
@@ -11,6 +13,7 @@ use App\Livewire\Platform\Admin;
 use App\Livewire\Platform\Integrations;
 use App\Livewire\Platform\Logs;
 use App\Livewire\Platform\Onboarding;
+use App\Livewire\Platform\Privacy;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
@@ -27,6 +30,14 @@ use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 Route::get('/admin/platform', Admin::class)->middleware(['auth'])->name('admin.platform');
 Route::get('/pricing', PlatformPricingPageController::class)->name('platform.pricing');
+// LGPD: public privacy policy and terms of use, and the page of the data subject (also for
+// accounts that did not confirm the e-mail: they can see, copy and delete their data).
+Route::get('/privacidade', [PlatformLegalController::class, 'privacy'])->name('platform.legal.privacy');
+Route::get('/termos', [PlatformLegalController::class, 'terms'])->name('platform.legal.terms');
+Route::middleware(['auth'])->group(function () {
+    Route::get('/platform/privacy', Privacy::class)->name('platform.privacy');
+    Route::get('/platform/privacy/export', PlatformPrivacyExportController::class)->name('platform.privacy.export');
+});
 // An image for every page, signed in or not: no session, no redirect to plans or two-factor setup.
 Route::get('/platform/brand/logo.svg', PlatformBrandLogoController::class)
     ->withoutMiddleware([StartSession::class, ShareErrorsFromSession::class, VerifyCsrfToken::class, CheckForcePasswordReset::class, DecideWhatToDoWithUser::class, PlatformRequireTwoFactor::class])

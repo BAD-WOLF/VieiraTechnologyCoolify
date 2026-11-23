@@ -27,8 +27,8 @@ class PlatformPricingPageController extends Controller
         return view('platform.pricing-page', [
             'plans' => $plans,
             'salesUrl' => config('platform.sales_url') ?: (config('platform.support_email') ? 'mailto:'.config('platform.support_email') : null),
-            'termsUrl' => config('platform.branding.terms_url'),
-            'privacyUrl' => config('platform.branding.privacy_url'),
+            'termsUrl' => route('platform.legal.terms'),
+            'privacyUrl' => route('platform.legal.privacy'),
             'registrationEnabled' => (bool) instanceSettings()->is_registration_enabled,
         ]);
     }

@@ -20,6 +20,8 @@ class PlatformRequireTwoFactor
         'user/two-factor-authentication', 'user/confirmed-two-factor-authentication', 'user/two-factor-qr-code',
         'user/two-factor-secret-key', 'user/two-factor-recovery-codes', 'user/confirm-password', 'user/confirmed-password-status',
         'force-password-reset',
+        // The privacy policy and the terms of use are read by anyone (LGPD, art. 9º).
+        'privacidade', 'termos',
     ];
 
     public function handle(Request $request, Closure $next): Response

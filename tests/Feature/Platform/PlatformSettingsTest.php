@@ -642,7 +642,8 @@ it('has a Portuguese translation for every text of the platform screens', functi
         resource_path('views/livewire/platform'), resource_path('views/platform'), app_path('Livewire/Platform'), app_path('Services/Platform'), app_path('Actions/Platform'),
     ])->flatMap(fn (string $directory) => \Illuminate\Support\Facades\File::allFiles($directory))
         ->map(fn ($file) => $file->getPathname())
-        ->push(resource_path('views/components/platform-banner.blade.php'), app_path('Exceptions/PlatformPolicyViolation.php'), app_path('Models/PlatformTenant.php'));
+        ->push(resource_path('views/components/platform-banner.blade.php'), app_path('Exceptions/PlatformPolicyViolation.php'), app_path('Models/PlatformTenant.php'),
+            app_path('Models/PrivacyConsent.php'), app_path('Models/PrivacyRequest.php'), app_path('Models/PrivacyDeletedAccount.php'));
 
     $missing = [];
     // Names and explanations of the limits and capabilities of the plans.
@@ -692,6 +693,32 @@ it('has a Portuguese translation for every text of the platform screens', functi
     }
 
     expect($missing)->toBe([]);
+});
+
+it('compiles every platform screen into valid PHP, with no directive left as text', function () {
+    $views = collect([resource_path('views/livewire/platform'), resource_path('views/platform')])
+        ->flatMap(fn (string $directory) => \Illuminate\Support\Facades\File::allFiles($directory))
+        ->map(fn ($file) => $file->getPathname())
+        ->push(resource_path('views/components/platform-banner.blade.php'), resource_path('views/emails/platform-notice.blade.php'));
+
+    $broken = [];
+    foreach ($views as $view) {
+        $compiled = \Illuminate\Support\Facades\Blade::compileString((string) file_get_contents($view));
+        // A directive right after a letter ("painel@endauth") is left as text, and the block it
+        // should close ends somewhere else.
+        if (preg_match('/@(?:end)?(?:if|elseif|else|unless|auth|guest|can|cannot|error|isset|empty|foreach|forelse|php)\b/', $compiled, $match)) {
+            $broken[] = str_replace(resource_path(), '', $view).": {$match[0]}";
+
+            continue;
+        }
+        try {
+            token_get_all($compiled, TOKEN_PARSE);
+        } catch (\ParseError $error) {
+            $broken[] = str_replace(resource_path(), '', $view).": {$error->getMessage()}";
+        }
+    }
+
+    expect($broken)->toBe([]);
 });
 
 it('never lets an operator access as itself, another operator or while already accessing, and ends a lost access', function () {

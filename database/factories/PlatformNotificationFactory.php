@@ -15,7 +15,7 @@ class PlatformNotificationFactory extends Factory
     public function definition(): array
     {
         return [
-            'kind' => PlatformNotification::KIND_NEWS,
+            'kind' => PlatformNotification::KIND_UPDATE,
             'title' => fake()->sentence(4),
             'body' => fake()->paragraph(),
             'audience' => PlatformNotification::AUDIENCE_ALL,

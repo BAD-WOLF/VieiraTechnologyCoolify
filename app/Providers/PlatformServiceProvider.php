@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Actions\Platform\CreatePlatformUser;
 use App\Actions\Platform\ProvisionTenant;
 use App\Exceptions\PlatformPolicyViolation;
 use App\Http\Middleware\PlatformOperatorApiAllowlist;
@@ -24,6 +25,7 @@ use App\Models\PersonalAccessToken;
 use App\Models\PlatformRegion;
 use App\Models\PlatformSetting;
 use App\Models\PlatformTenant;
+use App\Models\PrivacyDeletedAccount;
 use App\Models\PrivateKey;
 use App\Models\S3Storage;
 use App\Models\ScheduledDatabaseBackup;
@@ -55,6 +57,7 @@ use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
@@ -64,6 +67,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Fortify\Contracts\CreatesNewUsers;
 use Livewire\Livewire;
 use Psr\Http\Message\RequestInterface;
 
@@ -99,6 +103,8 @@ class PlatformServiceProvider extends ServiceProvider
     {
         // Values saved by the owner in the operator console (Settings) override config/platform.php.
         PlatformConfig::apply();
+        // Sign-up with the acceptance of the privacy policy and the terms (LGPD) on the platform.
+        $this->app->singleton(CreatesNewUsers::class, CreatePlatformUser::class);
         self::alignSubscriptionProvider();
         $this->app['router']->pushMiddlewareToGroup('web', PlatformRequireTwoFactor::class);
         $this->app['router']->pushMiddlewareToGroup('api', PlatformOperatorApiAllowlist::class);
@@ -505,6 +511,10 @@ class PlatformServiceProvider extends ServiceProvider
         });
         Event::listen(Login::class, function (Login $event) use ($audit): void {
             $audit('auth.login', $event->user, [], null, 'user');
+            // An account being deleted can not come back (for instance through a social login).
+            if (PrivacyDeletedAccount::query()->where('user_id', $event->user->getAuthIdentifier())->where('status', PrivacyDeletedAccount::STATUS_PENDING)->exists()) {
+                Auth::guard($event->guard)->logout();
+            }
         });
         Event::listen(Failed::class, function (Failed $event) use ($audit): void {
             $audit('auth.failed', null, ['email' => data_get($event->credentials, 'email')], null, 'anonymous');

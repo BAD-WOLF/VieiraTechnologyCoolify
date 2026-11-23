@@ -186,6 +186,7 @@ Quase tudo se configura em **/admin/platform → Configurações**, sem editar o
 | Logs, traces e medição | Loki padrão, tempo limite e linhas do histórico, endpoint OTLP, intervalo e retenção da medição. |
 | Webhooks e eventos | Limites, tempo limite, retenção, desativação por falhas, HTTP simples, alvos privados do operador e stream do Redis. |
 | Segurança | Quem precisa de 2FA e as redes permitidas para os tokens do operador. |
+| Privacidade (LGPD) | Controlador (razão social, CNPJ ou CPF, endereço), e-mail de contato, encarregado, onde os dados ficam (no cluster, gerado a partir das regiões da instalação), textos extras da política e dos termos, e os prazos: registros de acesso (mínimo 6 meses), faturas de contas encerradas (mínimo 5 anos) e cadastros que nunca confirmaram o e-mail. |
 | Tokens internos e edge | Tokens do Prometheus e dos edge routers (gerados sozinhos na primeira subida; **Gerar novo** troca) e portas e PROXY protocol dos nós. |
 
 Outras telas guardam o resto:
@@ -427,7 +428,7 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 
 ## Console do operador
 
-`/admin/platform`, apenas para o time root, tem sete abas:
+`/admin/platform`, apenas para o time root, tem oito abas:
 
 - **Tenants:** plano, status, uso, suspender (manual ou total), reativar e provisionar. **Editar** abre tudo o que é do cliente: plano (inclusive os ocultos), fim do período atual (adiar dá dias grátis), conta cortesia (nunca cobrada), limites e recursos próprios, notas internas e os membros, cada um com **Acessar como este usuário** (veja *Planos*);
 - **Planos:** preços, limites, recursos e itens extras de cada plano, ordem, destaque e visibilidade; criar, duplicar e remover planos;
@@ -435,6 +436,7 @@ Exemplos de verificação da assinatura, leitura do stream e listener estão em 
 - **Avisos:** mensagens do owner (novidade, promoção, atualização, manutenção, importante) para todos, para os clientes, para a equipe da plataforma, para os clientes de um plano ou para um cliente, na hora ou agendadas (no fuso da instância), com fim opcional. Mostra quantos usuários o aviso alcança antes de enviar e quantos já leram; encerrar tira o aviso do sino sem apagá-lo;
 - **Regiões e nós:** região, nó dedicado e reprovisionamento; também cria, edita (nome e Loki) e desativa regiões;
 - **Configurações:** tudo o que antes ficava no `.env` (seção *Configurações* acima). Só o owner grava;
+- **Privacidade (LGPD):** o que falta na política, solicitações dos titulares para responder, exclusão de contas, incidentes de segurança, nova versão da política e o registro das operações (seção *Privacidade e LGPD* abaixo). Admins do time root veem; só o owner age;
 - **Audit log:** ações de usuários, do sistema e da cobrança.
 
 ## Sino de notificações e mensagens
@@ -446,6 +448,21 @@ As mensagens do sistema seguem três regras:
 - **Estado** (uma integração que não conecta, um plano inativo, um certificado vencido) fica na própria tela, perto do que precisa ser corrigido, dizendo o que aconteceu, por quê e como resolver, até ser resolvido;
 - **Resultado de um clique** vira notificação: verde quando deu certo, amarela quando deu certo em parte, vermelha quando falhou. O título diz o que falhou e o texto, o motivo; avisos e erros ficam na tela o tempo de ler (até 30 segundos, pausando com o mouse em cima);
 - **Campo inválido** aparece embaixo do campo. Recusas da plataforma listam um motivo por linha e, quando é o plano que impede, levam aos planos e ao uso da conta.
+
+## Privacidade e LGPD
+
+O que a plataforma faz para cumprir a Lei nº 13.709/2018 (LGPD), artigo por artigo:
+
+- **Política de privacidade e termos de uso públicos** (`/privacidade` e `/termos`; arts. 9º e 41): controlador, CNPJ ou CPF, endereço, encarregado e contato vêm de Configurações → Privacidade (LGPD); finalidades, bases legais e prazos vêm do registro das operações; quem recebe os dados (hospedagem, e-mail, Efí ou Stripe, com a transferência internacional do art. 33) e os critérios das suspensões automáticas (art. 20) acompanham a configuração em uso. A aba Privacidade do console avisa o que falta preencher.
+- **Cadastro** (arts. 8º e 14): aceitar a política e os termos e declarar ter 18 anos ou mais é obrigatório; promoções só com uma caixa que a pessoa marca. Cada escolha fica registrada com data, versão da política, IP e navegador, como prova do consentimento (art. 8º, § 2º).
+- **Novas versões da política** (art. 8º, § 6º): o owner publica uma versão dizendo o que mudou; todos recebem o aviso no sino e aceitam no próximo acesso. Contas de antes disso também declaram a idade e escolhem sobre promoções nesse aviso.
+- **Privacidade e dados** (`/platform/privacy`; arts. 18 e 19): resumo dos dados na hora; cópia completa em JSON (portabilidade); atalhos para corrigir; consentimento de promoções, que se dá e retira a qualquer momento (sem ele, promoções e novidades não aparecem no sino nem contam no alcance dos avisos); com quem os dados são compartilhados; solicitações para cada direito, inclusive oposição e revisão de decisão automatizada (o banner de suspensão leva direto a ela), respondidas em até 15 dias, com e-mail e aviso no sino para o controlador e a resposta por e-mail ao titular; e a exclusão da conta. A página abre para qualquer conta, mesmo sem plano pago, no onboarding ou com o e-mail ainda não confirmado (art. 18, § 5º); a política e os termos abrem até antes de ligar o 2FA.
+- **Exclusão da conta** (art. 18, VI; arts. 15 e 16): pela própria pessoa (senha e a palavra EXCLUIR; bloqueada enquanto houver fatura em aberto ou pagamento atrasado) ou pelo owner (por e-mail na aba Privacidade, ou em Tenants → Editar → membros), que cancela as faturas em aberto. Na hora, a pessoa sai de todas as sessões, perde os tokens de API e a senha, e recebe por e-mail o que foi excluído e o que fica guardado. Em segundo plano: o cliente na Stripe é excluído, o que cancela a assinatura (se a Stripe falhar, nada é excluído e o owner tenta de novo na aba Privacidade); os times em que só ela estava são encerrados (aplicações, bancos e serviços saem dos nós); os times compartilhados ficam com as outras pessoas, e o e-mail de quem paga, aqui e na Stripe, passa para o próximo responsável, que é avisado para conferir os dados de quem paga (art. 18, § 6º). Ficam guardados: as faturas, com os dados de quem pagou criptografados, por 5 anos (lei fiscal); os registros de acesso por 12 meses (no mínimo 6, Marco Civil da Internet, art. 15); e o registro da exclusão pelo mesmo prazo dos registros de acesso. A conta raiz e o único owner da plataforma não podem ser excluídos.
+- **Retenção** (art. 16): a manutenção diária apaga registros de acesso e de auditoria vencidos, faturas de contas encerradas depois do prazo fiscal, registros de exclusão vencidos, provas de consentimento de contas excluídas e solicitações respondidas há mais de 5 anos, e cadastros que nunca confirmaram o e-mail depois de 30 dias (sem mandar e-mail, porque o endereço pode não ser de quem se cadastrou).
+- **Incidentes de segurança** (art. 48; Resolução CD/ANPD nº 15/2024): todo incidente com dados pessoais é registrado (a resolução pede no mínimo 5 anos; o registro não é apagado). Quando pode causar risco ou dano relevante, o console mostra o prazo de 3 dias úteis, contado no fuso da instalação (feriados contam como dias úteis, para o prazo mostrado nunca passar do legal), comunica os titulares por e-mail individual e no sino com tudo o que a resolução pede, e guarda a data e o protocolo da comunicação à ANPD, feita no formulário dela.
+- **Registro das operações de tratamento** (art. 37): aba Privacidade, com download em CSV.
+- **Encarregado** (art. 41): nome e e-mail em Configurações; agentes de pequeno porte podem deixar vazio e usar o e-mail de contato como canal (Resolução CD/ANPD nº 2/2022, art. 11).
+- **Cookies:** só os necessários (sessão e CSRF); as preferências de tela ficam no navegador.
 
 ## Marca (white-label) e página pública
 

@@ -177,6 +177,7 @@ scenario_up() {
     check "APP_KEY nova" matches "$LOCAL/.env" '^APP_KEY=base64:[A-Za-z0-9+/]{43}=$'
     check "senhas aleatórias" matches "$LOCAL/.env" '^DB_PASSWORD=[0-9a-f]{32}$'
     check "senha do owner aleatória" matches "$LOCAL/.env" '^HOSTREMA_OWNER_PASSWORD=[0-9a-f]{20}$'
+    check "a política de privacidade diz que os dados ficam neste computador" matches "$LOCAL/.env" '^PLATFORM_PRIVACY_HOSTING="Ambiente local de testes, neste computador"$'
     check "sobe com build" contains "$SIM/calls.log" '[docker] compose up -d --build'
     check "espera as filas do painel" contains "$SIM/calls.log" 'compose exec -T hostrema php artisan horizon:status'
     check "espera o Docker do nó" contains "$SIM/calls.log" 'compose exec -T hostrema-node docker info'

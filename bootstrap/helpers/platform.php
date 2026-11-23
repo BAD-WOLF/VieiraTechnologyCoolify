@@ -46,14 +46,38 @@ function isPlatformTenant(Team|int|null $team = null): bool
 }
 
 /**
+ * Pages every signed-in user of the platform opens, whatever the state of the account: the privacy
+ * policy, the terms of use and the page where the data subject exercises the rights. Those rights
+ * do not depend on paying, on finishing the onboarding or on confirming the e-mail (LGPD, art. 9º
+ * and art. 18, § 5º).
+ *
+ * @return array<int, string>
+ */
+function platformPrivacyPaths(): array
+{
+    return isPlatform() ? ['privacidade', 'termos', 'platform/privacy', 'platform/privacy/export'] : [];
+}
+
+/**
  * Pages a platform customer opens before the plan is active: the dashboard, home of the panel,
- * which shows how to activate the plan (creating and deploying stay blocked by the plan status).
+ * which shows how to activate the plan (creating and deploying stay blocked by the plan status),
+ * and the privacy pages.
  *
  * @return array<int, string>
  */
 function platformPathsForUnsubscribedAccounts(): array
 {
-    return isPlatformTenant() && ! isSubscriptionActive() ? ['/'] : [];
+    return [...platformPrivacyPaths(), ...(isPlatformTenant() && ! isSubscriptionActive() ? ['/'] : [])];
+}
+
+/**
+ * Pages a user who has not confirmed the e-mail yet opens: the privacy pages.
+ *
+ * @return array<int, string>
+ */
+function platformPathsForInvalidAccounts(): array
+{
+    return platformPrivacyPaths();
 }
 
 function platformTenant(Team|int|null $team = null): ?PlatformTenant

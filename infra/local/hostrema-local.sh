@@ -69,6 +69,8 @@ APP_DEBUG=false
 
 PLATFORM_ENABLED=true
 SELF_HOSTED=false
+# Onde os dados ficam, mostrado na política de privacidade (/privacidade).
+PLATFORM_PRIVACY_HOSTING="Ambiente local de testes, neste computador"
 
 DB_CONNECTION=pgsql
 DB_HOST=postgres

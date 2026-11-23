@@ -10,6 +10,7 @@ use App\Models\Subscription;
 use App\Models\Team;
 use App\Models\User;
 use Carbon\Carbon;
+use Stripe\Exception\InvalidRequestException;
 use Stripe\StripeClient;
 
 /**
@@ -41,6 +42,59 @@ class StripeBilling
     public static function client(): StripeClient
     {
         return new StripeClient(config('subscription.stripe_api_key'));
+    }
+
+    /**
+     * The customer of a team closed with the account of its owner is deleted at Stripe too: Stripe
+     * cancels its subscriptions at once, so the card is not charged again, and repeats the deletion
+     * (LGPD, art. 18, § 6º). True when the team had a customer.
+     */
+    public static function deleteCustomer(Team $team): bool
+    {
+        $customer = $team->subscription?->stripe_customer_id;
+        if (blank($customer)) {
+            return false;
+        }
+        if (blank(config('subscription.stripe_api_key'))) {
+            throw new \RuntimeException(__('The team :team has a customer at Stripe, but Stripe is not configured: configure it so the subscription is cancelled, then try again.', ['team' => $team->name]));
+        }
+        try {
+            self::client()->customers->delete($customer);
+        } catch (InvalidRequestException $e) {
+            // Already deleted: a deletion tried again.
+            if ($e->getStripeCode() !== 'resource_missing') {
+                throw $e;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * A team that stays with other people keeps its customer, but receipts and charges stop going
+     * to whom left: when the customer has the e-mail of that person, it gets the e-mail of the next
+     * person in charge. True when it was replaced.
+     */
+    public static function replaceCustomerEmail(Team $team, string $from, string $to): bool
+    {
+        $customer = $team->subscription?->stripe_customer_id;
+        if (blank($customer) || blank(config('subscription.stripe_api_key'))) {
+            return false;
+        }
+        try {
+            $current = self::client()->customers->retrieve($customer);
+        } catch (InvalidRequestException $e) {
+            if ($e->getStripeCode() === 'resource_missing') {
+                return false;
+            }
+            throw $e;
+        }
+        if ((bool) ($current->deleted ?? false) || strcasecmp((string) ($current->email ?? ''), $from) !== 0) {
+            return false;
+        }
+        self::client()->customers->update($customer, ['email' => $to]);
+
+        return true;
     }
 
     public static function checkoutUrl(Team $team, User $user, string $plan, string $interval): string

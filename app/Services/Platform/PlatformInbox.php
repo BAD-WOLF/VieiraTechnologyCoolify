@@ -119,12 +119,14 @@ final class PlatformInbox
     /**
      * Users an announcement reaches, shown before it is sent.
      */
-    public static function reach(string $audience, ?string $plan = null, ?int $teamId = null): int
+    public static function reach(string $audience, ?string $plan = null, ?int $teamId = null, ?string $kind = null): int
     {
-        $members = fn (\Closure $teams) => User::query()->whereHas('teams', $teams)->count();
+        // Promotions and news reach only who consented to them (LGPD, art. 7º, I).
+        $users = fn () => in_array($kind, Privacy::MARKETING_KINDS, true) ? Privacy::consenting(User::query()) : User::query();
+        $members = fn (\Closure $teams) => $users()->whereHas('teams', $teams)->count();
 
         return match ($audience) {
-            PlatformNotification::AUDIENCE_ALL => User::query()->count(),
+            PlatformNotification::AUDIENCE_ALL => $users()->count(),
             PlatformNotification::AUDIENCE_CUSTOMERS => $members(fn (Builder $query) => $query->where('teams.id', '!=', 0)),
             PlatformNotification::AUDIENCE_OPERATORS => $members(fn (Builder $query) => $query->where('teams.id', 0)),
             PlatformNotification::AUDIENCE_PLAN => $members(fn (Builder $query) => $query->where('teams.id', '!=', 0)
@@ -139,7 +141,8 @@ final class PlatformInbox
         $teamId = $team?->id;
         $plan = is_null($teamId) || $teamId === 0 ? null : PlatformTenant::query()->where('team_id', $teamId)->value('plan');
 
-        return PlatformNotification::query()->live()->visibleTo($teamId, $plan);
+        return PlatformNotification::query()->live()->visibleTo($teamId, $plan)
+            ->when(! Privacy::wantsMarketing($user), fn (Builder $query) => $query->whereNotIn('kind', Privacy::MARKETING_KINDS));
     }
 
     private static function unread(User $user, ?Team $team): Builder

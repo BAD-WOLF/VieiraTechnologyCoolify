@@ -368,6 +368,25 @@ return [
         'privacy_url' => env('PLATFORM_PRIVACY_URL'),
     ],
 
+    // LGPD (Lei nº 13.709/2018): who answers for the data (shown in the privacy policy) and how
+    // long each kind of record is kept.
+    'privacy' => [
+        'controller_name' => env('PLATFORM_PRIVACY_CONTROLLER_NAME'),
+        'controller_document' => env('PLATFORM_PRIVACY_CONTROLLER_DOCUMENT'),
+        'controller_address' => env('PLATFORM_PRIVACY_CONTROLLER_ADDRESS'),
+        'contact_email' => env('PLATFORM_PRIVACY_CONTACT_EMAIL'),
+        'dpo_name' => env('PLATFORM_PRIVACY_DPO_NAME'),
+        'dpo_email' => env('PLATFORM_PRIVACY_DPO_EMAIL'),
+        'hosting' => env('PLATFORM_PRIVACY_HOSTING', 'Amazon Web Services (AWS), região de São Paulo (sa-east-1), no Brasil'),
+        'policy_extra' => env('PLATFORM_PRIVACY_POLICY_EXTRA'),
+        'terms_extra' => env('PLATFORM_PRIVACY_TERMS_EXTRA'),
+        // Access records: at least 6 months (Marco Civil da Internet, art. 15).
+        'audit_months' => (int) env('PLATFORM_PRIVACY_AUDIT_MONTHS', 12),
+        // Invoices of closed accounts: at least 5 years (tax law).
+        'fiscal_years' => (int) env('PLATFORM_PRIVACY_FISCAL_YEARS', 5),
+        'unverified_days' => (int) env('PLATFORM_PRIVACY_UNVERIFIED_DAYS', 30),
+    ],
+
     'enforcement' => [
         'quota_warning_percent' => (int) env('PLATFORM_QUOTA_WARNING_PERCENT', 80),
         'suspend_after_days' => (int) env('PLATFORM_SUSPEND_AFTER_DAYS', 7),

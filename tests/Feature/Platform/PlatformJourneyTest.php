@@ -470,7 +470,8 @@ function journeyGet(string $url): \Illuminate\Testing\TestResponse
  */
 function journeyDescribe(\Illuminate\Testing\TestResponse $response): string
 {
-    $description = "HTTP {$response->status()} ".(string) $response->headers->get('Location');
+    // getStatusCode: downloads are streamed, and a StreamedResponse has no status().
+    $description = "HTTP {$response->getStatusCode()} ".(string) $response->headers->get('Location');
     $exception = $response->exception;
     if ($exception) {
         $frame = collect($exception->getTrace())->first(fn ($frame) => str_contains($frame['file'] ?? '', '/app/') || str_contains($frame['file'] ?? '', '/bootstrap/helpers/'));
@@ -509,9 +510,9 @@ function journeySweep(array $parameters, ?array &$coolify = null): array
             $values[$parameter] = $parameters[$parameter];
         }
         $response = journeyGet(route($name, $values));
-        if ($response->status() >= 500) {
+        if ($response->getStatusCode() >= 500) {
             $failures[] = "{$name}: ".journeyDescribe($response);
-        } elseif ($response->status() === 200 && str_contains((string) $response->headers->get('Content-Type'), 'html')) {
+        } elseif ($response->getStatusCode() === 200 && str_contains((string) $response->headers->get('Content-Type'), 'html')) {
             foreach (journeyCoolifyMentions((string) $response->getContent()) as $mention) {
                 $coolify[] = "{$name}: {$mention}";
             }

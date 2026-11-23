@@ -29,6 +29,13 @@ class PlatformInvoice extends Model
 
     protected $guarded = [];
 
+    /**
+     * The payer data copied when the account closed: never serialized.
+     *
+     * @var list<string>
+     */
+    protected $hidden = ['payer'];
+
     protected function casts(): array
     {
         return [
@@ -43,6 +50,8 @@ class PlatformInvoice extends Model
             'payment_details' => 'array',
             'due_date' => 'date',
             'synced_at' => 'datetime',
+            'payer' => 'encrypted:array',
+            'retain_until' => 'datetime',
         ];
     }
 

@@ -7,7 +7,8 @@
     @if ($canEdit)
         <form wire:submit="publish" class="flex flex-col gap-3">
             <div class="grid grid-cols-1 gap-2 lg:grid-cols-3">
-                <x-forms.select id="kind" label="{{ __('Type') }}">
+                <x-forms.select id="kind" wire:model.live="kind" label="{{ __('Type') }}"
+                    helper="{{ __('Promotions and news reach only who agreed to receive them (LGPD).') }}">
                     @foreach (\App\Models\PlatformNotification::ANNOUNCEMENT_KINDS as $option)
                         <option value="{{ $option }}">{{ \App\Models\PlatformNotification::kindLabel($option) }}</option>
                     @endforeach

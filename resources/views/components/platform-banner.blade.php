@@ -18,6 +18,7 @@
         <div class="px-4 py-2 mb-4 text-sm border rounded-sm border-error dark:text-white">
             {{ $platformTenantForBanner->blockReason() }}
             <a class="underline" href="{{ route('subscription.show') }}">{{ __('Plan & usage') }}</a>
+            <a class="underline" href="{{ route('platform.privacy', ['pedido' => 'review']) }}">{{ __('Ask for a review of this decision') }}</a>
         </div>
     @elseif ($platformTenantForBanner->past_due_since)
         <div class="px-4 py-2 mb-4 text-sm border rounded-sm border-warning dark:text-white">

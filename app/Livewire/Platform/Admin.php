@@ -6,7 +6,9 @@ use App\Actions\Platform\ProvisionTenant;
 use App\Models\AuditLog;
 use App\Models\PlatformRegion;
 use App\Models\PlatformTenant;
+use App\Models\PrivacyDeletedAccount;
 use App\Models\Server;
+use App\Services\Platform\AccountDeletion;
 use App\Services\Platform\Impersonation;
 use App\Services\Platform\PlanCatalog;
 use App\Services\Platform\PlatformGate;
@@ -294,6 +296,30 @@ class Admin extends Component
         Impersonation::start($user, $tenant->team);
 
         return redirect()->route('dashboard');
+    }
+
+    /**
+     * The owner deletes the account of a member of a tenant (LGPD, art. 18, VI): see AccountDeletion.
+     */
+    public function deleteUser(int $tenantId, int $userId): void
+    {
+        $this->guard();
+        if (! auth()->user()->isOwner()) {
+            $this->dispatch('error', __('Only the owner of the root team can do this.'));
+
+            return;
+        }
+        $tenant = PlatformTenant::with('team')->findOrFail($tenantId);
+        $user = $tenant->team?->members()->where('users.id', $userId)->first();
+        abort_if(is_null($user), 404);
+        try {
+            AccountDeletion::request($user, PrivacyDeletedAccount::BY_OWNER, auth()->user(), __('Deleted by the owner in the console'));
+        } catch (\RuntimeException $e) {
+            $this->dispatch('error', __('The account can not be deleted'), e($e->getMessage()));
+
+            return;
+        }
+        $this->dispatch('success', __('Deleting the account of :email.', ['email' => $user->email]), __('The user was logged out and receives an e-mail with what was deleted and what is kept.'));
     }
 
     public function render()

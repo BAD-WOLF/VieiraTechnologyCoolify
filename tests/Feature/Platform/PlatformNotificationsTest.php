@@ -12,6 +12,7 @@ use App\Models\Team;
 use App\Models\User;
 use App\Services\Platform\PlatformBilling;
 use App\Services\Platform\PlatformInbox;
+use App\Services\Platform\Privacy;
 use App\Services\Platform\TenantLifecycle;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
@@ -132,6 +133,8 @@ it('shows the bell at the top of the dashboard with the unread count', function 
 
 it('lists the notifications when the bell opens, opens their links and marks them read', function () {
     $customer = bellCustomer();
+    // Promotions only to whom consented (LGPD).
+    Privacy::setMarketing($customer['user'], true);
     $promo = PlatformNotification::factory()->create(['kind' => 'promotion', 'title' => 'Black Friday', 'body' => "50% no plano anual.\nSó hoje.", 'action_url' => 'https://hostrema.com.br/promo', 'action_label' => 'Ver oferta']);
     $news = PlatformNotification::factory()->create(['title' => 'Nova região']);
     $foreign = PlatformNotification::factory()->forTeam(bellCustomer()['team']->id)->create(['title' => 'De outro cliente']);
@@ -200,8 +203,12 @@ it('keeps the bell out of the operator team and off the platform, and never brea
 it('lets the owner send an announcement to an audience, now or later, and records it', function () {
     InstanceSettings::query()->whereKey(0)->update(['instance_timezone' => 'America/Sao_Paulo']);
     $pro = bellCustomer('pro');
-    bellCustomer('basic');
+    $basic = bellCustomer('basic');
     $owner = bellOperator();
+    // News and promotions reach only who consented (LGPD).
+    foreach ([$pro['user'], $basic['user'], $owner] as $user) {
+        Privacy::setMarketing($user, true);
+    }
 
     Livewire::test(AdminNotifications::class)
         ->assertSee('It reaches 3 users.')
