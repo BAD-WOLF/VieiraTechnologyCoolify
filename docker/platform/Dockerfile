@@ -15,7 +15,7 @@
 # official Dockerfile is copied here too.
 
 # https://github.com/serversideup/docker-php/releases
-ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-v5.1.2
+ARG SERVERSIDEUP_PHP_VERSION=8.4-fpm-nginx-alpine-v5.2.2
 # https://github.com/cloudflare/cloudflared/releases
 ARG CLOUDFLARED_VERSION=2026.10.3
 # PostgreSQL 18 client for the PostgreSQL 15 server (the 15 client left Alpine 3.23).
